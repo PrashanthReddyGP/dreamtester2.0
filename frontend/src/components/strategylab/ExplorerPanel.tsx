@@ -1,4 +1,5 @@
-import React, { useState, MouseEvent, FC } from 'react';
+import React, { useState } from 'react';
+import type { MouseEvent, FC } from 'react';
 import { Box, Button, Collapse, Divider, List, ListItemButton, ListItemIcon, ListItemText, Typography, Menu, MenuItem } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import CodeIcon from '@mui/icons-material/Code';
@@ -10,31 +11,13 @@ import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import { v4 as uuidv4 } from 'uuid';
 
 // --- Data structure remains the same ---
-interface FileSystemItem {
+export interface FileSystemItem {
   id: string;
   name: string;
   type: 'folder' | 'file';
   children?: FileSystemItem[];
+  content?: string; // Files can have content
 }
-
-const initialFileSystem: FileSystemItem[] = [
-  {
-    id: uuidv4(),
-    name: 'My Strategies',
-    type: 'folder',
-    children: [
-      { id: uuidv4(), name: 'RSI_Momentum.py', type: 'file' },
-    ],
-  },
-  {
-    id: uuidv4(),
-    name: 'Sample Strategies',
-    type: 'folder',
-    children: [
-        { id: uuidv4(), name: 'SMA_Crossover_Final.py', type: 'file' },
-    ]
-  }
-];
 
 // --- Context Menu State now includes a 'type' for what was clicked ---
 interface ContextMenuState {
@@ -48,16 +31,28 @@ interface ContextMenuState {
 const FileSystemTreeItem: FC<{
     item: FileSystemItem;
     onContextMenu: (event: MouseEvent, item: FileSystemItem) => void;
-}> = ({ item, onContextMenu }) => {
+    onFileSelect: (fileId: string) => void;
+    selectedFileId: string | null;
+}> = ({ item, onContextMenu, onFileSelect, selectedFileId }) => {
     const [open, setOpen] = useState(true);
-    const handleToggle = () => item.type === 'folder' && setOpen(!open);
+
+    const handleItemClick = () => {
+        if (item.type === 'folder') {
+            setOpen(!open);
+        } else {
+            // This is a file, so we call the selection handler
+            onFileSelect(item.id);
+        }
+    };
+    const isSelected = item.type === 'file' && item.id === selectedFileId;
 
     return (
         <>
             <ListItemButton
-                onClick={handleToggle}
+                onClick={handleItemClick}
                 onContextMenu={(e) => onContextMenu(e, item)}
                 sx={{ pl: 2, borderRadius: 2 }}
+                selected={isSelected} // Highlight the selected file
             >
                 <ListItemIcon sx={{ minWidth: '32px', color: 'text.secondary' }}>
                     {item.type === 'folder' ? <FolderOpenIcon /> : <CodeIcon fontSize="small" />}
@@ -69,7 +64,13 @@ const FileSystemTreeItem: FC<{
                 <Collapse in={open} timeout="auto" unmountOnExit>
                     <List component="div" disablePadding sx={{ pl: 2 }}>
                         {item.children?.map(child => (
-                            <FileSystemTreeItem key={child.id} item={child} onContextMenu={onContextMenu} />
+                            <FileSystemTreeItem
+                                key={child.id}
+                                item={child}
+                                onContextMenu={onContextMenu}
+                                onFileSelect={onFileSelect}
+                                selectedFileId={selectedFileId}
+                            />
                         ))}
                     </List>
                 </Collapse>
@@ -78,9 +79,16 @@ const FileSystemTreeItem: FC<{
     );
 };
 
+export const ExplorerPanel: React.FC<{
+      fileSystem: FileSystemItem[];
+      onFileSelect: (fileId: string) => void;
+      selectedFileId: string | null;
+      onNewFile: (folderId?: string) => void;
+      onNewFolder: (folderId?: string) => void;
+      onDelete: (itemId: string) => void;
+      onRename: (itemId: string, newName: string) => void;
+  }> = ({ fileSystem, onFileSelect, selectedFileId, onNewFile, onNewFolder, onDelete, onRename }) => {
 
-export const ExplorerPanel: React.FC = () => {
-  const [fileSystem, setFileSystem] = useState<FileSystemItem[]>(initialFileSystem);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   
   // --- NEW: Context menu handler for the container/empty space ---
@@ -115,34 +123,30 @@ export const ExplorerPanel: React.FC = () => {
 
   const handleNewFile = () => {
     // This action now adds to the root level, which is correct for both menu types.
-    const newFile: FileSystemItem = { id: uuidv4(), name: 'new_strategy.py', type: 'file' };
-    setFileSystem(prev => [...prev, newFile]);
+    onNewFile();
     handleClose();
   };
   
   const handleNewFolder = () => {
-    const newFolder: FileSystemItem = { id: uuidv4(), name: 'New Folder', type: 'folder', children: [] };
-    setFileSystem(prev => [...prev, newFolder]);
+    onNewFolder();
     handleClose();
   };
 
   const handleDelete = () => {
-    if (!contextMenu || !contextMenu.item) return;
-    const deleteItem = (items: FileSystemItem[], id: string): FileSystemItem[] => {
-        return items.filter(item => item.id !== id).map(item => {
-            if (item.children) {
-                return { ...item, children: deleteItem(item.children, id) };
-            }
-            return item;
-        });
-    };
-    setFileSystem(prev => deleteItem(prev, contextMenu.item!.id));
-    handleClose();
+      if(contextMenu?.item) {
+          onDelete(contextMenu.item.id);
+      }
+      handleClose();
   };
 
   const handleRename = () => {
-    alert(`Rename functionality for "${contextMenu?.item?.name}" would be triggered here.`);
-    handleClose();
+      if(contextMenu?.item) {
+          const newName = prompt("Enter new name:", contextMenu.item.name);
+          if (newName) {
+              onRename(contextMenu.item.id, newName);
+          }
+      }
+      handleClose();
   };
 
   return (
@@ -162,8 +166,14 @@ export const ExplorerPanel: React.FC = () => {
       >
         <List component="nav" dense>
             {fileSystem.map(item => (
-            <FileSystemTreeItem key={item.id} item={item} onContextMenu={handleItemContextMenu} />
-            ))}
+               <FileSystemTreeItem
+                    key={item.id}
+                    item={item}
+                    onContextMenu={handleItemContextMenu}
+                    onFileSelect={onFileSelect}
+                    selectedFileId={selectedFileId}
+                />
+              ))}
         </List>
       </Box>
 

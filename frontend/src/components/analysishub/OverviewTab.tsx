@@ -40,28 +40,35 @@ export const OverviewTab: React.FC = () => {
         type: 'cross'
       }
     },
-    legend: { // Add a legend
+    legend: {
         data: ['Equity', 'Drawdown'],
         textStyle: { color: theme.palette.text.primary }
     },
     xAxis: {
       type: 'time',
+      splitLine: {
+        show: false
+      }
     },
-    yAxis: [ // Use an array for two Y-axes
+    yAxis: [
       {
         type: 'value',
         name: 'Equity',
         scale: true,
-        axisLabel: { formatter: '${value}' }
+        axisLabel: { formatter: '${value}' },
+        splitLine: {show: false}
       },
       {
         type: 'value',
         name: 'Drawdown',
         scale: true,
-        axisLabel: { formatter: '{value}%' }
+        axisLabel: { formatter: '{value}%' },
+        splitLine: {show: false}
       }
     ],
-    grid: { left: '3%', right: '4%', bottom: '10%', containLabel: true },
+    
+    grid: { left: '1%', right: '1%', bottom: '1%', containLabel: true },
+    
     series: [
       {
         name: 'Equity',
@@ -76,7 +83,7 @@ export const OverviewTab: React.FC = () => {
         },
         areaStyle: {
             color: theme.palette.primary.main,
-            opacity: 0.1
+            opacity: 0.4
         }
       },
       {
@@ -89,7 +96,7 @@ export const OverviewTab: React.FC = () => {
         lineStyle: { width: 0 },
         areaStyle: {
             color: theme.palette.error.main,
-            opacity: 0.3
+            opacity: 0.1
         }
       }
     ],
@@ -101,13 +108,16 @@ export const OverviewTab: React.FC = () => {
   };
 
   return (
-    <Box p={3}>
+    <Box sx={{height:'100%'}}>
+      
       <Typography variant="h2" gutterBottom>
         Equity Curve
       </Typography>
-      <Box sx={{ height: 500 }}>
-        <ReactECharts option={chartOption} style={{ height: '100%', width: '100%' }} />
+      
+      <Box sx={{height:'100%'}}>
+        <ReactECharts option={chartOption} style={{width:'100%', height:'100%'}}/>
       </Box>
+
     </Box>
   );
 };

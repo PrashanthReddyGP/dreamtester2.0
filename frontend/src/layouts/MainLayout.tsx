@@ -82,11 +82,6 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
         </Toolbar>
       </AppBar>
 
-      {/* 
-        THE FIX IS HERE: This main content Box is now a direct sibling of the AppBar.
-        It is a flex container that is exactly the height of the viewport.
-        Its children (the spacer and the content) will be contained within this 100vh height.
-      */}
       <Box
         component="main"
         sx={{
@@ -95,12 +90,11 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
           display: 'flex',
           flexDirection: 'column',
           bgcolor: 'background.default',
+          overflow: 'clip'
         }}
       >
-        {/* The spacer for the fixed AppBar */}
         <Toolbar />
         
-        {/* This container for the page content will grow to fill the *remaining* space */}
         <Box sx={{ flexGrow: 1, display: 'flex'}}>
           <Outlet />
         </Box>

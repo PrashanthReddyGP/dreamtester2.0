@@ -3,7 +3,6 @@ import { Box } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid/DataGrid';
 import type { GridColDef } from '@mui/x-data-grid';
 
-// Define the columns for our trade log
 const columns: GridColDef[] = [
   { field: 'id', headerName: 'ID', width: 70 },
   { field: 'direction', headerName: 'Direction', width: 130 },
@@ -15,7 +14,6 @@ const columns: GridColDef[] = [
   { field: 'pnlPercent', headerName: 'P/L (%)', type: 'number', width: 130 },
 ];
 
-// Mock data for the rows
 const rows = [
   { id: 1, direction: 'Long', entryTime: new Date(2023, 1, 5, 10, 30), exitTime: new Date(2023, 1, 5, 14, 0), entryPrice: 23000, exitPrice: 23500, pnl: 500, pnlPercent: 2.17 },
   { id: 2, direction: 'Short', entryTime: new Date(2023, 1, 8, 9, 0), exitTime: new Date(2023, 1, 8, 12, 0), entryPrice: 24000, exitPrice: 23800, pnl: 200, pnlPercent: 0.83 },
@@ -24,8 +22,8 @@ const rows = [
 
 export const TradeLogTab: React.FC = () => {
   return (
-    <Box p={3}>
-      <Box sx={{ height: 500, width: '100%' }}>
+    <Box>
+      <Box sx={{ height: '100%', width: '100%' }}>
         <DataGrid
           rows={rows}
           columns={columns}
@@ -37,7 +35,7 @@ export const TradeLogTab: React.FC = () => {
           pageSizeOptions={[5, 10, 20]}
           checkboxSelection
           sx={{ 
-            border: 'none', 
+            border: 'none',
             '& .MuiDataGrid-cell': { borderBottomColor: 'divider' },
             '& .MuiDataGrid-columnHeaders': { borderBottomColor: 'divider' },
           }}

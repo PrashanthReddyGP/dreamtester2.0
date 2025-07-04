@@ -30,7 +30,6 @@ export const SettingsPanel: React.FC = () => {
         <DatePicker label="Start Date" sx={{ width: '100%', mt: 1 }} slotProps={{ textField: { variant: 'filled' } }}/>
         <DatePicker label="End Date" sx={{ width: '100%', mt: 2, mb: 2 }} slotProps={{ textField: { variant: 'filled' } }}/>
 
-        {/* This spacer pushes the buttons to the bottom */}
         <Box sx={{ flexGrow: 1 }} /> 
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
