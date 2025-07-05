@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box } from '@mui/material';
+import { Box, useTheme } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid/DataGrid';
 import type { GridColDef } from '@mui/x-data-grid';
 
@@ -21,26 +21,56 @@ const rows = [
 ];
 
 export const TradeLogTab: React.FC = () => {
+  
+  const theme = useTheme();
+
   return (
-    <Box>
-      <Box sx={{ height: '100%', width: '100%' }}>
-        <DataGrid
-          rows={rows}
-          columns={columns}
-          initialState={{
-            pagination: {
-              paginationModel: { page: 0, pageSize: 10 },
-            },
-          }}
-          pageSizeOptions={[5, 10, 20]}
-          checkboxSelection
-          sx={{ 
-            border: 'none',
-            '& .MuiDataGrid-cell': { borderBottomColor: 'divider' },
-            '& .MuiDataGrid-columnHeaders': { borderBottomColor: 'divider' },
-          }}
-        />
-      </Box>
+    <Box sx={{ height: '100%', width: '100%' }}>
+      <DataGrid
+        rows={rows}
+        columns={columns}
+        initialState={{
+          pagination: {
+            paginationModel: { page: 0, pageSize: 10 },
+          },
+        }}
+        pageSizeOptions={[5, 10, 20]}
+        checkboxSelection
+        sx={{
+          // --- 1. Set the background for the BODY (rows) ---
+          // This will be the default background for the whole component.
+          backgroundColor: theme.palette.background.paper,
+          border: `1px solid  ${theme.palette.divider}`,
+
+          // --- 2. Target the HEADER container to give it a separate background ---
+          '& .MuiDataGrid-columnHeaders': {
+            '--DataGrid-t-header-background-base': theme.palette.background.paper,
+            borderBottom: `1px solid ${theme.palette.divider}`,
+          },
+
+          '& .MuiDataGrid-columnSeparator': {
+            visibility: 'visible', // Ensure it's visible
+            color: theme.palette.divider, // Use the theme's divider color
+          },
+
+          '& .MuiDataGrid-columnHeader': {
+            borderRight: `1px solid ${theme.palette.divider}}`,
+          },
+
+          // --- 3. (Optional but good practice) Ensure text colors have good contrast ---
+          '& .MuiDataGrid-columnHeaderTitle': {
+            fontWeight: 600,
+          },
+          '& .MuiDataGrid-cell': {
+            borderBottom: `1px solid ${theme.palette.divider}`,
+            borderRight: `1px solid ${theme.palette.divider}`,
+          },
+          // '& .MuiDataGrid-footerContainer': {
+          //   // '--DataGrid-t-color-border-base': `1px solid ${theme.palette.divider}`,
+          //    borderTop: `1px solid ${theme.palette.divider}`,
+          // },
+        }}
+      />
     </Box>
   );
 };

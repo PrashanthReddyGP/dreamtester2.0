@@ -12,7 +12,8 @@ import {
     TableCell,
     TableContainer,
     TableHead,
-    TableRow
+    TableRow,
+    useTheme
 } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 
@@ -33,9 +34,11 @@ const MetricItem: FC<MetricItemProps> = ({ label, value, tooltip, isPercentage =
         <InfoOutlinedIcon sx={{ fontSize: '1rem', ml: 0.5, color: 'text.disabled' }} />
       </Tooltip>
     </Box>
-    <Typography variant="body1" fontWeight={600}>
-      {value}{isPercentage ? '%' : ''}
-    </Typography>
+    <Box sx={{ minWidth: '120px', textAlign: 'right' }}>
+      <Typography variant="body1" fontWeight={600}>
+        {value}{isPercentage ? '%' : ''}
+      </Typography>
+    </Box>
   </Box>
 );
 
@@ -45,7 +48,20 @@ interface MonthlyReturn { month: string; profit: number; returns: number; }
 
 // --- Mock data (no changes) ---
 const mockMetricsData: MetricsData = { sharpeRatio: 1.78, sortinoRatio: 2.54, calmarRatio: 3.12, profitFactor: 2.15, maxDrawdown: -15.4, maxDrawdownDuration: 42, avgDrawdown: -5.8, annualizedVolatility: 22.3, avgWin: 450.75, avgLoss: -210.10, riskRewardRatio: 2.14, maxConsecutiveWins: 8, maxConsecutiveLosses: 3, avgHoldingPeriod: 36 };
-const mockMonthlyReturns: MonthlyReturn[] = [{ month: 'Jan 2023', profit: 1200, returns: 12.0 }, { month: 'Feb 2023', profit: -350, returns: -3.1 }, { month: 'Mar 2023', profit: 2100, returns: 18.5 }, { month: 'Apr 2023', profit: 800, returns: 6.7 }];
+const mockMonthlyReturns: MonthlyReturn[] = [
+  { month: 'Jan 2023', profit: 1200, returns: 12.0 }, 
+  { month: 'Feb 2023', profit: -350, returns: -3.1 }, 
+  { month: 'Mar 2023', profit: 2100, returns: 18.5 }, 
+  { month: 'Apr 2023', profit: 800, returns: 6.7 },
+  { month: 'May 2023', profit: 1200, returns: 12.0 }, 
+  { month: 'Jun 2023', profit: -350, returns: -3.1 }, 
+  { month: 'Jul 2023', profit: 2100, returns: 18.5 }, 
+  { month: 'Aug 2023', profit: 800, returns: 6.7 },
+  { month: 'Sep 2023', profit: 1200, returns: 12.0 }, 
+  { month: 'Oct 2023', profit: -350, returns: -3.1 }, 
+  { month: 'Nov 2023', profit: 2100, returns: 18.5 }, 
+  { month: 'Dec 2023', profit: 800, returns: 6.7 }
+];
 
 const allMetrics = [
     { type: 'header', label: 'Performance Metrics' },
@@ -65,17 +81,17 @@ const allMetrics = [
 
 export const MetricsTab: React.FC = () => {
   const pnlColor = (value: number) => value >= 0 ? 'success.main' : 'error.main';
-
+  const theme = useTheme();
   return (
-    <Box p={3}>
-      <Grid container spacing={3}>
+    <Box p={3} position={'relative'} height={'100%'}>
+      <Grid container justifyContent={'space-between'} height={'100%'}>
 
-        <Grid item xs={12} md={8}>
-          <Paper elevation={0} sx={{ height: '100%' }}>
+        <Grid item sx={{width:'50%', height:'100%'}}>
+          <Paper elevation={0} sx={{ height: '100%', display:'flex',flexDirection:'column', justifyContent:'space-between' }}>
             {allMetrics.map((metric, index) => {
               if (metric.type === 'header') {
                 return (
-                  <Typography key={index} variant="h2" sx={{ p: 2, pb: 1 }}>
+                  <Typography key={index} variant="h2" sx={{ p: 2, pb: 1 }} align='center'>
                     {metric.label}
                   </Typography>
                 );
@@ -99,28 +115,41 @@ export const MetricsTab: React.FC = () => {
           </Paper>
         </Grid>
 
-        <Grid item xs={12} md={4}>
-          <Paper elevation={0} sx={{ p: 2, height: '100%' }}>
-            <Typography variant="h2" gutterBottom>Monthly Returns</Typography>
-            <TableContainer>
-              <Table size="small">
+        <Box border={`1px solid ${theme.palette.divider}`}>
+        </Box>
+
+        <Grid item xs={12} md={4}  sx={{width:'40%', height:'100%'}}>
+          <Paper elevation={0} sx={{ height: '100%', display:'flex', flexDirection:'column' }}>
+
+            <Typography variant="h2" gutterBottom align={'center'} sx={{ p: 2, pb: 1 }}>
+              Monthly Returns
+            </Typography>
+            
+            <TableContainer sx={{flexGrow:1}}>
+              <Table size="small" sx={{height:'100%'}}>
+
                 <TableHead>
-                  <TableRow>
+                  <TableRow >
                     <TableCell>Month</TableCell>
                     <TableCell align="right">Profit ($)</TableCell>
                     <TableCell align="right">Returns (%)</TableCell>
                   </TableRow>
                 </TableHead>
+
                 <TableBody>
                   {mockMonthlyReturns.map((row) => (
-                    <TableRow key={row.month} sx={{ '&:last-child td, &:last-child th': { border: 0 } }}>
-                      <TableCell>{row.month}</TableCell>
+                    <TableRow key={row.month}>
+                      
+                      <TableCell >{row.month}</TableCell>
+                      
                       <TableCell align="right" sx={{ color: pnlColor(row.profit), fontWeight: 500 }}>
                           {row.profit >= 0 ? '+' : ''}{row.profit.toFixed(2)}
                       </TableCell>
+                      
                       <TableCell align="right" sx={{ color: pnlColor(row.returns), fontWeight: 500 }}>
                           {row.returns.toFixed(2)}%
                       </TableCell>
+                    
                     </TableRow>
                   ))}
                 </TableBody>

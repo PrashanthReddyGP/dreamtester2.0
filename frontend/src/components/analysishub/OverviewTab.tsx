@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { Box, Paper, Typography, useTheme } from '@mui/material';
 import ReactECharts from 'echarts-for-react';
 
@@ -32,7 +32,22 @@ export const OverviewTab: React.FC = () => {
   const theme = useTheme();
   const equityData = generateMockEquityData();
   const drawdownData = calculateDrawdown(equityData);
-  
+  const echartsRef = useRef<ReactECharts>(null);
+
+  useEffect(() => {
+    // This is a trick to ensure the resize happens after the DOM has settled.
+    // The resizable panel needs a render cycle to get its final size.
+    const resizeTimer = setTimeout(() => {
+      const chartInstance = echartsRef.current?.getEchartsInstance();
+      if (chartInstance) {
+        chartInstance.resize();
+      }
+    }, 10); // A tiny delay is often more reliable than 0
+
+    // Cleanup the timer if the component unmounts
+    return () => clearTimeout(resizeTimer);
+  }, []); // The empty array [] means this effect runs only once on mount
+
   const chartOption = {
     tooltip: {
       trigger: 'axis',
@@ -108,14 +123,14 @@ export const OverviewTab: React.FC = () => {
   };
 
   return (
-    <Box sx={{height:'100%'}}>
+    <Box sx={{ width:'100%', height:'100%', display: 'flex', flexDirection: 'column' }}>
       
       <Typography variant="h2" gutterBottom>
         Equity Curve
       </Typography>
       
-      <Box sx={{height:'100%'}}>
-        <ReactECharts option={chartOption} style={{width:'100%', height:'100%'}}/>
+      <Box sx={{ flexGrow: 1, width:'100%' }}>
+        <ReactECharts ref={echartsRef} option={chartOption} style={{width:'100%', height:'100%'}}/>
       </Box>
 
     </Box>

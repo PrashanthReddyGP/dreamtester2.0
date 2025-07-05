@@ -29,7 +29,7 @@ export const AnalysisHub: React.FC = () => {
 
       <PanelGroup direction="horizontal">
 
-        <Panel defaultSize={20} minSize={15}>
+        <Panel defaultSize={20}>
           <StrategyListPanel
             results={mockResults}
             selectedId={selectedId}
@@ -37,7 +37,7 @@ export const AnalysisHub: React.FC = () => {
           />
         </Panel>
 
-        <Panel defaultSize={80} minSize={85}>
+        <Panel>
           {selectedResult ? (
             <AnalysisContentPanel result={selectedResult} />
           ) : (

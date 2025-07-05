@@ -90,7 +90,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
           display: 'flex',
           flexDirection: 'column',
           bgcolor: 'background.default',
-          overflow: 'clip'
+          // overflow: 'clip'
         }}
       >
         <Toolbar />

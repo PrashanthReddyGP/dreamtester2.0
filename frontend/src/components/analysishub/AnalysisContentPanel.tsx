@@ -21,7 +21,7 @@ export const AnalysisContentPanel: FC<AnalysisContentPanelProps> = ({ result }) 
 
   return (
     <Paper elevation={0} sx={{display: 'flex', flexDirection: 'column', height:'100%'}}>
-      <Box sx={{ display:'flex', flexDirection:'row', justifyContent:'space-between', paddingRight:4, borderBottom: 1, borderColor: 'divider' }}>
+      <Box sx={{ display:'flex', flexDirection:'row', justifyContent:'space-between', paddingRight:4, borderBottom: 1, borderColor: 'divider'}}>
         <>
             <Tabs value={currentTab} onChange={handleTabChange} aria-label="analysis tabs">
             <Tab label="Overview" />
@@ -36,7 +36,7 @@ export const AnalysisContentPanel: FC<AnalysisContentPanelProps> = ({ result }) 
         </Box>
       </Box>
 
-      <Box sx={{p: 2, height:'100%'}}>
+      <Box sx={{display:'flex', flexDirection:'column', p:2, height:'100%'}}>
         {currentTab === 0 && <OverviewTab />}
         {currentTab === 1 && <TradeLogTab />}
         {currentTab === 2 && <MetricsTab />}

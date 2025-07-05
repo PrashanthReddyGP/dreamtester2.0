@@ -20,7 +20,6 @@ loader.init().then((monacoInstance) => {
     rules: [],
     colors: {
       'editor.background': darkTheme.palette.background.paper,
-      // You can add more theme customizations here if you want
     },
   });
 });
@@ -38,15 +37,16 @@ function App() {
 
   return (
     <ThemeProvider theme={theme}>
-      <Router> {/* Changed to Router for clarity */}
+      <Router>
         <Routes>
           <Route element={<MainLayout mode={mode} toggleTheme={toggleTheme} />}>
-            {/* Redirect the root path to the Strategy Lab */}
+
             <Route path="/" element={<Navigate to="/lab" replace />} />
             
             <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
             <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
             <Route path="/automation" element={<AnimatedPage><div>Automation Page</div></AnimatedPage>} />
+            
           </Route>
         </Routes>
       </Router>
