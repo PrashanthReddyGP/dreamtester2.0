@@ -49,7 +49,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
       >
         <Toolbar>
           <Typography variant="h6" noWrap component="div" sx={{ color: 'text.primary', fontWeight: 'bold' }}>
-            Backtester 2.0
+            Dreamtester 2.0
           </Typography>
           <Box sx={{ flexGrow: 1, display: 'flex', justifyContent: 'center', gap: 1 }}>
             {navItems.map((item) => (

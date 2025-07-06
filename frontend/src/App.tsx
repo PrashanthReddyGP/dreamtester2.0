@@ -1,56 +1,122 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ThemeProvider } from '@mui/material/styles';
-import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom'; 
+import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { getAppTheme } from './theme/theme';
 import { MainLayout } from './layouts/MainLayout';
 import { StrategyLab } from './pages/StrategyLab';
 import { AnalysisHub } from './pages/AnalysisHub';
 import { AnimatedPage } from './components/common/AnimatedPage';
 import { loader } from '@monaco-editor/react';
-import * as monaco from 'monaco-editor';
+import AppContext from './context/AppContext';
+import type { SettingsState, ApiKeySet } from './context/types';
 
-// This configures monaco's loader and theme before any component mounts.
 loader.init().then((monacoInstance) => {
-  // We get the colors from our MUI theme generator directly
   const darkTheme = getAppTheme('dark');
-
   monacoInstance.editor.defineTheme('app-dark-theme', {
     base: 'vs-dark',
     inherit: true,
     rules: [],
-    colors: {
-      'editor.background': darkTheme.palette.background.paper,
-    },
+    colors: { 'editor.background': darkTheme.palette.background.paper },
   });
 });
 
+const API_URL = 'http://127.0.0.1:8000'; // Your FastAPI backend URL
 
 function App() {
   const [mode, setMode] = useState<'light' | 'dark'>('dark');
+
+  const [settings, setSettings] = useState<SettingsState>({});
+  const [isLoading, setIsLoading] = useState(true);
+
+  const [error, setError] = useState<string | null>(null);
 
   const toggleTheme = () => {
     setMode((prevMode) => (prevMode === 'light' ? 'dark' : 'light'));
   };
 
-  // Memoize the theme to prevent re-creation on every render
   const theme = useMemo(() => getAppTheme(mode), [mode]);
 
-  return (
-    <ThemeProvider theme={theme}>
-      <Router>
-        <Routes>
-          <Route element={<MainLayout mode={mode} toggleTheme={toggleTheme} />}>
+  const loadInitialData = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const exchanges = ['binance']; 
 
-            <Route path="/" element={<Navigate to="/lab" replace />} />
-            
-            <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
-            <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
-            <Route path="/automation" element={<AnimatedPage><div>Automation Page</div></AnimatedPage>} />
-            
-          </Route>
-        </Routes>
-      </Router>
-    </ThemeProvider>
+      const promises = exchanges.map((ex: string) =>
+        fetch(`${API_URL}/api/keys/${ex}`).then(res =>
+          res.ok ? res.json() as Promise<ApiKeySet> : null
+        )
+      );
+
+      const results = await Promise.all(promises);
+      
+      const newSettings: SettingsState = {};
+      
+      results.forEach(keys => {
+        if (keys) {
+          newSettings[keys.exchange] = { apiKey: keys.apiKey, apiSecret: keys.apiSecret };
+        }
+      });
+
+      setSettings(newSettings);
+
+    } catch (err) {
+      console.error("Failed to fetch initial settings:", err);
+      setError("Could not connect to the backend.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const saveApiKeys = async (exchange: string, apiKey: string, apiSecret: string) => {
+    try {
+      const response = await fetch(`${API_URL}/api/keys/${exchange}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey, apiSecret }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to save keys on the server.');
+      }
+      
+      // After saving, reload the data to ensure UI is in sync
+      await loadInitialData(); 
+      return await response.json();
+
+    } catch (err) {
+      console.error("Error saving keys:", err);
+      throw err; 
+    }
+  };
+
+  useEffect(() => {
+    loadInitialData();
+  }, []);
+
+  const contextValue = {
+    settings,
+    isLoading,
+    error,
+    saveApiKeys,
+  };
+
+  return (
+    <AppContext.Provider value={contextValue}>
+      <ThemeProvider theme={theme}>
+        <Router>
+          <Routes>
+            <Route element={<MainLayout mode={mode} toggleTheme={toggleTheme} />}>
+              <Route path="/" element={<Navigate to="/lab" replace />} />
+              <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
+              <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
+              <Route path="/automation" element={<AnimatedPage><div>Automation Page</div></AnimatedPage>} />
+            </Route>
+          </Routes>
+        </Router>
+      </ThemeProvider>
+    </AppContext.Provider>
   );
 }
 

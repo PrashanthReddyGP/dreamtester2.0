@@ -58,19 +58,11 @@ class SmaCrossover(core.BaseStrategy):
 const initialFileSystem: FileSystemItem[] = [
   {
     id: uuidv4(),
-    name: 'My Strategies',
+    name: 'Templates',
     type: 'folder',
     children: [
       { id: 'rsi-momentum-id', name: 'RSI_Momentum.py', type: 'file', content: rsiMomentumCode },
     ],
-  },
-  {
-    id: uuidv4(),
-    name: 'Sample Strategies',
-    type: 'folder',
-    children: [
-        { id: 'sma-crossover-id', name: 'SMA_Crossover_Final.py', type: 'file', content: smaCrossoverCode },
-    ]
   }
 ];
 
