@@ -87,6 +87,19 @@ export const StrategyLab: React.FC = () => {
     const handleOpenClearConfirm = () => setIsClearConfirmOpen(true);
     const handleCloseClearConfirm = () => setIsClearConfirmOpen(false);
 
+    const [deleteConfirmState, setDeleteConfirmState] = useState<{ open: boolean; itemId: string | null }>({
+        open: false,
+        itemId: null,
+    });
+
+    const handleOpenDeleteConfirm = (itemId: string) => {
+        setDeleteConfirmState({ open: true, itemId });
+    };
+
+    // This function closes the dialog
+    const handleCloseDeleteConfirm = () => {
+        setDeleteConfirmState({ open: false, itemId: null });
+    };
 
     const [dialogState, setDialogState] = useState({
       open: false,
@@ -185,9 +198,10 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
-    const handleDelete = async (itemId: string) => {
-        if (!window.confirm("Are you sure you want to delete this item? This cannot be undone.")) return;
-        
+    const handleConfirmDelete = async () => {
+        const { itemId } = deleteConfirmState;
+        if (!itemId) return; // Safety check
+
         try {
             await fetch(`${API_URL}/api/strategies/${itemId}`, { method: 'DELETE' });
             if (selectedFileId === itemId) {
@@ -388,7 +402,7 @@ export const StrategyLab: React.FC = () => {
                         selectedFileId={selectedFileId}
                         onNewFile={(folderId) => handleOpenNewItemDialog('file', folderId)}
                         onNewFolder={(folderId) => handleOpenNewItemDialog('folder', folderId)}
-                        onDelete={handleDelete}
+                        onDelete={handleOpenDeleteConfirm}
                         onRename={handleOpenRenameDialog}
                         onImportFiles={handleImportFiles}
                         onClearAll={handleOpenClearConfirm}
@@ -418,6 +432,15 @@ export const StrategyLab: React.FC = () => {
                 title="Clear All Strategies?"
                 message="Are you sure you want to delete all files and folders? This action is permanent and cannot be undone."
             />
+
+            <ConfirmationDialog
+                open={deleteConfirmState.open}
+                onClose={handleCloseDeleteConfirm}
+                onConfirm={handleConfirmDelete}
+                title="Delete Item?"
+                message="Are you sure you want to delete this specific item? This action cannot be undone."
+            />
+
 
             <NameInputDialog
                 open={createDialogState.open}

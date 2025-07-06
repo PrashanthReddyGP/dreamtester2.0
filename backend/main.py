@@ -86,7 +86,7 @@ def create_strategy_endpoint(item: StrategyItemCreate):
         item_id=item.id,
         name=item.name,
         type=item.type,
-        parent_id=item.parentId,
+        parent_id=item.parent_id,
         content=item.content
     )
     if not new_item:
