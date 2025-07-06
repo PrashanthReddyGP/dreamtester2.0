@@ -17,6 +17,11 @@ export interface FileSystemItem {
   content?: string;
 }
 
+interface ImportedFile {
+  name: string;
+  content: string;
+}
+
 // --- Context Menu State now includes a 'type' for what was clicked ---
 interface ContextMenuState {
   mouseX: number;
@@ -119,9 +124,9 @@ export const ExplorerPanel: React.FC<{
       onNewFolder: (folderId?: string) => void;
       onDelete: (itemId: string) => void;
       onRename: (itemId: string, currentName: string) => void;
-      onImportFile: (name: string, content: string) => void;
+      onImportFiles: (files: ImportedFile[]) => void;
       onClearAll: () => void;
-  }> = ({ fileSystem, onFileSelect, selectedFileId, onNewFile, onNewFolder, onDelete, onRename, onImportFile, onClearAll }) => {
+  }> = ({ fileSystem, onFileSelect, selectedFileId, onNewFile, onNewFolder, onDelete, onRename, onImportFiles, onClearAll }) => {
   
   const { setNodeRef: setRootDroppableRef } = useDroppable({
       id: 'root-droppable-area',
@@ -143,24 +148,34 @@ export const ExplorerPanel: React.FC<{
       return;
     }
 
-    const file = files[0];
-    const reader = new FileReader();
-
-    reader.onload = (e) => {
-      const content = e.target?.result;
-      if (typeof content === 'string') {
-        onImportFile(file.name, content);
-      }
+    // FileReader is async, so we need to wrap it in a Promise
+    // to handle multiple files correctly.
+    const readAsText = (file: File): Promise<ImportedFile> => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          resolve({ name: file.name, content: reader.result as string });
+        };
+        reader.onerror = reject;
+        reader.readAsText(file);
+      });
     };
 
-    reader.onerror = (e) => {
-      console.error("Error reading file:", e);
-      alert("Failed to read the selected file.");
-    };
+    // Create an array of promises, one for each file
+    const promises = Array.from(files).map(readAsText);
 
-    reader.readAsText(file);
+    // Promise.all waits for all files to be read
+    Promise.all(promises)
+      .then(importedFiles => {
+        // Then calls the parent handler with the complete array of results
+        onImportFiles(importedFiles);
+      })
+      .catch(error => {
+        console.error("Error reading one or more files:", error);
+        alert("Failed to read one or more of the selected files.");
+      });
 
-    // Reset the input value so the onChange event fires again for the same file
+    // Reset the input so the onChange event fires again for the same file(s)
     event.target.value = '';
   };
 
@@ -238,6 +253,7 @@ export const ExplorerPanel: React.FC<{
         onChange={handleFileChange}
         style={{ display: 'none' }}
         accept=".py"
+        multiple
       />
 
       <Divider sx={{ my: 2 }} />

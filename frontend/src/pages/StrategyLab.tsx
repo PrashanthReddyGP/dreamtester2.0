@@ -18,6 +18,12 @@ import { ConfirmationDialog } from '../components/common/ConfirmationDialog';
 
 const API_URL = 'http://127.0.0.1:8000';
 
+interface ImportedFile {
+  name: string;
+  content: string;
+}
+
+
 // A styled resize handle that is more visible on hover for better UX
 const ResizeHandle = () => {
   return (
@@ -277,6 +283,32 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
+    const handleImportFiles = async (files: ImportedFile[]) => {
+        // Map the imported file data to the format our API expects
+        const newItemsToCreate = files.map(file => ({
+            id: uuidv4(),
+            name: file.name,
+            type: 'file' as 'file',
+            content: file.content,
+            parentId: undefined, // Import to root level
+        }));
+        
+        if (newItemsToCreate.length === 0) return;
+
+        try {
+            // --- CALL THE NEW BULK ENDPOINT ---
+            await fetch(`${API_URL}/api/strategies/bulk`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newItemsToCreate),
+            });
+            await loadStrategies(); // Refresh the explorer
+        } catch (error) {
+            console.error(`Failed to import files:`, error);
+            alert("Error: Could not import the strategy files.");
+        }
+    };
+
     // --- 2. SETUP DND SENSORS (RECOMMENDED FOR POINTER DEVICES) ---
     const sensors = useSensors(
         useSensor(PointerSensor, {
@@ -358,7 +390,7 @@ export const StrategyLab: React.FC = () => {
                         onNewFolder={(folderId) => handleOpenNewItemDialog('folder', folderId)}
                         onDelete={handleDelete}
                         onRename={handleOpenRenameDialog}
-                        onImportFile={handleImportFile}
+                        onImportFiles={handleImportFiles}
                         onClearAll={handleOpenClearConfirm}
                     />
                 </Panel>

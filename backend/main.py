@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 # Import the new database functions
@@ -12,7 +12,8 @@ from database import (
     update_strategy_item,
     delete_strategy_item,
     move_strategy_item,
-    clear_all_strategies
+    clear_all_strategies,
+    create_multiple_strategy_items
 )
 class ApiKeyBody(BaseModel):
     """Defines the expected JSON body for the save_keys endpoint."""
@@ -22,9 +23,13 @@ class ApiKeyBody(BaseModel):
 class StrategyItemCreate(BaseModel):
     id: str
     name: str
-    type: str # 'file' or 'folder'
-    parentId: Optional[str] = None
+    type: str
     content: Optional[str] = None
+    
+    # This tells Pydantic:
+    # - The Python attribute is `parent_id` (snake_case).
+    # - When reading from JSON, look for a field named `parentId` (camelCase).
+    parent_id: Optional[str] = Field(default=None, alias='parentId')
 
 class StrategyItemUpdate(BaseModel):
     name: Optional[str] = None
@@ -122,4 +127,14 @@ def clear_all_strategies_endpoint():
     result = clear_all_strategies()
     if result is None:
         raise HTTPException(status_code=500, detail="An error occurred while clearing strategies.")
+    return result
+
+@app.post("/api/strategies/bulk")
+def create_multiple_strategies_endpoint(items: list[StrategyItemCreate]):
+    """Creates multiple strategy files from a list."""
+    items_as_dicts = [item.model_dump() for item in items]
+    
+    result = create_multiple_strategy_items(items=items_as_dicts)
+    if result is None:
+        raise HTTPException(status_code=500, detail="An error occurred during bulk import.")
     return result

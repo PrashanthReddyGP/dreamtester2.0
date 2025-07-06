@@ -159,3 +159,22 @@ def clear_all_strategies():
     finally:
         db.close()
 
+def create_multiple_strategy_items(items: list[dict]):
+    db = SessionLocal()
+    try:
+        # Create a list of StrategyFile objects from the dictionaries
+        new_items = [StrategyFile(**item) for item in items]
+        
+        # db.add_all() efficiently stages all the new objects
+        db.add_all(new_items)
+        
+        # A single commit writes all of them to the database
+        db.commit()
+        
+        return {"status": "success", "message": f"Successfully imported {len(new_items)} items."}
+    except Exception as e:
+        db.rollback() # If any item fails, roll back the entire transaction
+        print(f"Error during bulk insert: {e}")
+        return None
+    finally:
+        db.close()
