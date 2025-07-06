@@ -1,42 +1,62 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
-# Define where the database file will be stored.
-# Using os.path.expanduser('~') is a good cross-platform way to get the user's home directory.
+# --- This part remains the same ---
 APP_DATA_DIR = os.path.join(os.path.expanduser('~'), '.dreamtester_2.0')
 os.makedirs(APP_DATA_DIR, exist_ok=True)
 DATABASE_URL = f"sqlite:///{os.path.join(APP_DATA_DIR, 'database.db')}"
-
-# SQLAlchemy setup
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# --- Define the Database Model (Table) ---
+# --- ApiKey Model remains the same ---
 class ApiKey(Base):
     __tablename__ = "api_keys"
-
     id = Column(Integer, primary_key=True, index=True)
     exchange_name = Column(String, unique=True, index=True)
     api_key = Column(String)
-    api_secret = Column(String) # NOTE: In a real app, encrypt this!
+    api_secret = Column(String)
 
-# Create the table in the database if it doesn't exist
+# --- NEW: Define the StrategyFile Model ---
+class StrategyFile(Base):
+    __tablename__ = "strategy_files"
+
+    # The frontend uses UUIDs, so we'll use a String primary key
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, index=True)
+    type = Column(String) # 'file' or 'folder'
+    content = Column(Text, nullable=True) # Content is only for files
+
+    # Self-referencing foreign key for hierarchy
+    parent_id = Column(String, ForeignKey("strategy_files.id"), nullable=True)
+    
+    # Relationship to easily access children from a parent
+    children = relationship("StrategyFile", back_populates="parent", cascade="all, delete-orphan")
+    parent = relationship("StrategyFile", back_populates="children", remote_side=[id])
+
+    # Convert model instance to a dictionary, matching frontend's expected structure
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "type": self.type,
+            "content": self.content,
+            "children": [child.to_dict() for child in self.children] if self.children else []
+        }
+
+# --- Create all tables in the database ---
 Base.metadata.create_all(bind=engine)
 
-# --- Define the CRUD (Create, Read, Update, Delete) functions ---
+# --- CRUD functions for ApiKey remain the same ---
 def save_api_key(exchange: str, key: str, secret: str):
     db = SessionLocal()
     try:
-        # Check if a key for this exchange already exists
         db_key = db.query(ApiKey).filter(ApiKey.exchange_name == exchange).first()
         if db_key:
-            # Update existing key
             db_key.api_key = key
             db_key.api_secret = secret
         else:
-            # Create new key
             db_key = ApiKey(exchange_name=exchange, api_key=key, api_secret=secret)
             db.add(db_key)
         
@@ -53,5 +73,56 @@ def get_api_key(exchange: str):
         if db_key:
             return {"exchange": db_key.exchange_name, "api_key": db_key.api_key}
         return None
+    finally:
+        db.close()
+
+# --- NEW: CRUD functions for Strategy Files ---
+
+def get_strategies_tree():
+    db = SessionLocal()
+    try:
+        # Fetch only top-level items (those without a parent)
+        top_level_items = db.query(StrategyFile).filter(StrategyFile.parent_id == None).all()
+        # The to_dict method will recursively build the rest of the tree
+        return [item.to_dict() for item in top_level_items]
+    finally:
+        db.close()
+
+def create_strategy_item(item_id: str, name: str, type: str, content: str = None, parent_id: str = None):
+    db = SessionLocal()
+    try:
+        new_item = StrategyFile(id=item_id, name=name, type=type, content=content, parent_id=parent_id)
+        db.add(new_item)
+        db.commit()
+        db.refresh(new_item)
+        return new_item.to_dict()
+    finally:
+        db.close()
+
+def update_strategy_item(item_id: str, name: str = None, content: str = None):
+    db = SessionLocal()
+    try:
+        item_to_update = db.query(StrategyFile).filter(StrategyFile.id == item_id).first()
+        if not item_to_update:
+            return None
+        if name is not None:
+            item_to_update.name = name
+        if content is not None:
+            item_to_update.content = content
+        db.commit()
+        db.refresh(item_to_update)
+        return item_to_update.to_dict()
+    finally:
+        db.close()
+        
+def delete_strategy_item(item_id: str):
+    db = SessionLocal()
+    try:
+        item_to_delete = db.query(StrategyFile).filter(StrategyFile.id == item_id).first()
+        if not item_to_delete:
+            return None
+        db.delete(item_to_delete)
+        db.commit()
+        return {"status": "success", "message": "Item deleted."}
     finally:
         db.close()

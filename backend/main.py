@@ -1,20 +1,38 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 
-from database import save_api_key, get_api_key
-
+# Import the new database functions
+from database import (
+    save_api_key, 
+    get_api_key,
+    get_strategies_tree,
+    create_strategy_item,
+    update_strategy_item,
+    delete_strategy_item
+)
 class ApiKeyBody(BaseModel):
     """Defines the expected JSON body for the save_keys endpoint."""
     apiKey: str
     apiSecret: str
 
+class StrategyItemCreate(BaseModel):
+    id: str
+    name: str
+    type: str # 'file' or 'folder'
+    parentId: Optional[str] = None
+    content: Optional[str] = None
+
+class StrategyItemUpdate(BaseModel):
+    name: Optional[str] = None
+    content: Optional[str] = None
+
+
 # Create the FastAPI application instance
 app = FastAPI()
 
-origins = [
-    "http://localhost:5173", # The origin of your React app
-]
+origins = ["http://localhost:5173"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,14 +44,12 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health_check():
-    """A simple endpoint to confirm the API is running."""
     return {"status": "ok", "message": "Python API is running!"}
 
 @app.get("/api/keys/{exchange_name}")
 def load_keys_endpoint(exchange_name: str):
     keys = get_api_key(exchange=exchange_name)
     if not keys:
-        # If no keys are found, return a standard 404 Not Found error.
         raise HTTPException(
             status_code=404, 
             detail=f"API keys not found for exchange: {exchange_name}"
@@ -42,11 +58,48 @@ def load_keys_endpoint(exchange_name: str):
 
 @app.post("/api/keys/{exchange_name}")
 def save_keys_endpoint(exchange_name: str, keys: ApiKeyBody):
-    # The 'keys' parameter is automatically parsed from the request body
-    # into an ApiKeyBody object by FastAPI.
     result = save_api_key(
         exchange=exchange_name, 
         key=keys.apiKey, 
         secret=keys.apiSecret
     )
+    return result
+
+@app.get("/api/strategies")
+def get_strategies_endpoint():
+    """Fetches the entire strategy file tree."""
+    return get_strategies_tree()
+
+@app.post("/api/strategies")
+def create_strategy_endpoint(item: StrategyItemCreate):
+    """Creates a new file or folder."""
+    new_item = create_strategy_item(
+        item_id=item.id,
+        name=item.name,
+        type=item.type,
+        parent_id=item.parentId,
+        content=item.content
+    )
+    if not new_item:
+        raise HTTPException(status_code=500, detail="Failed to create item.")
+    return new_item
+
+@app.put("/api/strategies/{item_id}")
+def update_strategy_endpoint(item_id: str, item_update: StrategyItemUpdate):
+    """Updates a file's name or content."""
+    updated_item = update_strategy_item(
+        item_id=item_id, 
+        name=item_update.name, 
+        content=item_update.content
+    )
+    if updated_item is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    return updated_item
+    
+@app.delete("/api/strategies/{item_id}")
+def delete_strategy_endpoint(item_id: str):
+    """Deletes a file or folder (and its children)."""
+    result = delete_strategy_item(item_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Item not found.")
     return result

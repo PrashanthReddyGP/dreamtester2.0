@@ -62,9 +62,9 @@ function createWindow() {
     mainWindow.removeMenu(); 
 
     // Open DevTools in development
-    // if (process.env.ELECTRON_START_URL) {
-    //     mainWindow.webContents.openDevTools();
-    // }
+    if (process.env.ELECTRON_START_URL) {
+        mainWindow.webContents.openDevTools();
+    }
 
     mainWindow.on('closed', () => {
         mainWindow = null;

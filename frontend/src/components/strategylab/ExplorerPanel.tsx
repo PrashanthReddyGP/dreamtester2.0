@@ -1,14 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import type { MouseEvent, FC } from 'react';
 import { Box, Button, Collapse, Divider, List, ListItemButton, ListItemIcon, ListItemText, Typography, Menu, MenuItem } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
-import CodeIcon from '@mui/icons-material/Code';
-import FolderOpenIcon from '@mui/icons-material/FolderOpen';
-import ExpandLess from '@mui/icons-material/ExpandLess';
-import ExpandMore from '@mui/icons-material/ExpandMore';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import { v4 as uuidv4 } from 'uuid';
+import { Folder as FolderIcon, FolderOpen, File } from 'lucide-react';
 
 // --- Data structure remains the same ---
 export interface FileSystemItem {
@@ -16,15 +13,15 @@ export interface FileSystemItem {
   name: string;
   type: 'folder' | 'file';
   children?: FileSystemItem[];
-  content?: string; // Files can have content
+  content?: string;
 }
 
 // --- Context Menu State now includes a 'type' for what was clicked ---
 interface ContextMenuState {
   mouseX: number;
   mouseY: number;
-  type: 'item' | 'container'; // NEW: Differentiate the click source
-  item?: FileSystemItem; // item is now optional
+  type: 'item' | 'container';
+  item?: FileSystemItem;
 }
 
 // --- Recursive Component remains the same ---
@@ -40,7 +37,6 @@ const FileSystemTreeItem: FC<{
         if (item.type === 'folder') {
             setOpen(!open);
         } else {
-            // This is a file, so we call the selection handler
             onFileSelect(item.id);
         }
     };
@@ -51,15 +47,17 @@ const FileSystemTreeItem: FC<{
             <ListItemButton
                 onClick={handleItemClick}
                 onContextMenu={(e) => onContextMenu(e, item)}
-                sx={{ pl: 2, borderRadius: 2 }}
-                selected={isSelected} // Highlight the selected file
-            >
-                <ListItemIcon sx={{ minWidth: '32px', color: 'text.secondary' }}>
-                    {item.type === 'folder' ? <FolderOpenIcon /> : <CodeIcon fontSize="small" />}
+                sx={{ pl: 1, height:30}}
+                selected={isSelected}
+              >
+                <ListItemIcon sx={{ minWidth: '24px', color: 'text.secondary' }}>
+                    {item.type === 'folder' ? (open ? <FolderOpen size={16} /> : <FolderIcon size={16} />) : (<File size={16} />)}
                 </ListItemIcon>
-                <ListItemText primary={item.name} />
-                {item.type === 'folder' && (open ? <ExpandLess /> : <ExpandMore />)}
+                
+                <ListItemText primary={item.name} sx={{textWrap:'nowrap'}} primaryTypographyProps={{ sx: { fontSize: '0.8rem'} }}/>
+
             </ListItemButton>
+
             {item.type === 'folder' && (
                 <Collapse in={open} timeout="auto" unmountOnExit>
                     <List component="div" disablePadding sx={{ pl: 2 }}>
@@ -86,14 +84,47 @@ export const ExplorerPanel: React.FC<{
       onNewFile: (folderId?: string) => void;
       onNewFolder: (folderId?: string) => void;
       onDelete: (itemId: string) => void;
-      onRename: (itemId: string, newName: string) => void;
-  }> = ({ fileSystem, onFileSelect, selectedFileId, onNewFile, onNewFolder, onDelete, onRename }) => {
+      onRename: (itemId: string, currentName: string) => void;
+      onImportFile: (name: string, content: string) => void;
+  }> = ({ fileSystem, onFileSelect, selectedFileId, onNewFile, onNewFolder, onDelete, onRename, onImportFile }) => {
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+    handleClose();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) {
+      return;
+    }
+
+    const file = files[0];
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      const content = e.target?.result;
+      if (typeof content === 'string') {
+        onImportFile(file.name, content);
+      }
+    };
+
+    reader.onerror = (e) => {
+      console.error("Error reading file:", e);
+      alert("Failed to read the selected file.");
+    };
+
+    reader.readAsText(file);
+
+    // Reset the input value so the onChange event fires again for the same file
+    event.target.value = '';
+  };
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   
-  // --- NEW: Context menu handler for the container/empty space ---
   const handleContainerContextMenu = (event: MouseEvent<HTMLDivElement>) => {
-    // We only want this to fire on the container itself, not on the children.
     if (event.target !== event.currentTarget) {
         return;
     }
@@ -101,7 +132,7 @@ export const ExplorerPanel: React.FC<{
     setContextMenu({
         mouseX: event.clientX - 2,
         mouseY: event.clientY - 4,
-        type: 'container', // Set the type to 'container'
+        type: 'container', 
     });
   };
 
@@ -122,13 +153,19 @@ export const ExplorerPanel: React.FC<{
   };
 
   const handleNewFile = () => {
-    // This action now adds to the root level, which is correct for both menu types.
-    onNewFile();
+    // If the menu was opened on a folder, pass its ID as the parent. Otherwise, it's root level (undefined).
+    const parentId = (contextMenu?.type === 'item' && contextMenu.item?.type === 'folder') 
+      ? contextMenu.item.id 
+      : undefined;
+    onNewFile(parentId);
     handleClose();
   };
   
   const handleNewFolder = () => {
-    onNewFolder();
+    const parentId = (contextMenu?.type === 'item' && contextMenu.item?.type === 'folder') 
+      ? contextMenu.item.id 
+      : undefined;
+    onNewFolder(parentId);
     handleClose();
   };
 
@@ -141,10 +178,7 @@ export const ExplorerPanel: React.FC<{
 
   const handleRename = () => {
       if(contextMenu?.item) {
-          const newName = prompt("Enter new name:", contextMenu.item.name);
-          if (newName) {
-              onRename(contextMenu.item.id, newName);
-          }
+          onRename(contextMenu.item.id, contextMenu.item.name);
       }
       handleClose();
   };
@@ -152,17 +186,25 @@ export const ExplorerPanel: React.FC<{
   return (
     <Box sx={{ height: '100%', bgcolor: 'background.paper', p: 2, display: 'flex', flexDirection: 'column' }}>
 
-      <Button variant="contained" color="primary" startIcon={<UploadFileIcon />} sx={{ mb: 2 }}>
+      <Button variant="contained" color="primary" startIcon={<UploadFileIcon />} sx={{ mb: 2 }} onClick={handleImportClick}>
         Import Strategies
       </Button>
+
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        style={{ display: 'none' }}
+        accept=".py"
+      />
+
       <Divider sx={{ my: 2 }} />
       
       <Typography variant="h2" sx={{ mb: 1, px: 1 }}>Strategy Explorer</Typography>
       
-      {/* --- MODIFIED: Added onContextMenu to the List's parent Box --- */}
       <Box 
         onContextMenu={handleContainerContextMenu} 
-        sx={{ flexGrow: 1 }} // Allow the box to fill the remaining space
+        sx={{ flexGrow: 1 }}
       >
         <List component="nav" dense>
             {fileSystem.map(item => (
@@ -187,7 +229,6 @@ export const ExplorerPanel: React.FC<{
             : undefined
         }
       >
-        {/* --- MODIFIED: Render menu items based on the context menu 'type' --- */}
         {contextMenu?.type === 'container' && [
             <MenuItem key="new-file" onClick={handleNewFile}>
                 <ListItemIcon><NoteAddIcon fontSize="small"/></ListItemIcon>
@@ -197,7 +238,7 @@ export const ExplorerPanel: React.FC<{
                 <ListItemIcon><CreateNewFolderIcon fontSize="small"/></ListItemIcon>
                 <ListItemText>New Folder</ListItemText>
             </MenuItem>,
-            <MenuItem key="import" onClick={handleClose}>
+            <MenuItem key="import" onClick={handleImportClick}>
                 <ListItemIcon><UploadFileIcon fontSize="small"/></ListItemIcon>
                 <ListItemText>Import Strategies</ListItemText>
             </MenuItem>

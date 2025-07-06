@@ -6,7 +6,10 @@ import { DatePicker, LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 
 
-export const SettingsPanel: React.FC = () => {
+export const SettingsPanel: React.FC<{
+  onSave: () => void;
+  isSaveDisabled: boolean;
+}> = ({ onSave, isSaveDisabled }) => {
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <Box sx={{
@@ -36,7 +39,14 @@ export const SettingsPanel: React.FC = () => {
           <Button variant="contained" size="large" startIcon={<PlayArrowIcon />} fullWidth>
             Run Backtest
           </Button>
-          <Button variant="outlined" size="large" startIcon={<SaveAltIcon />} fullWidth>
+          <Button 
+            variant="outlined" 
+            size="large" 
+            startIcon={<SaveAltIcon />} 
+            fullWidth
+            onClick={onSave} // Call the function from the parent
+            disabled={isSaveDisabled} // Disable if no file is selected
+          >
             Save Strategy
           </Button>
         </Box>
