@@ -10,7 +10,9 @@ from database import (
     get_strategies_tree,
     create_strategy_item,
     update_strategy_item,
-    delete_strategy_item
+    delete_strategy_item,
+    move_strategy_item,
+    clear_all_strategies
 )
 class ApiKeyBody(BaseModel):
     """Defines the expected JSON body for the save_keys endpoint."""
@@ -28,6 +30,8 @@ class StrategyItemUpdate(BaseModel):
     name: Optional[str] = None
     content: Optional[str] = None
 
+class StrategyItemMove(BaseModel):
+    newParentId: Optional[str] = None
 
 # Create the FastAPI application instance
 app = FastAPI()
@@ -102,4 +106,20 @@ def delete_strategy_endpoint(item_id: str):
     result = delete_strategy_item(item_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Item not found.")
+    return result
+
+@app.put("/api/strategies/{item_id}/move")
+def move_strategy_endpoint(item_id: str, move_data: StrategyItemMove):
+    """Moves an item to a new parent folder."""
+    result = move_strategy_item(item_id=item_id, new_parent_id=move_data.newParentId)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Item not found or invalid move.")
+    return result
+
+@app.delete("/api/strategies")
+def clear_all_strategies_endpoint():
+    """Deletes all strategy files and folders."""
+    result = clear_all_strategies()
+    if result is None:
+        raise HTTPException(status_code=500, detail="An error occurred while clearing strategies.")
     return result

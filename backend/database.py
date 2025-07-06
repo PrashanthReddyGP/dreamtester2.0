@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, asc
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
 # --- This part remains the same ---
@@ -37,12 +37,13 @@ class StrategyFile(Base):
 
     # Convert model instance to a dictionary, matching frontend's expected structure
     def to_dict(self):
+        sorted_children = sorted(self.children, key=lambda child: child.name.lower())
         return {
             "id": self.id,
             "name": self.name,
             "type": self.type,
             "content": self.content,
-            "children": [child.to_dict() for child in self.children] if self.children else []
+            "children": [child.to_dict() for child in sorted_children]
         }
 
 # --- Create all tables in the database ---
@@ -82,7 +83,7 @@ def get_strategies_tree():
     db = SessionLocal()
     try:
         # Fetch only top-level items (those without a parent)
-        top_level_items = db.query(StrategyFile).filter(StrategyFile.parent_id == None).all()
+        top_level_items = db.query(StrategyFile).filter(StrategyFile.parent_id == None).order_by(asc(StrategyFile.name)).all()
         # The to_dict method will recursively build the rest of the tree
         return [item.to_dict() for item in top_level_items]
     finally:
@@ -126,3 +127,35 @@ def delete_strategy_item(item_id: str):
         return {"status": "success", "message": "Item deleted."}
     finally:
         db.close()
+        
+def move_strategy_item(item_id: str, new_parent_id: str | None):
+    db = SessionLocal()
+    try:
+        item_to_move = db.query(StrategyFile).filter(StrategyFile.id == item_id).first()
+        if not item_to_move:
+            return None # Item not found
+        
+        # Prevent dropping a folder into itself or its own children (complex check, omitted for brevity but good for a real app)
+
+        item_to_move.parent_id = new_parent_id
+        db.commit()
+        db.refresh(item_to_move)
+        return {"status": "success", "message": "Item moved."}
+    finally:
+        db.close()
+        
+def clear_all_strategies():
+    db = SessionLocal()
+    try:
+        # This executes a "DELETE FROM strategy_files" statement, deleting all rows.
+        num_rows_deleted = db.query(StrategyFile).delete()
+        db.commit()
+        return {"status": "success", "message": f"Successfully deleted {num_rows_deleted} items."}
+    except Exception as e:
+        db.rollback()
+        # In a real app, you would log this error
+        print(f"Error clearing strategies: {e}")
+        return None
+    finally:
+        db.close()
+

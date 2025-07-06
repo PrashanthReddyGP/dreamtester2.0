@@ -12,6 +12,9 @@ import type { FileSystemItem } from '../components/strategylab/ExplorerPanel';
 import { EditorPanel } from '../components/strategylab/EditorPanel';
 import { SettingsPanel } from '../components/strategylab/SettingsPanel';
 import { NameInputDialog  } from '../components/strategylab/NameItemDialog';
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import type { DragEndEvent } from '@dnd-kit/core';
+import { ConfirmationDialog } from '../components/common/ConfirmationDialog';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -73,6 +76,11 @@ export const StrategyLab: React.FC = () => {
     const [editorCode, setEditorCode] = useState<string>('// Select a file to begin...');
     const [isLoading, setIsLoading] = useState(true);
     const [currentEditorCode, setCurrentEditorCode] = useState<string>('// Select a file to begin...');
+    const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
+
+    const handleOpenClearConfirm = () => setIsClearConfirmOpen(true);
+    const handleCloseClearConfirm = () => setIsClearConfirmOpen(false);
+
 
     const [dialogState, setDialogState] = useState({
       open: false,
@@ -269,7 +277,76 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
+    // --- 2. SETUP DND SENSORS (RECOMMENDED FOR POINTER DEVICES) ---
+    const sensors = useSensors(
+        useSensor(PointerSensor, {
+            activationConstraint: {
+                // Require pointer to move 5px before activating a drag
+                distance: 5,
+            },
+        })
+    );
+
+    // --- 3. CREATE THE API HANDLER FOR MOVING AN ITEM ---
+    const handleMoveItem = async (itemId: string, newParentId: string | null) => {
+        try {
+            await fetch(`${API_URL}/api/strategies/${itemId}/move`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ newParentId: newParentId }),
+            });
+            // --- Crucially, re-fetch the truth from the sorted backend ---
+            await loadStrategies();
+        } catch (error) {
+            console.error("Failed to move item:", error);
+            alert("Error: Could not move the item.");
+        }
+    };
+
+    // --- 4. CREATE THE MAIN DRAG HANDLER ---
+    const handleDragEnd = (event: DragEndEvent) => {
+        const { active, over } = event;
+
+        // If not dropped on a valid target, do nothing
+        if (!over) return;
+
+        // If dropped on itself, do nothing
+        if (active.id === over.id) return;
+        
+        const activeId = active.id as string;
+        const overId = over.id as string;
+
+        // Find the file being dropped on
+        let newParentId: string | null = null;
+        if (over.data.current?.type === 'folder') {
+            // Dropped onto a folder
+            newParentId = overId;
+        } else if (over.data.current?.type === 'root-droppable') {
+            // Dropped onto the root container
+            newParentId = null;
+        } else {
+            // Dropped onto a file, which is invalid. Do nothing.
+            // A better UX might be to find the file's parent folder, but this is safer.
+            console.log("Invalid drop target (cannot drop on a file).");
+            return;
+        }
+
+        handleMoveItem(activeId, newParentId);
+    };
+
+    const handleConfirmClearAll = async () => {
+        try {
+            await fetch(`${API_URL}/api/strategies`, { method: 'DELETE' });
+            // Refresh the UI to show it's empty
+            await loadStrategies();
+        } catch (error) {
+            console.error("Failed to clear all strategies:", error);
+            alert("Error: Could not clear strategies.");
+        }
+    };
+
   return (
+    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <Box sx={{ height: '100%', width: '100vw' }}>
             <PanelGroup direction="horizontal">
                 <Panel defaultSize={15} minSize={15}>
@@ -282,6 +359,7 @@ export const StrategyLab: React.FC = () => {
                         onDelete={handleDelete}
                         onRename={handleOpenRenameDialog}
                         onImportFile={handleImportFile}
+                        onClearAll={handleOpenClearConfirm}
                     />
                 </Panel>
                 <ResizeHandle />
@@ -300,6 +378,14 @@ export const StrategyLab: React.FC = () => {
                   />
                 </Panel>
             </PanelGroup>
+
+            <ConfirmationDialog
+                open={isClearConfirmOpen}
+                onClose={handleCloseClearConfirm}
+                onConfirm={handleConfirmClearAll}
+                title="Clear All Strategies?"
+                message="Are you sure you want to delete all files and folders? This action is permanent and cannot be undone."
+            />
 
             <NameInputDialog
                 open={createDialogState.open}
@@ -321,5 +407,6 @@ export const StrategyLab: React.FC = () => {
             />
 
         </Box>
+    </DndContext>
     );
 };

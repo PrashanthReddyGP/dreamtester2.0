@@ -1,11 +1,12 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, forwardRef } from 'react';
 import type { MouseEvent, FC } from 'react';
 import { Box, Button, Collapse, Divider, List, ListItemButton, ListItemIcon, ListItemText, Typography, Menu, MenuItem } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
-import { v4 as uuidv4 } from 'uuid';
-import { Folder as FolderIcon, FolderOpen, File } from 'lucide-react';
+import { Folder as FolderIcon, FolderOpen, File, Trash } from 'lucide-react';
+
+import { useDraggable, useDroppable } from '@dnd-kit/core';
 
 // --- Data structure remains the same ---
 export interface FileSystemItem {
@@ -25,12 +26,13 @@ interface ContextMenuState {
 }
 
 // --- Recursive Component remains the same ---
-const FileSystemTreeItem: FC<{
+const FileSystemTreeItem = forwardRef<HTMLDivElement, {
     item: FileSystemItem;
     onContextMenu: (event: MouseEvent, item: FileSystemItem) => void;
     onFileSelect: (fileId: string) => void;
     selectedFileId: string | null;
-}> = ({ item, onContextMenu, onFileSelect, selectedFileId }) => {
+}>(({ item, onContextMenu, onFileSelect, selectedFileId }, ref ) => {
+
     const [open, setOpen] = useState(true);
 
     const handleItemClick = () => {
@@ -40,14 +42,46 @@ const FileSystemTreeItem: FC<{
             onFileSelect(item.id);
         }
     };
+
     const isSelected = item.type === 'file' && item.id === selectedFileId;
 
+    const { attributes, listeners, setNodeRef: setDraggableRef, transform } = useDraggable({
+        id: item.id,
+        data: { 
+            type: item.type,
+        }
+    });
+
+    const { isOver, setNodeRef: setDroppableRef } = useDroppable({
+        id: item.id,
+        data: {
+            type: 'folder'
+        },
+        disabled: item.type !== 'folder',
+    });
+    
+    const style = transform ? {
+        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+        zIndex: 999, // Ensure the dragged item is on top
+    } : undefined;
+
     return (
-        <>
+        <div ref={ref} style={style}>
             <ListItemButton
+                ref={(node) => {
+                    setDraggableRef(node);
+                    if (item.type === 'folder') setDroppableRef(node);
+                }}
+                {...listeners}
+                {...attributes}
                 onClick={handleItemClick}
                 onContextMenu={(e) => onContextMenu(e, item)}
-                sx={{ pl: 1, height:30}}
+                sx={{ 
+                  pl: 1, 
+                  height:30,
+                  backgroundColor: isOver ? 'action-focus' : 'transparent',
+                  transition: 'background-color 0.2s ease-in-out',
+                }}
                 selected={isSelected}
               >
                 <ListItemIcon sx={{ minWidth: '24px', color: 'text.secondary' }}>
@@ -61,7 +95,7 @@ const FileSystemTreeItem: FC<{
             {item.type === 'folder' && (
                 <Collapse in={open} timeout="auto" unmountOnExit>
                     <List component="div" disablePadding sx={{ pl: 2 }}>
-                        {item.children?.map(child => (
+                        {item.children?.map((child: FileSystemItem) => (
                             <FileSystemTreeItem
                                 key={child.id}
                                 item={child}
@@ -73,9 +107,9 @@ const FileSystemTreeItem: FC<{
                     </List>
                 </Collapse>
             )}
-        </>
+        </div>
     );
-};
+});
 
 export const ExplorerPanel: React.FC<{
       fileSystem: FileSystemItem[];
@@ -86,7 +120,15 @@ export const ExplorerPanel: React.FC<{
       onDelete: (itemId: string) => void;
       onRename: (itemId: string, currentName: string) => void;
       onImportFile: (name: string, content: string) => void;
-  }> = ({ fileSystem, onFileSelect, selectedFileId, onNewFile, onNewFolder, onDelete, onRename, onImportFile }) => {
+      onClearAll: () => void;
+  }> = ({ fileSystem, onFileSelect, selectedFileId, onNewFile, onNewFolder, onDelete, onRename, onImportFile, onClearAll }) => {
+  
+  const { setNodeRef: setRootDroppableRef } = useDroppable({
+      id: 'root-droppable-area',
+      data: {
+          type: 'root-droppable',
+      }
+  });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -203,6 +245,7 @@ export const ExplorerPanel: React.FC<{
       <Typography variant="h2" sx={{ mb: 1, px: 1 }}>Strategy Explorer</Typography>
       
       <Box 
+        ref={setRootDroppableRef}
         onContextMenu={handleContainerContextMenu} 
         sx={{ flexGrow: 1 }}
       >
@@ -241,6 +284,10 @@ export const ExplorerPanel: React.FC<{
             <MenuItem key="import" onClick={handleImportClick}>
                 <ListItemIcon><UploadFileIcon fontSize="small"/></ListItemIcon>
                 <ListItemText>Import Strategies</ListItemText>
+            </MenuItem>,
+            <MenuItem key="clear-all" onClick={() => { onClearAll(); handleClose(); }} sx={{ color: 'error.main' }}>
+                <ListItemIcon  sx={{color: 'error.main'}}><Trash fontSize="small"/></ListItemIcon>
+                <ListItemText>Clear All</ListItemText>
             </MenuItem>
         ]}
         {contextMenu?.type === 'item' && contextMenu.item?.type === 'folder' && [
