@@ -1,15 +1,17 @@
-import React from 'react';
+import React, {useState} from 'react';
 import { Box, Typography, Button, MenuItem, FormControl, InputLabel, Select } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { DatePicker, LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 
-
 export const SettingsPanel: React.FC<{
   onSave: () => void;
   isSaveDisabled: boolean;
-}> = ({ onSave, isSaveDisabled }) => {
+  onRunBacktest: () => void;
+  isBacktestRunning: boolean;
+}> = ({ onSave, isSaveDisabled, onRunBacktest, isBacktestRunning }) => {
+
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <Box sx={{
@@ -36,8 +38,8 @@ export const SettingsPanel: React.FC<{
         <Box sx={{ flexGrow: 1 }} /> 
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-          <Button variant="contained" size="large" startIcon={<PlayArrowIcon />} fullWidth>
-            Run Backtest
+          <Button variant="contained" size="large" startIcon={<PlayArrowIcon />} fullWidth onClick={onRunBacktest} disabled={isBacktestRunning || isSaveDisabled}>
+            {isBacktestRunning ? 'Running...' : 'Run Backtest'}
           </Button>
           <Button 
             variant="outlined" 

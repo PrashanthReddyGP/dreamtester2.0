@@ -4,8 +4,11 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
 # --- This part remains the same ---
 APP_DATA_DIR = os.path.join(os.path.expanduser('~'), '.dreamtester_2.0')
+
 os.makedirs(APP_DATA_DIR, exist_ok=True)
+
 DATABASE_URL = f"sqlite:///{os.path.join(APP_DATA_DIR, 'database.db')}"
+
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -72,7 +75,7 @@ def get_api_key(exchange: str):
     try:
         db_key = db.query(ApiKey).filter(ApiKey.exchange_name == exchange).first()
         if db_key:
-            return {"exchange": db_key.exchange_name, "api_key": db_key.api_key}
+            return {"exchange": db_key.exchange_name, "api_key": db_key.api_key, "api_secret": db_key.api_secret}
         return None
     finally:
         db.close()

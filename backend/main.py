@@ -1,7 +1,8 @@
-from fastapi import FastAPI, HTTPException
+import uuid
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 
 # Import the new database functions
 from database import (
@@ -15,6 +16,25 @@ from database import (
     clear_all_strategies,
     create_multiple_strategy_items
 )
+
+from pipeline import run_batch_manager
+
+##########################################
+
+class BacktestSubmitConfig(BaseModel):
+    strategyCode: str
+    asset: str
+    timeframe: str
+    startDate: Optional[str] = None
+    endDate: Optional[str] = None
+
+class StrategyFileModel(BaseModel):
+    id: str
+    name: str
+    content: str
+
+#########################################
+
 class ApiKeyBody(BaseModel):
     """Defines the expected JSON body for the save_keys endpoint."""
     apiKey: str
@@ -138,3 +158,40 @@ def create_multiple_strategies_endpoint(items: list[StrategyItemCreate]):
     if result is None:
         raise HTTPException(status_code=500, detail="An error occurred during bulk import.")
     return result
+
+###########################################################################################
+
+@app.post("/api/backtest/submit")
+def submit_backtest_endpoint(config: BacktestSubmitConfig):
+    """
+    Accepts a backtest job, adds it to a queue (conceptually), 
+    and returns a job ID for status polling.
+    """
+    job_id = str(uuid.uuid4())
+    
+    # In a real implementation, you would add this job to a Celery/BackgroundTask queue here.
+    # The worker would then pick it up and run the long process.
+    print(f"Received backtest job {job_id} for asset {config.asset}")
+    print(f"Strategy Code:\n{config.strategyCode[:100]}...") # Print first 100 chars
+    
+    # For now, we immediately return the job_id as if it were accepted.
+    return {"job_id": job_id}
+
+@app.post("/api/backtest/batch-submit")
+def submit_batch_backtest_endpoint(files: List[StrategyFileModel], background_tasks: BackgroundTasks):    
+    """
+    Accepts a batch of strategies and queues a SINGLE background task to manage them all.
+    """
+    print(f"API: Received a batch of {len(files)} strategies. Queuing a single batch manager task.")
+    
+    # Convert the list of Pydantic models to a list of simple dictionaries
+    # This is safer for passing to background tasks.
+    files_data = [file.model_dump() for file in files]
+    
+    # Queue ONE task: the manager. Pass the entire list of file data to it.
+    background_tasks.add_task(run_batch_manager, files_data=files_data)
+    
+    # Immediately return a confirmation to the user.
+    # You could return a "batch_id" here for future status checks.
+    batch_id = str(uuid.uuid4())
+    return {"message": "Batch processing started.", "batch_id": batch_id}

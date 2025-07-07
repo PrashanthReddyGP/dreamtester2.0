@@ -12,30 +12,53 @@ function createPythonProcess() {
     const pythonExe = path.join(__dirname, '..', 'backend', '.venv', 'Scripts', 'python.exe');
     const pythonScript = path.join(__dirname, '..', 'backend', 'main.py');
 
-    // Spawn the Python process
-    // We use 'uvicorn' to run the FastAPI app
-    pythonProcess = spawn(pythonExe, [
-        '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000'
-    ], {
-        cwd: path.join(__dirname, '..', 'backend') // Set working directory
+    const spawnArgs = ['-u', '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000'];
+
+    console.log('Spawning Python backend with command:', pythonExe, spawnArgs.join(' '));
+
+    pythonProcess = spawn(pythonExe, spawnArgs, {
+        cwd: path.join(__dirname, '..', 'backend'),
+        stdio: 'pipe' // This is the key change!
     });
 
-    // Log output from the Python process for debugging
     pythonProcess.stdout.on('data', (data) => {
-        console.log(`Python stdout: ${data}`);
+        console.log(`[dev:electron] Python stdout: ${data.toString().trim()}`);
     });
     pythonProcess.stderr.on('data', (data) => {
-        console.error(`Python stderr: ${data}`);
+        const stderrStr = data.toString().trim();
+        if (stderrStr.includes('ERROR')) {
+            console.error(`[dev:electron] Python stderr: ${stderrStr}`);
+        } else {
+            console.log(`[dev:electron] Python info: ${stderrStr}`);
+        }
     });
     pythonProcess.on('close', (code) => {
-        console.log(`Python process exited with code ${code}`);
+        console.log(`[dev:electron] Python process exited with code ${code}`);
     });
 }
 
 function killPythonProcess() {
     if (pythonProcess) {
         console.log('Killing Python process...');
-        pythonProcess.kill();
+        // On Windows, 'SIGINT' (Ctrl+C) might not be enough.
+        // 'taskkill' is a more reliable way to terminate a process tree.
+        if (process.platform === 'win32') {
+            const { exec } = require('child_process');
+            exec(`taskkill /pid ${pythonProcess.pid} /f /t`, (error, stdout, stderr) => {
+                if (error) {
+                    console.error(`Error killing process: ${error.message}`);
+                    return;
+                }
+                if (stderr) {
+                    console.error(`Stderr on kill: ${stderr}`);
+                    return;
+                }
+                console.log(`Successfully killed process: ${stdout}`);
+            });
+        } else {
+            // The original kill for Mac/Linux
+            pythonProcess.kill();
+        }
         pythonProcess = null;
     }
 }

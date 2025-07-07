@@ -16,13 +16,15 @@ import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from 
 import type { DragEndEvent } from '@dnd-kit/core';
 import { ConfirmationDialog } from '../components/common/ConfirmationDialog';
 
+import { submitBacktest, submitBatchBacktest } from '../services/api';
+import type { StrategyFilePayload } from '../services/api';
+
 const API_URL = 'http://127.0.0.1:8000';
 
 interface ImportedFile {
   name: string;
   content: string;
 }
-
 
 // A styled resize handle that is more visible on hover for better UX
 const ResizeHandle = () => {
@@ -83,6 +85,7 @@ export const StrategyLab: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [currentEditorCode, setCurrentEditorCode] = useState<string>('// Select a file to begin...');
     const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
+    const [isBacktestRunning, setIsBacktestRunning] = useState(false);
 
     const handleOpenClearConfirm = () => setIsClearConfirmOpen(true);
     const handleCloseClearConfirm = () => setIsClearConfirmOpen(false);
@@ -391,6 +394,41 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
+
+    const handleRunBacktest = async () => {
+        // Filter the top-level fileSystem array directly.
+        // We only want items where the type is 'file'.
+        const rootFiles: StrategyFilePayload[] = fileSystem
+            .filter(item => item.type === 'file' && item.content) // Ensure it's a file and has content
+            .map(file => ({
+                id: file.id,
+                name: file.name,
+                content: file.content!, // The filter ensures content is not null
+            }));
+
+        if (rootFiles.length === 0) {
+            alert("There are no strategy files in the root of the explorer to backtest.");
+            return;
+        }
+        
+        setIsBacktestRunning(true);
+
+        try {
+            // Call the API service with the filtered list of root files
+            const result = await submitBatchBacktest(rootFiles);
+            
+            console.log("Batch backtest submitted successfully for root files!", result);
+            alert(`Submitted ${rootFiles.length} strategies for backtesting.`);
+            
+        } catch (error) {
+            console.error("Failed to run batch backtest:", error);
+            alert(`Error: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
+        } finally {
+            setIsBacktestRunning(false);
+        }
+    };
+
+
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <Box sx={{ height: '100%', width: '100vw' }}>
@@ -420,7 +458,9 @@ export const StrategyLab: React.FC = () => {
                 <Panel defaultSize={15} minSize={15}>
                   <SettingsPanel 
                     onSave={handleSaveContent}
-                    isSaveDisabled={!selectedFileId} 
+                    isSaveDisabled={!selectedFileId}
+                    onRunBacktest={handleRunBacktest}
+                    isBacktestRunning={isBacktestRunning}
                   />
                 </Panel>
             </PanelGroup>
@@ -440,7 +480,6 @@ export const StrategyLab: React.FC = () => {
                 title="Delete Item?"
                 message="Are you sure you want to delete this specific item? This action cannot be undone."
             />
-
 
             <NameInputDialog
                 open={createDialogState.open}
