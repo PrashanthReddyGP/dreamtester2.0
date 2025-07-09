@@ -1,9 +1,57 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process'); // To run the Python script
+const net = require('net'); // Import Node.js's net module
 
 let pythonProcess = null;
 let mainWindow = null;
+
+
+// --- Function to check if a port is in use ---
+function checkPortInUse(port, callback) {
+    const server = net.createServer(function(socket) {
+        socket.write('Echo server\r\n');
+        socket.pipe(socket);
+    });
+
+    server.listen(port, '127.0.0.1');
+    server.on('error', function (e) {
+        // If we get an 'EADDRINUSE' error, it means the port is in use (success for us!)
+        callback(true);
+    });
+    server.on('listening', function (e) {
+        // If we can listen, it means the port is free.
+        server.close();
+        callback(false);
+    });
+}
+
+// --- Function to poll for the backend server ---
+function pollServer(port, callback) {
+    let attempts = 0;
+    const maxAttempts = 20; // Try for 10 seconds (20 * 500ms)
+    
+    function tryConnect() {
+        console.log(`Checking if backend is up on port ${port} (Attempt ${attempts + 1})...`);
+        checkPortInUse(port, (isInUse) => {
+            if (isInUse) {
+                console.log('Backend is up! Creating window.');
+                callback();
+            } else {
+                attempts++;
+                if (attempts < maxAttempts) {
+                    setTimeout(tryConnect, 500); // Wait 500ms and try again
+                } else {
+                    console.error('Backend server did not start in time.');
+                    // You might want to show an error dialog to the user here
+                    app.quit();
+                }
+            }
+        });
+    }
+    
+    tryConnect();
+}
 
 // --- Python Backend Handling ---
 function createPythonProcess() {
@@ -97,7 +145,8 @@ function createWindow() {
 app.on('ready', () => {
     console.log('Starting Python backend...');
     createPythonProcess();
-    createWindow();
+
+    pollServer(8000, createWindow);
 });
 
 app.on('window-all-closed', () => {

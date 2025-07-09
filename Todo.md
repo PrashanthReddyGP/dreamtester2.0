@@ -18,8 +18,8 @@ FUNCTIONALITY:
 [-] Calculating Indicators
 [-] Running backtest
 [] Backtest performance improvements
-[] Clear previous metrics
-[] Send changed 
+[-] Clear previous metrics
+[-] Send changed 
 [] Improved UX with parallel updates
 
 [-] Portfolio backtesting
