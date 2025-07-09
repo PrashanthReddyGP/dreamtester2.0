@@ -79,6 +79,21 @@ const findFileById = (nodes: FileSystemItem[], id: string): FileSystemItem | nul
     return null;
 }
 
+const findFirstFile = (nodes: FileSystemItem[]): FileSystemItem | null => {
+    for (const node of nodes) {
+        if (node.type === 'file') {
+            return node; // Found the first file, return it
+        }
+        if (node.children) {
+            const foundInChild = findFirstFile(node.children);
+            if (foundInChild) {
+                return foundInChild; // A file was found in a subfolder
+            }
+        }
+    }
+    return null; // No file found in this branch
+};
+
 export const StrategyLab: React.FC = () => {
     const [fileSystem, setFileSystem] = useState<FileSystemItem[]>([]);
     const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
@@ -158,6 +173,21 @@ export const StrategyLab: React.FC = () => {
         const selectedFile = selectedFileId ? findFileById(fileSystem, selectedFileId) : null;
         setCurrentEditorCode(selectedFile?.content ?? '// Select a file from the explorer to view its content.');
     }, [selectedFileId, fileSystem]);
+    
+    useEffect(() => {
+        // Condition 1: Data has just finished loading
+        // Condition 2: The file system is not empty
+        // Condition 3: No file is currently selected
+        if (!isLoading && fileSystem.length > 0 && !selectedFileId) {
+            // Find the very first file in the entire tree structure
+            const firstFile = findFirstFile(fileSystem);
+            if (firstFile) {
+                // Set it as the selected file
+                setSelectedFileId(firstFile.id);
+            }
+        }
+    // This effect should run whenever isLoading or fileSystem changes.
+    }, [isLoading, fileSystem, selectedFileId]);
 
     const handleCreateItem = async (name: string) => {
         const newItem = {

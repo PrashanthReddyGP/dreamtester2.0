@@ -13,6 +13,11 @@ export const SettingsPanel: React.FC<{
   isBacktestRunning: boolean;
 }> = ({ onSave, isSaveDisabled, onRunBacktest, isBacktestRunning }) => {
 
+  const onBacktestClick = () => {
+    onSave();
+    onRunBacktest();
+  }
+
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <Box sx={{
@@ -39,7 +44,7 @@ export const SettingsPanel: React.FC<{
         <Box sx={{ flexGrow: 1 }} /> 
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-          <Button variant="contained" size="large" startIcon={<PlayArrowIcon />} fullWidth onClick={onRunBacktest} disabled={isBacktestRunning || isSaveDisabled}>
+          <Button variant="contained" size="large" startIcon={<PlayArrowIcon />} fullWidth onClick={onBacktestClick} disabled={isBacktestRunning || isSaveDisabled}>
             {isBacktestRunning ? 'Running...' : 'Run Backtest'}
           </Button>
           <Button 
