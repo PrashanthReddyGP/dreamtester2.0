@@ -1,7 +1,7 @@
 import React from 'react';
 import type { FC } from 'react';
-import { Box, List, ListItemButton, ListItemIcon, ListItemText, Typography, Paper, Button, Tooltip } from '@mui/material';
-import AssessmentIcon from '@mui/icons-material/Assessment'; // Icon for backtest results
+import { Box, List, ListItemButton, ListItemIcon, ListItemText, Paper, Button, Tooltip } from '@mui/material';
+import AssessmentIcon from '@mui/icons-material/Assessment'; 
 import { RefreshCcw } from 'lucide-react';
 
 // Define the shape of our strategy/backtest data
@@ -14,11 +14,13 @@ interface StrategyListPanelProps {
   results: BacktestResult[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onReload: () => void;
-  isLoading: boolean;
 }
 
-export const StrategyListPanel: FC<StrategyListPanelProps> = ({ results, selectedId, onSelect, onReload, isLoading }) => {
+export const StrategyListPanel: FC<StrategyListPanelProps> = ({ results, selectedId, onSelect }) => {
+
+  const onReload = () => {
+    console.log("Reload Placeholder")
+  }
 
   return (
     <Paper 
@@ -28,11 +30,10 @@ export const StrategyListPanel: FC<StrategyListPanelProps> = ({ results, selecte
         p: 2, 
         borderRight: 1, 
         borderColor: 'divider',
-        display: 'flex', // Use flexbox for layout
+        display: 'flex',
         flexDirection: 'column'
       }}
     >
-      {/* --- ADD A HEADER FOR THE PANEL --- */}
       <Box sx={{ 
         display: 'flex', 
         justifyContent: 'space-between', 
@@ -46,7 +47,6 @@ export const StrategyListPanel: FC<StrategyListPanelProps> = ({ results, selecte
         </Tooltip>
       </Box>
       
-      {/* --- MAKE THE LIST SCROLLABLE --- */}
       <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
         <List component="nav" dense>
           {results.map((result) => (

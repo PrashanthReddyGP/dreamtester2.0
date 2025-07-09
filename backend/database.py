@@ -51,14 +51,6 @@ class StrategyFile(Base):
             "children": [child.to_dict() for child in sorted_children]
         }
 
-class LatestResult(Base):
-    __tablename__ = "latest_result"
-    # We use a fixed primary key so we can always target this one row.
-    id = Column(Integer, primary_key=True, default=1) 
-    results_data = Column(JSON, nullable=True)
-    updated_at = Column(REAL, default=time.time, onupdate=time.time)
-    
-
 class BacktestJob(Base):
     __tablename__ = "backtest_jobs"
 
@@ -79,6 +71,7 @@ class BacktestJob(Base):
 
 
 # --- Create all tables in the database ---
+# This will now only create api_keys, strategy_files, and backtest_jobs tables.
 Base.metadata.create_all(bind=engine)
 
 

@@ -15,12 +15,11 @@ export interface BacktestConfig {
 // Define the expected response (for now, a job ID)
 export interface BacktestJobResponse {
     job_id: string;
-    // You might add other initial data here later
 }
 
-export interface BulkJobResponse {
-    job_ids: string[];
-}
+// export interface BulkJobResponse {
+//     job_ids: string[];
+// }
 
 export interface StrategyFilePayload {
     id: string;
@@ -75,7 +74,7 @@ export interface Trades {
 
 export interface MonthlyReturns {
     Month: string;
-    'Profit ($)': number; // Keys with spaces must be in quotes
+    'Profit ($)': number;
     'Returns (%)': number;
 }
 
@@ -116,8 +115,6 @@ export interface BatchSubmitResponse {
 
 /**
  * Submits a new backtest job to the backend.
- * @param config The configuration for the backtest, including the strategy code.
- * @returns The response from the server, typically including a job ID.
  */
 export const submitBacktest = async (config: BacktestConfig): Promise<BacktestJobResponse> => {
     // We'll use the asynchronous job submission pattern we discussed.
@@ -141,8 +138,6 @@ export const submitBacktest = async (config: BacktestConfig): Promise<BacktestJo
 
 /**
  * Submits a batch of strategy files for backtesting.
- * @param files An array of strategy file objects.
- * @returns A response from the server, likely containing job IDs for each submitted file.
  */
 export const submitBatchBacktest = async (files: StrategyFilePayload[]): Promise<BatchSubmitResponse> => { 
     // This will call a new endpoint designed for batch submissions
@@ -151,7 +146,7 @@ export const submitBatchBacktest = async (files: StrategyFilePayload[]): Promise
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify(files), // Send the array of files directly
+        body: JSON.stringify(files),
     });
 
     if (!response.ok) {
@@ -164,50 +159,50 @@ export const submitBatchBacktest = async (files: StrategyFilePayload[]): Promise
 
 
 
-/**
- * Fetches the most recently completed backtest result.
- */
-export const getLatestBacktestResult = async (): Promise<BacktestResultPayload | null> => {
-    const response = await fetch(`${API_URL}/api/backtest/latest`);
+// /**
+//  * Fetches the most recently completed backtest result.
+//  */
+// export const getLatestBacktestResult = async (): Promise<BacktestResultPayload | null> => {
+//     const response = await fetch(`${API_URL}/api/backtest/latest`);
     
-    if (!response.ok) {
-        throw new Error("Failed to fetch latest result.");
-    }
+//     if (!response.ok) {
+//         throw new Error("Failed to fetch latest result.");
+//     }
     
-    const data = await response.json();
+//     const data = await response.json();
     
-    // If the backend returns an empty object, it means no result is ready yet.
-    if (!data || Object.keys(data).length === 0) {
-        return null;
-    }
+//     // If the backend returns an empty object, it means no result is ready yet.
+//     if (!data || Object.keys(data).length === 0) {
+//         return null;
+//     }
     
-    return data;
-};
+//     return data;
+// };
 
-export const clearLatestBacktestResult = async (): Promise<void> => {
-    try {
-        const response = await fetch(`${API_URL}/api/backtest/latest`, {
-            method: 'DELETE',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-        });
+// export const clearLatestBacktestResult = async (): Promise<void> => {
+//     try {
+//         const response = await fetch(`${API_URL}/api/backtest/latest`, {
+//             method: 'DELETE',
+//             headers: {
+//                 'Content-Type': 'application/json',
+//             },
+//         });
 
-        // If the response is not ok (e.g., 500 server error), throw an error.
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({})); // Try to get error detail
-            throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
-        }
+//         // If the response is not ok (e.g., 500 server error), throw an error.
+//         if (!response.ok) {
+//             const errorData = await response.json().catch(() => ({})); // Try to get error detail
+//             throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
+//         }
 
-        console.log("Successfully cleared previous backtest result on the server.");
-        // The function resolves without a value, so the return type is Promise<void>
+//         console.log("Successfully cleared previous backtest result on the server.");
+//         // The function resolves without a value, so the return type is Promise<void>
         
-    } catch (error) {
-        console.error("Error clearing latest backtest result:", error);
-        // Re-throw the error so the calling function (handleRunBacktest) can catch it.
-        throw error;
-    }
-};
+//     } catch (error) {
+//         console.error("Error clearing latest backtest result:", error);
+//         // Re-throw the error so the calling function (handleRunBacktest) can catch it.
+//         throw error;
+//     }
+// };
 
 // You can (and should) also move your other API calls here to centralize them!
 // For example:

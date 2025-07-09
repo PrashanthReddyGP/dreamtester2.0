@@ -16,12 +16,11 @@ import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from 
 import type { DragEndEvent } from '@dnd-kit/core';
 import { ConfirmationDialog } from '../components/common/ConfirmationDialog';
 
-import { clearLatestBacktestResult, submitBatchBacktest } from '../services/api';
-import type { StrategyFilePayload, BatchSubmitResponse } from '../services/api'; // <-- UPDATE IMPORT
-import { useAppContext } from '../context/AppContext';
+import {  submitBatchBacktest } from '../services/api';
+import type { StrategyFilePayload, BatchSubmitResponse } from '../services/api';
 import { useNavigate } from 'react-router-dom';
-import { file, files } from 'jszip';
 import { useTerminal } from '../context/TerminalContext';
+import { useAnalysis } from '../context/AnalysisContext';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -98,17 +97,17 @@ const findFirstFile = (nodes: FileSystemItem[]): FileSystemItem | null => {
 };
 
 export const StrategyLab: React.FC = () => {
-
     const { connectToBatch, toggleTerminal } = useTerminal();
+    const { clearResults } = useAnalysis();
 
     const [fileSystem, setFileSystem] = useState<FileSystemItem[]>([]);
     const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
-    const [editorCode, setEditorCode] = useState<string>('// Select a file to begin...');
     const [isLoading, setIsLoading] = useState(true);
     const [currentEditorCode, setCurrentEditorCode] = useState<string>('// Select a file to begin...');
     const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
     const [isBacktestRunning, setIsBacktestRunning] = useState(false);
-    const { fetchLatestResults, clearLatestBacktest } = useAppContext(); // Get context functions
+
+    const navigate = useNavigate();
 
     const handleOpenClearConfirm = () => setIsClearConfirmOpen(true);
     const handleCloseClearConfirm = () => setIsClearConfirmOpen(false);
@@ -435,8 +434,6 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
-    const navigate = useNavigate();
-
     const handleRunBacktest = async () => {
 
         if (!selectedFileId) {
@@ -448,6 +445,8 @@ export const StrategyLab: React.FC = () => {
         toggleTerminal(true);
 
         try {
+            clearResults();
+
             console.log("Saving strategy before running backtest...");
             const freshFileSystem = await handleSaveContent();
 
@@ -467,12 +466,9 @@ export const StrategyLab: React.FC = () => {
                 return;
             }
 
-            await clearLatestBacktestResult(); // Clear backend state
-            clearLatestBacktest(); // Clear frontend global state
-
             // Call the API service with the filtered list of root files
             const result = await submitBatchBacktest(rootFiles);
-            console.log("Batch backtest submitted successfully for root files!", result);
+            console.log("Batch backtest submitted successfully!", result);
 
             if (result.batch_id) {
                 connectToBatch(result.batch_id);
@@ -482,8 +478,6 @@ export const StrategyLab: React.FC = () => {
             }
 
             navigate('/analysis');
-
-            fetchLatestResults();
 
         } catch (error) {
             console.error("Failed to run batch backtest:", error);

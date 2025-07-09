@@ -1,3 +1,4 @@
+import sys
 import uuid
 import asyncio
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
@@ -8,7 +9,6 @@ from sqlalchemy.orm import Session
 
 # Import the new database functions
 from database import (
-    LatestResult,
     BacktestJob,
     SessionLocal,
     save_api_key, 
@@ -27,6 +27,9 @@ from database import (
 from pipeline import run_batch_manager
 
 ##########################################
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 class BacktestSubmitConfig(BaseModel):
     strategyCode: str
@@ -237,52 +240,6 @@ def submit_batch_backtest_endpoint(files: List[StrategyFileModel], background_ta
     background_tasks.add_task(run_batch_manager, batch_id=batch_id, files_data=files_data, manager=manager)
     
     return {"message": "Batch processing started.", "batch_id": batch_id}
-
-@app.get("/api/backtest/latest")
-def get_latest_result_endpoint():
-    db = SessionLocal()
-    try:
-        # Always fetch the one and only result row
-        result_row = db.query(LatestResult).filter(LatestResult.id == 1).first()
-        if result_row:
-            return result_row.results_data
-        return {} # Return empty dict if no result has ever been saved
-    finally:
-        db.close()
-        
-@app.delete("/api/backtest/latest", status_code=200)
-def clear_latest_result_endpoint():
-    """
-    Finds and deletes the single record for the latest backtest result.
-    This is called by the frontend before starting a new backtest run.
-    """
-    # Create a new database session
-    db: Session = SessionLocal()
-    
-    try:
-        # Query for the single row in the LatestResult table.
-        # We assume its ID is always 1, as per our single-slot design.
-        result_to_delete = db.query(LatestResult).filter(LatestResult.id == 1).first()
-
-        if result_to_delete:
-            # If the row exists, delete it.
-            db.delete(result_to_delete)
-            db.commit()
-            print("--- Cleared latest backtest result from the database. ---")
-            return {"message": "Latest result cleared successfully."}
-        else:
-            # If the row doesn't exist, that's fine too. Nothing to do.
-            print("--- No previous backtest result found to clear. ---")
-            return {"message": "No previous result to clear."}
-            
-    except Exception as e:
-        # If anything goes wrong, roll back the transaction and raise an error.
-        db.rollback()
-        print(f"Error clearing latest result: {e}")
-        raise HTTPException(status_code=500, detail="Failed to clear previous results on the server.")
-    finally:
-        # Always close the session to free up the connection.
-        db.close()
 
 @app.get("/api/backtest/results/{batch_id}")
 def get_job_results_endpoint(batch_id: str):
