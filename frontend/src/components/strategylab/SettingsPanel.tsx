@@ -5,6 +5,7 @@ import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { DatePicker, LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { Save } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 export const SettingsPanel: React.FC<{
   onSave: () => void;
@@ -12,10 +13,12 @@ export const SettingsPanel: React.FC<{
   onRunBacktest: () => void;
   isBacktestRunning: boolean;
 }> = ({ onSave, isSaveDisabled, onRunBacktest, isBacktestRunning }) => {
+  const navigate = useNavigate();
 
   const onBacktestClick = () => {
     onSave();
     onRunBacktest();
+    navigate('/analysis');
   }
 
   return (
