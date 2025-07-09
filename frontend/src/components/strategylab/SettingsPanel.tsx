@@ -5,21 +5,13 @@ import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { DatePicker, LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { Save } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 
 export const SettingsPanel: React.FC<{
-  onSave: () => void;
+  onSave: () => Promise<void>;
   isSaveDisabled: boolean;
-  onRunBacktest: () => void;
+  onRunBacktest: () => void; 
   isBacktestRunning: boolean;
 }> = ({ onSave, isSaveDisabled, onRunBacktest, isBacktestRunning }) => {
-  const navigate = useNavigate();
-
-  const onBacktestClick = () => {
-    onSave();
-    onRunBacktest();
-    navigate('/analysis');
-  }
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
@@ -47,7 +39,7 @@ export const SettingsPanel: React.FC<{
         <Box sx={{ flexGrow: 1 }} /> 
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-          <Button variant="contained" size="large" startIcon={<PlayArrowIcon />} fullWidth onClick={onBacktestClick} disabled={isBacktestRunning || isSaveDisabled}>
+          <Button variant="contained" size="large" startIcon={<PlayArrowIcon />} fullWidth onClick={onRunBacktest} disabled={isBacktestRunning || isSaveDisabled}>
             {isBacktestRunning ? 'Running...' : 'Run Backtest'}
           </Button>
           <Button 

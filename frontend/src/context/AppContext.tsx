@@ -14,6 +14,7 @@ const defaultAppContext: AppContextType = {
   isBacktestLoading: true,
   backtestError: null,
   fetchLatestResults: () => console.error("fetchLatestResults function not implemented"),
+  clearLatestBacktest: () => console.error("clearLatestBacktest function not implemented")
 };
 
 const AppContext = createContext<AppContextType>(defaultAppContext);

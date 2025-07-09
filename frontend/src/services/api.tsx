@@ -178,6 +178,30 @@ export const getLatestBacktestResult = async (): Promise<BacktestResultPayload |
     return data;
 };
 
+export const clearLatestBacktestResult = async (): Promise<void> => {
+    try {
+        const response = await fetch(`${API_URL}/api/backtest/latest`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+
+        // If the response is not ok (e.g., 500 server error), throw an error.
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({})); // Try to get error detail
+            throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
+        }
+
+        console.log("Successfully cleared previous backtest result on the server.");
+        // The function resolves without a value, so the return type is Promise<void>
+        
+    } catch (error) {
+        console.error("Error clearing latest backtest result:", error);
+        // Re-throw the error so the calling function (handleRunBacktest) can catch it.
+        throw error;
+    }
+};
 
 // You can (and should) also move your other API calls here to centralize them!
 // For example:

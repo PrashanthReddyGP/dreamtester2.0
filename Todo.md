@@ -18,16 +18,17 @@ FUNCTIONALITY:
 [-] Calculating Indicators
 [-] Running backtest
 [] Backtest performance improvements
+[] Clear previous metrics
+[] Send changed 
+[] Improved UX with parallel updates
 
 [-] Portfolio backtesting
 
 [] Data Saving Efficiency
     [-] Ohlcv data
     [X] Indicators data
-    [] Metrics
-    [] Equity
-
-[] Improved UX with parallel updates
+    [X] Metrics
+    [X] Equity
 
 ---------------------
 

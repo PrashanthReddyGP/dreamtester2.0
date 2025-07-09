@@ -16,9 +16,11 @@ import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from 
 import type { DragEndEvent } from '@dnd-kit/core';
 import { ConfirmationDialog } from '../components/common/ConfirmationDialog';
 
-import { submitBacktest, submitBatchBacktest } from '../services/api';
+import { clearLatestBacktestResult, submitBatchBacktest } from '../services/api';
 import type { StrategyFilePayload } from '../services/api';
 import { useAppContext } from '../context/AppContext';
+import { useNavigate } from 'react-router-dom';
+import { file, files } from 'jszip';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -102,6 +104,7 @@ export const StrategyLab: React.FC = () => {
     const [currentEditorCode, setCurrentEditorCode] = useState<string>('// Select a file to begin...');
     const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
     const [isBacktestRunning, setIsBacktestRunning] = useState(false);
+    const { fetchLatestResults, clearLatestBacktest } = useAppContext(); // Get context functions
 
     const handleOpenClearConfirm = () => setIsClearConfirmOpen(true);
     const handleCloseClearConfirm = () => setIsClearConfirmOpen(false);
@@ -150,16 +153,17 @@ export const StrategyLab: React.FC = () => {
         setSelectedFileId(fileId);
     };
 
-    const loadStrategies = useCallback(async () => {
+    const loadStrategies = useCallback(async (): Promise<FileSystemItem[]> => {
         setIsLoading(true);
         try {
             const response = await fetch(`${API_URL}/api/strategies`);
             if (!response.ok) throw new Error('Failed to fetch strategies');
             const data = await response.json();
             setFileSystem(data);
+            return data;
         } catch (error) {
             console.error("Error loading strategies:", error);
-            // Handle error display if needed
+            return [];
         } finally {
             setIsLoading(false);
         }
@@ -262,10 +266,10 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
-    const handleSaveContent = async () => {
+    const handleSaveContent = async (): Promise<FileSystemItem[]> => {
         if (!selectedFileId) {
             alert("No file selected to save.");
-            return;
+            return [];
         }
         try {
             await fetch(`${API_URL}/api/strategies/${selectedFileId}`, {
@@ -274,11 +278,13 @@ export const StrategyLab: React.FC = () => {
                 // Use the code from our state variable
                 body: JSON.stringify({ content: currentEditorCode }), 
             });
-            await loadStrategies(); // Re-fetch to confirm save
+            const freshFileSystem = await loadStrategies(); // Re-fetch to confirm save
             console.log("Strategy saved successfully!");
+            return freshFileSystem;
         } catch (error) {
             console.error("Failed to save content:", error);
             alert("Error: Could not save strategy.");
+            throw error;
         }
     };
 
@@ -425,32 +431,46 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
-    const { fetchLatestResults } = useAppContext(); // Get the function from context
+    const navigate = useNavigate();
 
     const handleRunBacktest = async () => {
-        // Filter the top-level fileSystem array directly.
-        // We only want items where the type is 'file'.
-        const rootFiles: StrategyFilePayload[] = fileSystem
-            .filter(item => item.type === 'file' && item.content) // Ensure it's a file and has content
-            .map(file => ({
-                id: file.id,
-                name: file.name,
-                content: file.content!, // The filter ensures content is not null
-            }));
 
-        if (rootFiles.length === 0) {
-            alert("There are no strategy files in the root of the explorer to backtest.");
+        if (!selectedFileId) {
+            alert("Please select a strategy file before running a backtest.");
             return;
         }
-        
+
         setIsBacktestRunning(true);
 
         try {
+            console.log("Saving strategy before running backtest...");
+            const freshFileSystem = await handleSaveContent();
+
+            // Filter the top-level fileSystem array directly.
+            // We only want items where the type is 'file'.
+            const rootFiles: StrategyFilePayload[] = freshFileSystem
+                .filter(item => item.type === 'file' && item.content)
+                .map(file => ({
+                    id: file.id,
+                    name: file.name,
+                    content: file.content!,
+                }));
+
+            if (rootFiles.length === 0) {
+                alert("No strategies found to backtest.");
+                setIsBacktestRunning(false); // Reset loading state
+                return;
+            }
+
+            await clearLatestBacktestResult(); // Clear backend state
+            clearLatestBacktest(); // Clear frontend global state
+
             // Call the API service with the filtered list of root files
             const result = await submitBatchBacktest(rootFiles);
-            
             console.log("Batch backtest submitted successfully for root files!", result);
-            alert(`Submitted ${rootFiles.length} strategies for backtesting.`);
+
+            navigate('/analysis');
+
             fetchLatestResults();
 
         } catch (error) {

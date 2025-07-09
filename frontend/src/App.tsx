@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ThemeProvider } from '@mui/material/styles';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { getAppTheme } from './theme/theme';
@@ -9,7 +9,7 @@ import { AnimatedPage } from './components/common/AnimatedPage';
 import { loader } from '@monaco-editor/react';
 import AppContext from './context/AppContext';
 import type { SettingsState, ApiKeySet } from './context/types';
-import { getLatestBacktestResult } from './services/api'; // Import the service
+import { clearLatestBacktestResult, getLatestBacktestResult } from './services/api'; // Import the service
 import type { BacktestResultPayload } from './services/api';
 
 loader.init().then((monacoInstance) => {
@@ -101,35 +101,65 @@ function App() {
   const [isBacktestLoading, setIsBacktestLoading] = useState(false); // Start as false
   const [backtestError, setBacktestError] = useState<string | null>(null);
 
+  const isPollingRef = useRef(false);
+
   const fetchLatestResults = () => {
-    // Prevent multiple polls from running at once
-    if (isBacktestLoading) return;
+    console.log("Starting to poll for latest backtest results...");
+
+    // Guard clause to prevent multiple concurrent polling loops
+    if (isPollingRef.current) {
+      console.log("Polling is already active. Exiting.");
+      return;
+    }
     
+    // Set the initial state for the loading process
     setIsBacktestLoading(true);
     setBacktestError(null);
-    setLatestBacktest(null); // Clear old results while new one is loading
+    setLatestBacktest(null);
+
+    isPollingRef.current = true;
 
     const poll = async () => {
+        // We define a variable to check if the component is still mounted and waiting
+        // This is a way to access the "current" state inside the async function
+        if (!isPollingRef.current) {
+          console.log("Polling was cancelled.");
+          return;
+        }
+
         try {
             const result = await getLatestBacktestResult();
+            
             if (result) {
+                // SUCCESS: We got the data
+                console.log("Successfully fetched backtest results.");
                 setLatestBacktest(result);
                 setIsBacktestLoading(false);
+                isPollingRef.current = false; 
             } else {
-                // Keep polling if still loading and no error
-                if (isBacktestLoading) {
-                    setTimeout(poll, 5000);
-                }
+              // No result yet, poll again
+              setTimeout(poll, 5000);
             }
+
         } catch (err) {
+            console.error("Polling failed with an error:", err);
             setBacktestError("Failed to load backtest results.");
             setIsBacktestLoading(false);
+            isPollingRef.current = false;
         }
     };
 
     poll(); // Start the polling
   };
-  
+
+  const clearLatestBacktest = () => {
+    console.log("Clearing latest backtest data from global state...");
+    setLatestBacktest(null);
+    setBacktestError(null);
+    setIsBacktestLoading(true); // Set to true to immediately show the loading spinner on the Analysis page
+    isPollingRef.current = false;
+  };
+
   const contextValue = {
     settings,
     isLoading,
@@ -139,6 +169,7 @@ function App() {
     isBacktestLoading,
     backtestError,
     fetchLatestResults,
+    clearLatestBacktest,
   };
 
   return (
