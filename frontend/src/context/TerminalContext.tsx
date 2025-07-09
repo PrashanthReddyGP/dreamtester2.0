@@ -81,8 +81,8 @@ export const TerminalContextProvider: React.FC<{ children: React.ReactNode }> = 
             addLog(payload.level || 'INFO', payload.message);
         } else if (type === 'error') {
             addLog('ERROR', `ERROR: ${payload.message}`);
-        } else if (type === 'strategy_completed') {
-            addLog('SUCCESS', `Strategy completed: ${payload.strategy_name}`);
+        } else if (type === 'success') {
+            addLog('SUCCESS', payload.message);
         } else if (type === 'batch_complete') {
             addLog('SUCCESS', `--- BATCH COMPLETE ---`);
             ws.close();

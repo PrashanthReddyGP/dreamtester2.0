@@ -21,6 +21,7 @@ FUNCTIONALITY:
 [-] Clear previous metrics
 [-] Send changed 
 [] Improved UX with parallel updates
+[-] Logging Terminal in App
 
 [-] Portfolio backtesting
 

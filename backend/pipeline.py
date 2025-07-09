@@ -110,16 +110,16 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
                 print(f"  -> Manager collected result for: {file_info['name']}")
                                 
                 # If we get here, the job was successful, so we can safely unpack
-                single_result, strategy_instance, single_metric, single_returns = result_tuple
+                # single_result, strategy_instance, single_metric, single_returns = result_tuple
                 
-                send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"Finished processing: {file_info['name']}"}})
+                send_websocket_update(manager, batch_id, {"type": "success", "payload": {"message": f"Finished processing: {file_info['name']}"}})
                 
-                if single_result:
-                    print(f"  -> Finished processing: {file_info['name']}")
-                    single_result['strategy_instance'] = strategy_instance 
-                    strategies_results.append(single_result)
-                    strategies_metrics.append(single_metric)
-                    strategies_returns.append(single_returns)
+                # if single_result:
+                #     print(f"  -> Finished processing: {file_info['name']}")
+                #     single_result['strategy_instance'] = strategy_instance 
+                #     strategies_results.append(single_result)
+                #     strategies_metrics.append(single_metric)
+                #     strategies_returns.append(single_returns)
 
             except Exception as exc:
                 error_msg = f"Fatal error in manager for {file_info['name']}: {exc}"
@@ -136,28 +136,15 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
         fail_job(batch_id, "No strategies completed successfully.")
         send_websocket_update(manager, batch_id, {"type": "error", "payload": {"message": "No strategies completed successfully."}})
         return
-        
-    # Initialize the combined dataframes
-    combined_df = pd.DataFrame()
-    combined_dfSignals = pd.DataFrame()
-
-    for result in strategies_results:
-        df = result.get('ohlcv')
-        if df is not None:
-            combined_df = pd.concat([combined_df, df], ignore_index=True)
-        
-        df_signals = result.get('signals')
-        if df_signals is not None:
-            combined_dfSignals = pd.concat([combined_dfSignals, df_signals], ignore_index=True)
-            
-    combined_df.drop_duplicates(subset=['timestamp'], inplace=True)
-
+    
     # Let's clean up the `strategies_results` list before we use it.
     # We'll replace the full instance object with just its name.
     processed_results = []
     
-    for res, metric, returns in zip(strategies_results, strategies_metrics, strategies_returns):
-                
+    for result_tuple in raw_results:
+        
+        res, _, metric, returns = result_tuple
+        
         # Assuming your run_single_backtest returns a dict with 'strategy_name', 'equity', etc.
         equity_values = res['equity'].tolist()
         
@@ -187,7 +174,26 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
             "monthly_returns": returns
         })
 
-    if len(strategies_results) > 1:
+    if len(raw_results) > 1:
+        
+        # Initialize the combined dataframes
+        combined_df = pd.DataFrame()
+        combined_dfSignals = pd.DataFrame()
+
+        for result_tuple in raw_results:
+            
+            result, strategy_instance, strategy_metric, strategy_returns = result_tuple
+            
+            df = result.get('ohlcv')
+            if df is not None:
+                combined_df = pd.concat([combined_df, df], ignore_index=True)
+            
+            df_signals = result.get('signals')
+            if df_signals is not None:
+                combined_dfSignals = pd.concat([combined_dfSignals, df_signals], ignore_index=True)
+                
+        combined_df.drop_duplicates(subset=['timestamp'], inplace=True)
+    
         combined_dfSignals = combined_dfSignals.sort_values(by='timestamp').reset_index(drop=True)
         combined_df = combined_df.sort_values(by='timestamp').reset_index(drop=True)
         
@@ -196,7 +202,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
         
         # Get the strategy instance from one of the results to call the portfolio method
         # (This confirms the refactoring to a static method is a good idea)
-        sample_instance = strategies_results[0]['strategy_instance']
+        sample_instance = raw_results[0][1]
         
         timestamps = (complete_df['timestamp'].astype(np.int64) // 10**6).values
         # Fill NaN values that may result from the 'outer' merge before processing
@@ -324,11 +330,12 @@ def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: st
         # parse_file, fetch_candlestick_data, calculate_indicators, run_backtest_loop
         strategy_data, strategy_instance, strategy_metrics, monthly_returns = run_single_backtest(batch_id, manager, job_id, file_name, file_content, initialCapital, client)
         
-        single_result_payload = prepare_strategy_payload(strategy_data, strategy_metrics, monthly_returns)
-        send_websocket_update(manager, batch_id, {
-            "type": "strategy_completed",
-            "payload": convert_to_json_serializable(single_result_payload)
-        })
+        # single_result_payload = prepare_strategy_payload(strategy_data, strategy_metrics, monthly_returns)
+        
+        # send_websocket_update(manager, batch_id, {
+        #     "type": "strategy_completed",
+        #     "payload": convert_to_json_serializable(single_result_payload)
+        # })
 
         print(f"WORKER: Job {job_id} completed successfully.")
         
@@ -426,7 +433,7 @@ def convert_to_json_serializable(obj):
     # --- Date and Time type conversions ---
     elif isinstance(obj, pd.Timestamp):
         return obj.isoformat()
-    elif isinstance(obj, (timedelta, time)): # <-- THE FIX IS HERE
+    elif isinstance(obj, (timedelta, time)):
         # Convert timedelta or time objects to a string representation
         return str(obj)
     elif pd.isna(obj):
