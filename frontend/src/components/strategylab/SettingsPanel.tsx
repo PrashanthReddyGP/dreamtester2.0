@@ -4,6 +4,7 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { DatePicker, LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
+import { Save } from 'lucide-react';
 
 export const SettingsPanel: React.FC<{
   onSave: () => void;
@@ -44,7 +45,7 @@ export const SettingsPanel: React.FC<{
           <Button 
             variant="outlined" 
             size="large" 
-            startIcon={<SaveAltIcon />} 
+            startIcon={<Save />} 
             fullWidth
             onClick={onSave} // Call the function from the parent
             disabled={isSaveDisabled} // Disable if no file is selected

@@ -6,6 +6,8 @@ from typing import Optional, List
 
 # Import the new database functions
 from database import (
+    LatestResult,
+    SessionLocal,
     save_api_key, 
     get_api_key,
     get_strategies_tree,
@@ -188,10 +190,23 @@ def submit_batch_backtest_endpoint(files: List[StrategyFileModel], background_ta
     # This is safer for passing to background tasks.
     files_data = [file.model_dump() for file in files]
     
-    # Queue ONE task: the manager. Pass the entire list of file data to it.
-    background_tasks.add_task(run_batch_manager, files_data=files_data)
-    
     # Immediately return a confirmation to the user.
     # You could return a "batch_id" here for future status checks.
     batch_id = str(uuid.uuid4())
+    
+    # Queue ONE task: the manager. Pass the entire list of file data to it.
+    background_tasks.add_task(run_batch_manager, batch_id=batch_id, files_data=files_data)
+    
     return {"message": "Batch processing started.", "batch_id": batch_id}
+
+@app.get("/api/backtest/latest")
+def get_latest_result_endpoint():
+    db = SessionLocal()
+    try:
+        # Always fetch the one and only result row
+        result_row = db.query(LatestResult).filter(LatestResult.id == 1).first()
+        if result_row:
+            return result_row.results_data
+        return {} # Return empty dict if no result has ever been saved
+    finally:
+        db.close()

@@ -10,6 +10,10 @@ const defaultAppContext: AppContextType = {
     console.error("saveApiKeys function not yet implemented");
     return Promise.reject("Not implemented");
   },
+  latestBacktest: null,
+  isBacktestLoading: true,
+  backtestError: null,
+  fetchLatestResults: () => console.error("fetchLatestResults function not implemented"),
 };
 
 const AppContext = createContext<AppContextType>(defaultAppContext);

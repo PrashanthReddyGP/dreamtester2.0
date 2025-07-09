@@ -37,7 +37,7 @@ class BaseStrategy:
             self.close = df['close'].values
             self.volume = df['volume'].values
             
-            df['timestamp'] = df['timestamp'].astype(np.int64) // 10**9  # Unix timestamp in seconds
+            df['timestamp'] = df['timestamp'].astype(np.int64) // 10**6 
             self.timestamp = df['timestamp'].values
             
             self.trade_closed = np.zeros(len(self.close))
@@ -116,13 +116,13 @@ class BaseStrategy:
         elif self.exit_type == 'EXIT':
             self.optimized_exit()
         
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df['Entry'] = self.entry
         df['Take Profit'] = self.takeprofit
         df['Stop Loss'] = self.stoploss
         df['Trade_Closed'] = self.trade_closed
         df['Result'] = self.result        
-        df['Exit_Time'] = pd.to_datetime(np.where(self.exit_time == 0.0, pd.NaT, self.exit_time), unit='s')
+        df['Exit_Time'] = pd.to_datetime(np.where(self.exit_time == 0.0, pd.NaT, self.exit_time), unit='ms')
         df['Open_Trades'] = self.open_trades
         df['Signal'] = self.signals
         df['RR'] = self.rr
@@ -132,9 +132,9 @@ class BaseStrategy:
         
         df['Max Drawdown(%)'] = self.max_drawdown
         
-        df['Drawdown Duration'] = pd.to_datetime(np.where(self.drawdown_duration == 0.0, pd.NaT, self.drawdown_duration), unit='s').time
+        df['Drawdown Duration'] = pd.to_datetime(np.where(self.drawdown_duration == 0.0, pd.NaT, self.drawdown_duration), unit='ms').time
         df['Max Pull Up(%)'] = self.max_pull_up
-        df['Pull Up Duration'] = pd.to_datetime(np.where(self.pull_up_duration == 0.0, pd.NaT, self.pull_up_duration), unit='s').time
+        df['Pull Up Duration'] = pd.to_datetime(np.where(self.pull_up_duration == 0.0, pd.NaT, self.pull_up_duration), unit='ms').time
         df['Avg Volatility(%)'] = self.avg_volatility
         
         df['Symbol'] = self.symbol

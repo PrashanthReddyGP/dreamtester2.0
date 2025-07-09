@@ -9,6 +9,8 @@ import { AnimatedPage } from './components/common/AnimatedPage';
 import { loader } from '@monaco-editor/react';
 import AppContext from './context/AppContext';
 import type { SettingsState, ApiKeySet } from './context/types';
+import { getLatestBacktestResult } from './services/api'; // Import the service
+import type { BacktestResultPayload } from './services/api';
 
 loader.init().then((monacoInstance) => {
   const darkTheme = getAppTheme('dark');
@@ -95,11 +97,48 @@ function App() {
     loadInitialData();
   }, []);
 
+  const [latestBacktest, setLatestBacktest] = useState<BacktestResultPayload | null>(null);
+  const [isBacktestLoading, setIsBacktestLoading] = useState(false); // Start as false
+  const [backtestError, setBacktestError] = useState<string | null>(null);
+
+  const fetchLatestResults = () => {
+    // Prevent multiple polls from running at once
+    if (isBacktestLoading) return;
+    
+    setIsBacktestLoading(true);
+    setBacktestError(null);
+    setLatestBacktest(null); // Clear old results while new one is loading
+
+    const poll = async () => {
+        try {
+            const result = await getLatestBacktestResult();
+            if (result) {
+                setLatestBacktest(result);
+                setIsBacktestLoading(false);
+            } else {
+                // Keep polling if still loading and no error
+                if (isBacktestLoading) {
+                    setTimeout(poll, 5000);
+                }
+            }
+        } catch (err) {
+            setBacktestError("Failed to load backtest results.");
+            setIsBacktestLoading(false);
+        }
+    };
+
+    poll(); // Start the polling
+  };
+  
   const contextValue = {
     settings,
     isLoading,
     error,
     saveApiKeys,
+    latestBacktest,
+    isBacktestLoading,
+    backtestError,
+    fetchLatestResults,
   };
 
   return (
@@ -111,7 +150,7 @@ function App() {
               <Route path="/" element={<Navigate to="/lab" replace />} />
               <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
               <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
-              <Route path="/automation" element={<AnimatedPage><div>Automation Page</div></AnimatedPage>} />
+              <Route path="/automation" element={<div  style={{display:'flex', justifyContent:'center', alignItems:'center', width:'100%'}}><AnimatedPage>Automation Page</AnimatedPage></div>} />
             </Route>
           </Routes>
         </Router>

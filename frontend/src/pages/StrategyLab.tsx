@@ -18,6 +18,7 @@ import { ConfirmationDialog } from '../components/common/ConfirmationDialog';
 
 import { submitBacktest, submitBatchBacktest } from '../services/api';
 import type { StrategyFilePayload } from '../services/api';
+import { useAppContext } from '../context/AppContext';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -394,6 +395,7 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
+    const { fetchLatestResults } = useAppContext(); // Get the function from context
 
     const handleRunBacktest = async () => {
         // Filter the top-level fileSystem array directly.
@@ -419,7 +421,8 @@ export const StrategyLab: React.FC = () => {
             
             console.log("Batch backtest submitted successfully for root files!", result);
             alert(`Submitted ${rootFiles.length} strategies for backtesting.`);
-            
+            fetchLatestResults();
+
         } catch (error) {
             console.error("Failed to run batch backtest:", error);
             alert(`Error: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
@@ -427,7 +430,6 @@ export const StrategyLab: React.FC = () => {
             setIsBacktestRunning(false);
         }
     };
-
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>

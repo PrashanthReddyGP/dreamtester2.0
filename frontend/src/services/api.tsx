@@ -28,6 +28,86 @@ export interface StrategyFilePayload {
     content: string;
 }
 
+// Define the shape of the expected result payload for type safety
+// This should match the structure you create in `run_batch_manager`
+export type EquityCurvePoint = [number, number]; // e.g., [1688673600000, 10500.50]
+
+export type StrategyMetrics = {
+    Net_Profit: number;
+    Gross_Profit: number;
+    Profit_Percentage: number;
+    Annual_Return: number;
+    Avg_Monthly_Return: number;
+    Total_Trades: number;
+    Open_Trades: number;
+    Closed_Trades: number;
+    Max_Drawdown: number;
+    Avg_Drawdown: number;
+    Profit_Factor: number;
+    Sharpe_Ratio: number;
+    Calmar_Ratio: number;
+    Equity_Efficiency_Rate: number;
+    Strategy_Quality: string;
+    Max_Drawdown_Duration_days: number;
+    Total_Wins: number;
+    Total_Losses: number;
+    Consecutive_Wins: number;
+    Consecutive_Losses: number;
+    Largest_Win: number;
+    Largest_Loss: number;
+    Avg_Win: number;
+    Avg_Loss: number;
+    Avg_Trade: number;
+    Avg_Trade_Time: string;
+    Avg_Win_Time: string;
+    Avg_Loss_Time: string;
+    Max_Runup: number;
+    Avg_Runup: number;
+    Winrate: number;
+    RR: number;
+    Max_Open_Trades: number;
+    Avg_Open_Trades: number;
+};
+
+export interface Trades {
+    [key: string]: any;
+}
+
+export interface MonthlyReturns {
+    Month: string;
+    'Profit ($)': number; // Keys with spaces must be in quotes
+    'Returns (%)': number;
+}
+
+
+export interface StrategyResult {
+    strategy_name: string;
+    equity_curve: EquityCurvePoint[];
+    metrics: StrategyMetrics; 
+    trades: Trades[];
+    monthly_returns: MonthlyReturns;
+}
+
+export interface EquityType {
+    strategy_name: string;
+    equity_curve: EquityCurvePoint[];
+}
+export interface MetricsType {
+    strategy_name: string;
+    metrics: StrategyMetrics;
+    monthly_returns: MonthlyReturns;
+}
+export interface TradesType {
+    strategy_name: string;
+    trades: Trades[];
+}
+
+export interface BacktestResultPayload {
+    name: string;
+    strategies_results: StrategyResult[];
+    initial_capital: number;
+}
+
 /**
  * Submits a new backtest job to the backend.
  * @param config The configuration for the backtest, including the strategy code.
@@ -74,6 +154,28 @@ export const submitBatchBacktest = async (files: StrategyFilePayload[]): Promise
     }
 
     return response.json();
+};
+
+
+
+/**
+ * Fetches the most recently completed backtest result.
+ */
+export const getLatestBacktestResult = async (): Promise<BacktestResultPayload | null> => {
+    const response = await fetch(`${API_URL}/api/backtest/latest`);
+    
+    if (!response.ok) {
+        throw new Error("Failed to fetch latest result.");
+    }
+    
+    const data = await response.json();
+    
+    // If the backend returns an empty object, it means no result is ready yet.
+    if (!data || Object.keys(data).length === 0) {
+        return null;
+    }
+    
+    return data;
 };
 
 

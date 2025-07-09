@@ -1,37 +1,132 @@
-import React from 'react';
+import React, {useMemo} from 'react';
+import type { FC } from 'react';
 import { Box, useTheme } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid/DataGrid';
 import type { GridColDef } from '@mui/x-data-grid';
 
-const columns: GridColDef[] = [
-  { field: 'id', headerName: 'ID', width: 70 },
-  { field: 'direction', headerName: 'Direction', width: 130 },
-  { field: 'entryTime', headerName: 'Entry Time', width: 200, type: 'dateTime' },
-  { field: 'exitTime', headerName: 'Exit Time', width: 200, type: 'dateTime' },
-  { field: 'entryPrice', headerName: 'Entry Price', type: 'number', width: 130 },
-  { field: 'exitPrice', headerName: 'Exit Price', type: 'number', width: 130 },
-  { field: 'pnl', headerName: 'P/L ($)', type: 'number', width: 130 },
-  { field: 'pnlPercent', headerName: 'P/L (%)', type: 'number', width: 130 },
-];
+import type {Trades} from '../../services/api'
 
-const rows = [
-  { id: 1, direction: 'Long', entryTime: new Date(2023, 1, 5, 10, 30), exitTime: new Date(2023, 1, 5, 14, 0), entryPrice: 23000, exitPrice: 23500, pnl: 500, pnlPercent: 2.17 },
-  { id: 2, direction: 'Short', entryTime: new Date(2023, 1, 8, 9, 0), exitTime: new Date(2023, 1, 8, 12, 0), entryPrice: 24000, exitPrice: 23800, pnl: 200, pnlPercent: 0.83 },
-  { id: 3, direction: 'Long', entryTime: new Date(2023, 1, 10, 11, 0), exitTime: new Date(2023, 1, 11, 15, 30), entryPrice: 22500, exitPrice: 22300, pnl: -200, pnlPercent: -0.89 },
-];
+// --- Helper function to format a Unix timestamp in SECONDS ---
+const formatTimestamp = (timestampInSeconds: number): string => {
+  // If the timestamp is 0, null, or otherwise invalid, return an empty string
+  if (!timestampInSeconds) {
+    return '';
+  }
+  // Multiply by 1000 to convert to milliseconds for the JS Date object
+  const date = new Date(timestampInSeconds * 1000);
+  
+  // Use toLocaleString for a nice, locale-aware format.
+  // You can customize the options as needed.
+  return date.toLocaleString('en-US', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+};
 
-export const TradeLogTab: React.FC = () => {
+export const TradeLogTab: FC<{ trades: Trades }> = ({ trades }) => {
   
   const theme = useTheme();
+
+  const columns = useMemo(() => {
+    if (!trades || trades.length === 0) {
+      return [];
+    }
+
+    // Get all the unique column names from the first row of data
+    const firstRow = trades[0];
+    const columnKeys = Object.keys(firstRow);
+    
+    // Define some columns we always want to show first and with specific properties
+    const fixedColumns: GridColDef[] = [
+        { 
+            field: 'timestamp', 
+            headerName: 'Timestamp', 
+            width: 200, 
+            
+            // --- THE FIX ---
+            // The `value` is passed as the first argument to the formatter function.
+            // Or, more robustly, we can destructure the `params` object.
+            valueFormatter: (value) => {
+                // The `value` here is the raw data for the cell (e.g., 1594755000)
+                return formatTimestamp(value as number);
+            }
+        },
+        { field: 'Symbol', headerName: 'Symbol', width: 120 },
+        { field: 'Timeframe', headerName: 'Timeframe', width: 80 },
+        {field: 'Entry', headerName: 'Entry', width: 100, type: 'number'},
+        {field: 'Take Profit', headerName: 'Take Profit', width: 100, type:'number' },
+        {field: 'Stop Loss', headerName: 'Stop Loss', width: 100, type:'number' },
+        { 
+            field: 'Exit_Time', 
+            headerName: 'Exit Time', 
+            width: 200, 
+            // --- THE FIX ---
+            // The `value` is passed as the first argument to the formatter function.
+            // Or, more robustly, we can destructure the `params` object.
+            valueFormatter: (value) => {
+                // The `value` here is the raw data for the cell (e.g., 1594755000)
+                return formatTimestamp(value as number);
+            }
+        },
+        { field: 'Result', headerName: 'Result', width: 80, type:'number' },
+      ];
+    
+    const fixedColumnFields = new Set(fixedColumns.map(c => c.field));
+
+    // Dynamically generate columns for the rest of the keys
+    const dynamicColumns: GridColDef[] = columnKeys
+      .filter(key => !fixedColumnFields.has(key))
+      .map(key => {
+          const colDef: GridColDef = {
+            field: key,
+            headerName: key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+            width: 150,
+            type: typeof firstRow[key] === 'number' ? 'number' : 'string',
+          };
+
+          // You could also apply the formatter to dynamic columns if they match
+          if (key.toLowerCase().includes('time')) {
+              // --- THE FIX (also applied here) ---
+              colDef.valueFormatter = (value) => {
+                return formatTimestamp(value as number);
+              };
+          }
+          
+          return colDef;
+      });
+
+    return [...fixedColumns, ...dynamicColumns];
+
+  }, [trades]);
+  
+  if (!trades || trades.length === 0) {
+    return <Box sx={{ p: 4 }}>No trades were executed in this backtest.</Box>;
+  }
+
+  const sortedTrades = useMemo(() => {
+    if (!trades) {
+        return [];
+    }
+    // Create a shallow copy to avoid mutating the original prop array
+    // and sort it in descending order based on the timestamp.
+    return [...trades].sort((a, b) => b.timestamp - a.timestamp);
+  }, [trades]); // This sorting will only re-run when the trades prop changes
+
 
   return (
     <Box sx={{ height: '100%', width: '100%' }}>
       <DataGrid
-        rows={rows}
+        rows={sortedTrades}
         columns={columns}
+        getRowId={(row) => row.timestamp + Math.random()}
         initialState={{
           pagination: {
-            paginationModel: { page: 0, pageSize: 10 },
+            paginationModel: { page: 0, pageSize: 20 },
           },
         }}
         pageSizeOptions={[5, 10, 20]}

@@ -4,9 +4,9 @@ import { Box, Button, Collapse, Divider, List, ListItemButton, ListItemIcon, Lis
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
-import { Folder as FolderIcon, FolderOpen, File, Trash } from 'lucide-react';
-
+import { Folder as FolderIcon, FolderOpen, File, Trash, DownloadIcon, Archive } from 'lucide-react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
+import JSZip from 'jszip';
 
 // --- Data structure remains the same ---
 export interface FileSystemItem {
@@ -240,6 +240,114 @@ export const ExplorerPanel: React.FC<{
       handleClose();
   };
 
+  const handleExport = () => {
+    if (!contextMenu?.item) return;
+
+    const itemToExport = contextMenu.item;
+    
+    if (itemToExport.type === 'file') {
+        // --- Handle single file export ---
+        if (typeof itemToExport.content !== 'string') {
+            alert("File has no content to export.");
+            return;
+        }
+        
+        // Create a blob from the file content
+        const blob = new Blob([itemToExport.content], { type: 'text/plain;charset=utf-8' });
+        
+        // Create a temporary link element to trigger the download
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = itemToExport.name; // Set the download filename
+        
+        document.body.appendChild(link); // Required for Firefox
+        link.click();
+        document.body.removeChild(link); // Clean up
+        URL.revokeObjectURL(link.href); // Free up memory
+
+    } else if (itemToExport.type === 'folder') {
+        // --- Handle folder export using jszip ---
+        const zip = new JSZip();
+        
+        // A recursive function to add files and folders to the zip
+        const addFolderToZip = (folder: FileSystemItem, currentZipFolder: JSZip) => {
+            folder.children?.forEach(child => {
+                if (child.type === 'file' && typeof child.content === 'string') {
+                    currentZipFolder.file(child.name, child.content);
+                } else if (child.type === 'folder') {
+                    const newFolder = currentZipFolder.folder(child.name);
+                    if (newFolder) {
+                        addFolderToZip(child, newFolder);
+                    }
+                }
+            });
+        };
+        
+        // Start the zipping process from the selected folder
+        addFolderToZip(itemToExport, zip);
+
+        // Generate the zip file blob and trigger the download
+        zip.generateAsync({ type: 'blob' }).then(content => {
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(content);
+            link.download = `${itemToExport.name}.zip`;
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(link.href);
+        });
+    }
+
+    handleClose(); // Close the context menu
+  };
+
+  const handleExportAll = () => {
+    const zip = new JSZip();
+
+    // The recursive helper function is the same as before
+    const addFolderToZip = (folder: FileSystemItem, currentZipFolder: JSZip) => {
+        folder.children?.forEach(child => {
+            if (child.type === 'file' && typeof child.content === 'string') {
+                currentZipFolder.file(child.name, child.content);
+            } else if (child.type === 'folder') {
+                const newFolder = currentZipFolder.folder(child.name);
+                if (newFolder) {
+                    addFolderToZip(child, newFolder);
+                }
+            }
+        });
+    };
+
+    // We iterate over the top-level `fileSystem` array
+    fileSystem.forEach(item => {
+        if (item.type === 'file' && typeof item.content === 'string') {
+            zip.file(item.name, item.content);
+        } else if (item.type === 'folder') {
+            const newFolder = zip.folder(item.name);
+            if (newFolder) {
+                addFolderToZip(item, newFolder);
+            }
+        }
+    });
+
+    // Generate the zip file and trigger the download
+    zip.generateAsync({ type: 'blob' }).then(content => {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(content);
+        // Give it a generic name, e.g., based on the current date
+        const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        link.download = `dreamtester_strategies_${date}.zip`;
+        
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+    });
+
+    handleClose(); // Close the context menu
+  };
+
   return (
     <Box sx={{ height: '100%', bgcolor: 'background.paper', p: 2, display: 'flex', flexDirection: 'column' }}>
 
@@ -256,9 +364,13 @@ export const ExplorerPanel: React.FC<{
         multiple
       />
 
-      <Divider sx={{ my: 2 }} />
+      <Button variant="outlined" color="primary" startIcon={<Archive />} sx={{ mb: 2 }} onClick={handleExportAll}>
+        Export Strategies
+      </Button>
+
+      <Divider/>
       
-      <Typography variant="h2" sx={{ mb: 1, px: 1 }}>Strategy Explorer</Typography>
+      <Typography variant="h2" sx={{ mt: 2, mb: 1, px: 1 }}>Strategy Explorer</Typography>
       
       <Box 
         ref={setRootDroppableRef}
@@ -301,6 +413,10 @@ export const ExplorerPanel: React.FC<{
                 <ListItemIcon><UploadFileIcon fontSize="small"/></ListItemIcon>
                 <ListItemText>Import Strategies</ListItemText>
             </MenuItem>,
+            <MenuItem key="export-all" onClick={handleExportAll}>
+                <ListItemIcon><Archive fontSize="small"/></ListItemIcon>
+                <ListItemText>Export Strategies</ListItemText>
+            </MenuItem>,
             <MenuItem key="clear-all" onClick={() => { onClearAll(); handleClose(); }} sx={{ color: 'error.main' }}>
                 <ListItemIcon  sx={{color: 'error.main'}}><Trash fontSize="small"/></ListItemIcon>
                 <ListItemText>Clear All</ListItemText>
@@ -313,6 +429,9 @@ export const ExplorerPanel: React.FC<{
         ]}
         {contextMenu?.type === 'item' && [
              <MenuItem key="rename" onClick={handleRename}>Rename</MenuItem>,
+             <MenuItem key="export" onClick={handleExport}>
+                <ListItemText>Export</ListItemText>
+             </MenuItem>,
              <MenuItem key="delete" onClick={handleDelete} sx={{ color: 'error.main' }}>Delete</MenuItem>
         ]}
       </Menu>

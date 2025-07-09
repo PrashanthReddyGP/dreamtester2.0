@@ -1,5 +1,6 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, asc
+import time
+from sqlalchemy import REAL, create_engine, Column, Integer, String, Text, ForeignKey, asc, JSON
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
 # --- This part remains the same ---
@@ -48,6 +49,13 @@ class StrategyFile(Base):
             "content": self.content,
             "children": [child.to_dict() for child in sorted_children]
         }
+
+class LatestResult(Base):
+    __tablename__ = "latest_result"
+    # We use a fixed primary key so we can always target this one row.
+    id = Column(Integer, primary_key=True, default=1) 
+    results_data = Column(JSON, nullable=True)
+    updated_at = Column(REAL, default=time.time, onupdate=time.time)
 
 # --- Create all tables in the database ---
 Base.metadata.create_all(bind=engine)

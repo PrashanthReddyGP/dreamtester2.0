@@ -1,11 +1,11 @@
-import React from 'react';
+import React, {useMemo} from 'react';
 import type { FC } from 'react';
-import { 
-    Box, 
-    Paper, 
-    Typography, 
-    Grid, 
-    Divider, 
+import {
+    Box,
+    Paper,
+    Typography,
+    Grid,
+    Divider,
     Tooltip,
     Table,
     TableBody,
@@ -17,15 +17,18 @@ import {
 } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 
+import type { MonthlyReturns, StrategyMetrics } from '../../services/api';
+
+// The MetricItem sub-component is used to render each individual metric line.
 interface MetricItemProps {
   label: string;
   value: string | number;
   tooltip: string;
-  isPercentage?: boolean;
+  color?: string; // Optional color for the value (e.g., 'success.main' or 'error.main')
 }
 
-const MetricItem: FC<MetricItemProps> = ({ label, value, tooltip, isPercentage = false }) => (
-  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 1.5, px: 2 }}>
+const MetricItem: FC<MetricItemProps> = ({ label, value, tooltip, color }) => (
+  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 1, px: 4 }}>
     <Box sx={{ display: 'flex', alignItems: 'center' }}>
       <Typography variant="body1" color="text.secondary">
         {label}
@@ -35,129 +38,179 @@ const MetricItem: FC<MetricItemProps> = ({ label, value, tooltip, isPercentage =
       </Tooltip>
     </Box>
     <Box sx={{ minWidth: '120px', textAlign: 'right' }}>
-      <Typography variant="body1" fontWeight={600}>
-        {value}{isPercentage ? '%' : ''}
+      <Typography variant="body1" fontWeight={600} sx={{ color }}>
+        {value}
       </Typography>
     </Box>
   </Box>
 );
 
-// --- Data interfaces (no changes) ---
-interface MetricsData { sharpeRatio: number; sortinoRatio: number; calmarRatio: number; profitFactor: number; maxDrawdown: number; maxDrawdownDuration: number; avgDrawdown: number; annualizedVolatility: number; avgWin: number; avgLoss: number; riskRewardRatio: number; maxConsecutiveWins: number; maxConsecutiveLosses: number; avgHoldingPeriod: number; }
-interface MonthlyReturn { month: string; profit: number; returns: number; }
 
-// --- Mock data (no changes) ---
-const mockMetricsData: MetricsData = { sharpeRatio: 1.78, sortinoRatio: 2.54, calmarRatio: 3.12, profitFactor: 2.15, maxDrawdown: -15.4, maxDrawdownDuration: 42, avgDrawdown: -5.8, annualizedVolatility: 22.3, avgWin: 450.75, avgLoss: -210.10, riskRewardRatio: 2.14, maxConsecutiveWins: 8, maxConsecutiveLosses: 3, avgHoldingPeriod: 36 };
-const mockMonthlyReturns: MonthlyReturn[] = [
-  { month: 'Jan 2023', profit: 1200, returns: 12.0 }, 
-  { month: 'Feb 2023', profit: -350, returns: -3.1 }, 
-  { month: 'Mar 2023', profit: 2100, returns: 18.5 }, 
-  { month: 'Apr 2023', profit: 800, returns: 6.7 },
-  { month: 'May 2023', profit: 1200, returns: 12.0 }, 
-  { month: 'Jun 2023', profit: -350, returns: -3.1 }, 
-  { month: 'Jul 2023', profit: 2100, returns: 18.5 }, 
-  { month: 'Aug 2023', profit: 800, returns: 6.7 },
-  { month: 'Sep 2023', profit: 1200, returns: 12.0 }, 
-  { month: 'Oct 2023', profit: -350, returns: -3.1 }, 
-  { month: 'Nov 2023', profit: 2100, returns: 18.5 }, 
-  { month: 'Dec 2023', profit: 800, returns: 6.7 }
-];
-
-const allMetrics = [
-    { type: 'header', label: 'Performance Metrics' },
-    { type: 'metric', label: 'Sharpe Ratio', value: mockMetricsData.sharpeRatio.toFixed(2), tooltip: 'Measures risk-adjusted return.' },
-    { type: 'metric', label: 'Sortino Ratio', value: mockMetricsData.sortinoRatio.toFixed(2), tooltip: 'Similar to Sharpe, but only considers downside volatility.' },
-    { type: 'metric', label: 'Calmar Ratio', value: mockMetricsData.calmarRatio.toFixed(2), tooltip: 'Measures return relative to the maximum drawdown.' },
-    { type: 'metric', label: 'Profit Factor', value: mockMetricsData.profitFactor.toFixed(2), tooltip: 'Gross profits divided by gross losses.' },
-    { type: 'metric', label: 'Max Drawdown', value: mockMetricsData.maxDrawdown.toFixed(2), tooltip: 'The largest peak-to-trough decline in portfolio value.', isPercentage: true },
-    { type: 'metric', label: 'Avg. Drawdown', value: mockMetricsData.avgDrawdown.toFixed(2), tooltip: 'The average of all drawdown periods.', isPercentage: true },
-    { type: 'metric', label: 'Max Drawdown Duration', value: `${mockMetricsData.maxDrawdownDuration} days`, tooltip: 'The longest time it took to recover from a peak.' },
-    { type: 'metric', label: 'Annualized Volatility', value: mockMetricsData.annualizedVolatility.toFixed(2), tooltip: 'The standard deviation of returns, annualized.', isPercentage: true },
-    { type: 'metric', label: 'Avg. Win / Avg. Loss', value: mockMetricsData.riskRewardRatio.toFixed(2), tooltip: 'The average profit from winning trades divided by the average loss from losing trades.' },
-    { type: 'metric', label: 'Max Consecutive Wins', value: mockMetricsData.maxConsecutiveWins, tooltip: 'The longest streak of winning trades.' },
-    { type: 'metric', label: 'Max Consecutive Losses', value: mockMetricsData.maxConsecutiveLosses, tooltip: 'The longest streak of losing trades.' },
-    { type: 'metric', label: 'Avg. Holding Period', value: `${mockMetricsData.avgHoldingPeriod} hours`, tooltip: 'The average duration of a trade from entry to exit.' },
-];
-
-export const MetricsTab: React.FC = () => {
-  const pnlColor = (value: number) => value >= 0 ? 'success.main' : 'error.main';
+// 2. The main component now accepts the `metrics` object as a prop.
+export const MetricsTab: FC<{ metrics: StrategyMetrics, monthlyReturns: MonthlyReturns }> = ({ metrics, monthlyReturns }) => {
   const theme = useTheme();
-  return (
-    <Box p={3} position={'relative'} height={'100%'}>
-      <Grid container justifyContent={'space-between'} height={'100%'}>
 
-        <Grid item sx={{width:'50%', height:'100%'}}>
-          <Paper elevation={0} sx={{ height: '100%', display:'flex',flexDirection:'column', justifyContent:'space-between' }}>
-            {allMetrics.map((metric, index) => {
+  // Helper functions for formatting the values consistently.
+  const formatCurrency = (value: number) => {
+    const sign = value < 0 ? '-' : '';
+    // Formats with commas and no decimal places.
+    return `${sign}$${Math.abs(value).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  };
+  const formatPercent = (value: number) => `${(value || 0).toFixed(2)}%`;
+  const formatRatio = (value: number) => (value || 0).toFixed(2);
+
+  // 3. This configuration array drives the entire display.
+  // It maps keys from the `metrics` prop to their display properties.
+  const allMetricsConfig = [
+    { type: 'header', label: 'Overall Performance' },
+    { key: 'Net_Profit', label: 'Net Profit', tooltip: 'Total profit or loss after all trades.', format: formatCurrency, color: metrics.Net_Profit >= 0 ? 'success.main' : 'error.main' },
+    { key: 'Gross_Profit', label: 'Gross Profit', tooltip: 'Total profit or loss after all trades.', format: formatCurrency, color: metrics.Net_Profit >= 0 ? 'success.main' : 'error.main' },
+    { key: 'Profit_Percentage', label: 'Total Return', tooltip: 'Total return as a percentage of the initial capital.', format: formatPercent },
+    { key: 'Annual_Return', label: 'Annualized Return', tooltip: 'The geometric average amount of money earned by an investment each year.', format: formatPercent },
+    { key: 'Avg_Monthly_Return', label: 'Avg Monthly Return', tooltip: 'The geometric average amount of money earned by an investment each month.', format: formatPercent },
+    { key: 'Total_Trades', label: 'Total Trades', tooltip: 'The total number of closed trades executed.' },
+    { key: 'Open_Trades', label: 'Open Trades', tooltip: 'The geometric average amount of money earned by an investment each year.' },
+    { key: 'Max_Drawdown', label: 'Max Drawdown', tooltip: 'The largest peak-to-trough decline in portfolio value.', format: formatPercent, color: 'error.main' },
+    { key: 'Max_Runup', label: 'Max Runup', tooltip: 'The largest peak-to-trough decline in portfolio value.', format: formatPercent, color: 'error.main' },
+    { key: 'Avg_Drawdown', label: 'Avg Drawdown', tooltip: 'The average of all drawdown periods.', format: formatPercent, color: 'error.main' },
+    { key: 'Avg_Runup', label: 'Avg Runup', tooltip: 'The average of all drawdown periods.', format: formatPercent, color: 'error.main' },
+    { key: 'Max_Drawdown_Duration_days', label: 'Max Drawdown Duration', tooltip: 'The longest time it took to recover from a peak.', unit: ' days' },
+    { key: 'Sharpe_Ratio', label: 'Sharpe Ratio', tooltip: 'Measures risk-adjusted return, considering volatility.', format: formatRatio },
+    { key: 'Profit_Factor', label: 'Profit Factor', tooltip: 'Gross profits divided by gross losses. Higher is better.', format: formatRatio },
+    { key: 'Calmar_Ratio', label: 'Calmar Ratio', tooltip: 'Measures return relative to the maximum drawdown.', format: formatRatio },
+    { key: 'RR', label: 'Avg. Risk/Reward Ratio', tooltip: 'The average profit from winning trades divided by the average loss from losing trades.', format: formatRatio },
+    { key: 'Equity_Efficiency_Rate', label: 'Equity Efficiency Rate', tooltip: 'A custom metric for strategy quality.', format: formatRatio },
+    { key: 'Strategy_Quality', label: 'Strategy Quality', tooltip: 'A qualitative assessment of the strategy.' },
+    { key: 'Winrate', label: 'Win Rate', tooltip: 'The percentage of trades that were profitable.', format: formatPercent },
+    { key: 'Total_Wins', label: 'Total Wins', tooltip: 'The total number of closed trades executed.' },
+    { key: 'Total_Losses', label: 'Total Losses', tooltip: 'The total number of closed trades executed.' },
+    { key: 'Avg_Trade_Time', label: 'Avg. Trade Duration', tooltip: 'The average time a position was held.' },
+    { key: 'Avg_Win_Time', label: 'Avg. Win Duration', tooltip: 'The average time a position was held.' },
+    { key: 'Avg_Loss_Time', label: 'Avg. Loss Duration', tooltip: 'The average time a position was held.' },
+    { key: 'Largest_Win', label: 'Largest Win', tooltip: 'The single largest profitable trade.', format: formatCurrency, color: 'success.main' },
+    { key: 'Largest_Loss', label: 'Largest Loss', tooltip: 'The single largest losing trade.', format: formatCurrency, color: 'error.main' },
+    { key: 'Avg_Win', label: 'Avg. Win', tooltip: 'The average profit of all winning trades.', format: formatCurrency },
+    { key: 'Avg_Loss', label: 'Avg. Loss', tooltip: 'The average loss of all losing trades.', format: formatCurrency },
+    { key: 'Consecutive_Wins', label: 'Max Consecutive Wins', tooltip: 'The longest streak of winning trades.' },
+    { key: 'Consecutive_Losses', label: 'Max Consecutive Losses', tooltip: 'The longest streak of losing trades.' },
+    { key: 'Max_Open_Trades', label: 'Max Concurrent Trades', tooltip: 'The maximum number of trades that were open at the same time.' },
+  ];
+
+  const pnlColor = (value: number) => value >= 0 ? 'success.main' : 'error.main';
+
+  const sortedMonthlyReturns = useMemo(() => {
+      if (!monthlyReturns) {
+          return [];
+      }
+      
+      // Create a shallow copy to avoid mutating the original prop array
+      return [...monthlyReturns].sort((a, b) => {
+          // Convert "Month" string (e.g., "Jan 2023") to a Date object for proper comparison
+          const dateA = new Date(a.Month);
+          const dateB = new Date(b.Month);
+          
+          // Subtracting dates gives their difference in milliseconds.
+          // Sorting b - a gives descending (reverse chronological) order.
+          return dateB.getTime() - dateA.getTime();
+      });
+  }, [monthlyReturns]); // This sorting will only re-run when the monthlyReturns prop changes
+
+  return (
+    <Box position={'relative'}>
+      <Grid container spacing={1}>
+        {/* Performance Metrics Column */}
+        <Grid sx={{width:'49%'}}>
+          <Paper elevation={0} sx={{ height: '100%', border:1, borderColor: 'divider' }}>
+            {allMetricsConfig.map((metric, index) => {
               if (metric.type === 'header') {
-                return (
-                  <Typography key={index} variant="h2" sx={{ p: 2, pb: 1 }} align='center'>
-                    {metric.label}
-                  </Typography>
-                );
+                return <Typography key={index} variant="h2" sx={{ p: 2, pb: 1, backgroundColor: 'action.hover'}} align='center' >{metric.label}</Typography>;
               }
-              if (metric.type === 'metric') {
+              if (metric.type === 'divider') {
+                return <Divider key={index} />;
+              }
+              // This check ensures we only render valid metrics from the config
+              if (metric.key && metrics.hasOwnProperty(metric.key)) {
+                
+                const rawValue = metrics[metric.key as keyof StrategyMetrics];
+                
+                let formattedValue;
+                
+                if (metric.format && typeof rawValue === 'number') {
+                    // Only apply formatter if it exists AND the value is a number
+                    formattedValue = metric.format(rawValue);
+                } else {
+                    // Otherwise, use the raw value as is (for strings like "Good")
+                    formattedValue = rawValue;
+                }
+                
+                const finalValue = `${formattedValue}${metric.unit || ''}`;
+
                 return (
                   <MetricItem
                     key={index}
                     label={metric.label}
-                    value={metric.value}
+                    value={finalValue}
                     tooltip={metric.tooltip}
-                    isPercentage={metric.isPercentage}
+                    color={metric.color}
                   />
                 );
-              }
-              if (metric.type === 'divider') {
-                return <Divider key={index} sx={{ my: 1 }} />;
               }
               return null;
             })}
           </Paper>
         </Grid>
 
-        <Box border={`1px solid ${theme.palette.divider}`}>
-        </Box>
+        {/* Monthly Returns Column */}
+          <Grid sx={{width:'50%'}}>
+            <Paper elevation={0} sx={{ height: '100%', border:1, borderColor: 'divider' }}>
+              <Typography variant="h2" gutterBottom sx={{ p: 2, pb: 1, backgroundColor: 'action.hover' }} align='center'>
+                  Monthly Returns
+                </Typography>
+                <TableContainer sx={{ flexGrow: 1 }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Month</TableCell>
+                        <TableCell align="right">Profit ($)</TableCell>
+                        <TableCell align="right">Returns (%)</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {/* --- The mapping is now direct and simple --- */}
+                      {sortedMonthlyReturns.map((row) => {
+                        const profitValue = row['Profit ($)'];
+                        const returnsValue = row['Returns (%)'];
 
-        <Grid item xs={12} md={4}  sx={{width:'40%', height:'100%'}}>
-          <Paper elevation={0} sx={{ height: '100%', display:'flex', flexDirection:'column' }}>
+                        return (
+                          <TableRow key={row.Month}>
+                            <TableCell component="th" scope="row">
+                              {row.Month}
+                            </TableCell>
+                            
+                            {/* --- THE FIX IS HERE --- */}
+                            <TableCell align="right" sx={{ color: pnlColor(profitValue) }}>
+                              {profitValue >= 0 ? '+' : ''}
+                              {/* 
+                                Use toLocaleString() to add commas.
+                                We can also provide options to control decimal places.
+                              */}
+                              {Math.abs(profitValue).toLocaleString('en-US', {
+                                minimumFractionDigits: 0,
+                                maximumFractionDigits: 0,
+                              })}
+                            </TableCell>
 
-            <Typography variant="h2" gutterBottom align={'center'} sx={{ p: 2, pb: 1 }}>
-              Monthly Returns
-            </Typography>
-            
-            <TableContainer sx={{flexGrow:1}}>
-              <Table size="small" sx={{height:'100%'}}>
-
-                <TableHead>
-                  <TableRow >
-                    <TableCell>Month</TableCell>
-                    <TableCell align="right">Profit ($)</TableCell>
-                    <TableCell align="right">Returns (%)</TableCell>
-                  </TableRow>
-                </TableHead>
-
-                <TableBody>
-                  {mockMonthlyReturns.map((row) => (
-                    <TableRow key={row.month}>
-                      
-                      <TableCell >{row.month}</TableCell>
-                      
-                      <TableCell align="right" sx={{ color: pnlColor(row.profit), fontWeight: 500 }}>
-                          {row.profit >= 0 ? '+' : ''}{row.profit.toFixed(2)}
-                      </TableCell>
-                      
-                      <TableCell align="right" sx={{ color: pnlColor(row.returns), fontWeight: 500 }}>
-                          {row.returns.toFixed(2)}%
-                      </TableCell>
-                    
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Paper>
-        </Grid>
-
+                            <TableCell align="right" sx={{ color: pnlColor(returnsValue) }}>
+                              {returnsValue.toFixed(2)}%
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Paper>
+            </Grid>
       </Grid>
     </Box>
   );

@@ -1,20 +1,22 @@
 import pandas as pd
 import numpy as np
 
-def run_backtest_loop(strategy_instance, df):
+def run_backtest_loop(strategy_name, strategy_instance, df, initialCapital):
     print("  - Running event loop...")
     
-    capital = 1000
+    capital = initialCapital
     risk_percent = 1
     cash = (capital * risk_percent) / 100
     
-    df['timestamp'] = df['timestamp'].astype(np.int64) // 10**9  # Unix timestamp in seconds
-    
+    df['timestamp'] = df['timestamp'].astype(np.int64) // 10**6
+        
     strategy_instance.df = df.copy()
     strategy_instance.open = df['open'].values
     strategy_instance.high = df['high'].values
     strategy_instance.low = df['low'].values
     strategy_instance.close = df['close'].values
+    strategy_instance.volume = df['volume'].values
+
     strategy_instance.timestamp = df['timestamp'].values
     
     n = len(strategy_instance.close)
@@ -33,10 +35,10 @@ def run_backtest_loop(strategy_instance, df):
         equity, dfSignals, strategy_df = strategy_instance.run()
         
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        
+                
         # Store the equity and signals in a dictionary
         strategy_data = {
-            'strategy_name': strategy_instance,
+            'strategy_name': strategy_name,
             'equity': equity,
             'ohlcv':df,
             'signals': dfSignals
