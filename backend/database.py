@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 from sqlalchemy import REAL, create_engine, Column, Integer, String, Text, ForeignKey, asc, JSON
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
@@ -56,9 +57,31 @@ class LatestResult(Base):
     id = Column(Integer, primary_key=True, default=1) 
     results_data = Column(JSON, nullable=True)
     updated_at = Column(REAL, default=time.time, onupdate=time.time)
+    
+
+class BacktestJob(Base):
+    __tablename__ = "backtest_jobs"
+
+    # We use the batch_id from the API endpoint as the primary key
+    id = Column(String, primary_key=True, index=True) 
+    
+    # New columns to track the job's progress and outcome
+    status = Column(String, default="pending") # "pending", "running", "completed", "failed"
+    error_message = Column(Text, nullable=True) 
+    logs = Column(JSON, nullable=True, default=lambda: []) # Default to an empty list
+    
+    # This still holds the final, successful result payload
+    results_data = Column(JSON, nullable=True)
+    
+    created_at = Column(REAL, default=time.time)
+    updated_at = Column(REAL, default=time.time, onupdate=time.time)
+
+
 
 # --- Create all tables in the database ---
 Base.metadata.create_all(bind=engine)
+
+
 
 # --- CRUD functions for ApiKey remain the same ---
 def save_api_key(exchange: str, key: str, secret: str):
@@ -186,6 +209,94 @@ def create_multiple_strategy_items(items: list[dict]):
     except Exception as e:
         db.rollback() # If any item fails, roll back the entire transaction
         print(f"Error during bulk insert: {e}")
+        return None
+    finally:
+        db.close()
+
+
+
+# --- 2. ADD NEW CRUD FUNCTIONS FOR BACKTEST JOBS ---
+
+def create_backtest_job(batch_id: str):
+    """
+    Creates an initial record for a new backtest job in the database.
+    """
+    db = SessionLocal()
+    try:
+        # Create a new job with a 'pending' status
+        new_job = BacktestJob(id=batch_id, status="pending")
+        db.add(new_job)
+        db.commit()
+        print(f"--- Created initial DB record for batch_id: {batch_id} ---")
+    finally:
+        db.close()
+
+def update_job_status(batch_id: str, status: str, log_message: str = None):
+    """
+    Updates the status of a job and appends a new log message.
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(BacktestJob).filter(BacktestJob.id == batch_id).first()
+        if job:
+            job.status = status
+            if log_message:
+                # SQLAlchemy's JSON type tracks mutations, so we can append directly.
+                # It's safer to get the list, append, and then re-assign.
+                current_logs = job.logs or []
+                timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3] # HH:MM:SS.ms
+                current_logs.append(f"[{timestamp}] {log_message}")
+                job.logs = current_logs
+            db.commit()
+    finally:
+        db.close()
+
+def fail_job(batch_id: str, error: str):
+    """
+    Marks a job as 'failed' and stores the error message.
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(BacktestJob).filter(BacktestJob.id == batch_id).first()
+        if job:
+            job.status = "failed"
+            job.error_message = error
+            db.commit()
+    finally:
+        db.close()
+
+def save_backtest_results(batch_id: str, results: dict):
+    """
+    Saves the final, successful result data to a completed job.
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(BacktestJob).filter(BacktestJob.id == batch_id).first()
+        if job:
+            job.status = "completed"
+            job.results_data = results
+            db.commit()
+    finally:
+        db.close()
+
+# --- 3. CREATE a function to get the full job details ---
+def get_backtest_job(batch_id: str):
+    """
+    Retrieves the full details of a specific backtest job.
+    """
+    db = SessionLocal()
+    try:
+        job = db.query(BacktestJob).filter(BacktestJob.id == batch_id).first()
+        if job:
+            # Convert the SQLAlchemy object to a dictionary for the API
+            return {
+                "id": job.id, 
+                "status": job.status, 
+                "results": job.results_data, 
+                "logs": job.logs, 
+                "error": job.error_message,
+                "created_at": job.created_at
+            }
         return None
     finally:
         db.close()

@@ -9,8 +9,9 @@ import { AnimatedPage } from './components/common/AnimatedPage';
 import { loader } from '@monaco-editor/react';
 import AppContext from './context/AppContext';
 import type { SettingsState, ApiKeySet } from './context/types';
-import { clearLatestBacktestResult, getLatestBacktestResult } from './services/api'; // Import the service
+import { clearLatestBacktestResult, getLatestBacktestResult } from './services/api'; 
 import type { BacktestResultPayload } from './services/api';
+import { TerminalContextProvider } from './context/TerminalContext'; 
 
 loader.init().then((monacoInstance) => {
   const darkTheme = getAppTheme('dark');
@@ -25,6 +26,7 @@ loader.init().then((monacoInstance) => {
 const API_URL = 'http://127.0.0.1:8000'; // Your FastAPI backend URL
 
 function App() {
+  
   const [mode, setMode] = useState<'light' | 'dark'>('dark');
 
   const [settings, setSettings] = useState<SettingsState>({});
@@ -174,18 +176,20 @@ function App() {
 
   return (
     <AppContext.Provider value={contextValue}>
-      <ThemeProvider theme={theme}>
-        <Router>
-          <Routes>
-            <Route element={<MainLayout mode={mode} toggleTheme={toggleTheme} />}>
-              <Route path="/" element={<Navigate to="/lab" replace />} />
-              <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
-              <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
-              <Route path="/automation" element={<div  style={{display:'flex', justifyContent:'center', alignItems:'center', width:'100%'}}><AnimatedPage>Automation Page</AnimatedPage></div>} />
-            </Route>
-          </Routes>
-        </Router>
-      </ThemeProvider>
+      <TerminalContextProvider>
+        <ThemeProvider theme={theme}>
+          <Router>
+            <Routes>
+              <Route element={<MainLayout mode={mode} toggleTheme={toggleTheme} />}>
+                <Route path="/" element={<Navigate to="/lab" replace />} />
+                <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
+                <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
+                <Route path="/automation" element={<div  style={{display:'flex', justifyContent:'center', alignItems:'center', width:'100%'}}><AnimatedPage>Automation Page</AnimatedPage></div>} />
+              </Route>
+            </Routes>
+          </Router>
+        </ThemeProvider>
+      </TerminalContextProvider>
     </AppContext.Provider>
   );
 }

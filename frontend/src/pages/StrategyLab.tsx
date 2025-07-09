@@ -17,10 +17,11 @@ import type { DragEndEvent } from '@dnd-kit/core';
 import { ConfirmationDialog } from '../components/common/ConfirmationDialog';
 
 import { clearLatestBacktestResult, submitBatchBacktest } from '../services/api';
-import type { StrategyFilePayload } from '../services/api';
+import type { StrategyFilePayload, BatchSubmitResponse } from '../services/api'; // <-- UPDATE IMPORT
 import { useAppContext } from '../context/AppContext';
 import { useNavigate } from 'react-router-dom';
 import { file, files } from 'jszip';
+import { useTerminal } from '../context/TerminalContext';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -97,6 +98,9 @@ const findFirstFile = (nodes: FileSystemItem[]): FileSystemItem | null => {
 };
 
 export const StrategyLab: React.FC = () => {
+
+    const { connectToBatch, toggleTerminal } = useTerminal();
+
     const [fileSystem, setFileSystem] = useState<FileSystemItem[]>([]);
     const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
     const [editorCode, setEditorCode] = useState<string>('// Select a file to begin...');
@@ -441,6 +445,7 @@ export const StrategyLab: React.FC = () => {
         }
 
         setIsBacktestRunning(true);
+        toggleTerminal(true);
 
         try {
             console.log("Saving strategy before running backtest...");
@@ -468,6 +473,13 @@ export const StrategyLab: React.FC = () => {
             // Call the API service with the filtered list of root files
             const result = await submitBatchBacktest(rootFiles);
             console.log("Batch backtest submitted successfully for root files!", result);
+
+            if (result.batch_id) {
+                connectToBatch(result.batch_id);
+            } else {
+                // This case should ideally not happen if the API call was successful
+                console.error("No batch_id received from server!");
+            }
 
             navigate('/analysis');
 

@@ -1,13 +1,15 @@
 import uuid
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+import asyncio
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from sqlalchemy.orm import Session
 
 # Import the new database functions
 from database import (
     LatestResult,
+    BacktestJob,
     SessionLocal,
     save_api_key, 
     get_api_key,
@@ -18,6 +20,8 @@ from database import (
     move_strategy_item,
     clear_all_strategies,
     create_multiple_strategy_items,
+    create_backtest_job,
+    get_backtest_job 
 )
 
 from pipeline import run_batch_manager
@@ -73,6 +77,40 @@ app.add_middleware(
     allow_methods=["*"], # Allows all methods (GET, POST, OPTIONS, etc.)
     allow_headers=["*"], # Allows all headers
 )
+
+
+
+class ConnectionManager:
+    def __init__(self):
+        # A dictionary to hold active connections for each batch_id
+        # Format: { "batch_id_1": [websocket1, websocket2], "batch_id_2": [websocket3] }
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, batch_id: str):
+        await websocket.accept()
+        if batch_id not in self.active_connections:
+            self.active_connections[batch_id] = []
+        self.active_connections[batch_id].append(websocket)
+        print(f"Client connected, now listening for updates on batch_id: {batch_id}")
+
+    def disconnect(self, websocket: WebSocket, batch_id: str):
+        if batch_id in self.active_connections:
+            self.active_connections[batch_id].remove(websocket)
+            if not self.active_connections[batch_id]: # Clean up if no listeners are left
+                del self.active_connections[batch_id]
+        print(f"Client disconnected from batch_id: {batch_id}")
+
+    async def send_json_to_batch(self, batch_id: str, message: dict):
+        if batch_id in self.active_connections:
+            # Create a list of tasks to send messages concurrently
+            tasks = [connection.send_json(message) for connection in self.active_connections[batch_id]]
+            await asyncio.gather(*tasks)
+
+# --- 6. CREATE A SINGLE, GLOBAL INSTANCE OF THE MANAGER ---
+manager = ConnectionManager()
+
+
+
 
 @app.get("/api/health")
 def health_check():
@@ -183,20 +221,20 @@ def submit_backtest_endpoint(config: BacktestSubmitConfig):
 @app.post("/api/backtest/batch-submit")
 def submit_batch_backtest_endpoint(files: List[StrategyFileModel], background_tasks: BackgroundTasks):    
     """
-    Accepts a batch of strategies and queues a SINGLE background task to manage them all.
+    Accepts a batch of strategies, creates a job record, queues a background task,
+    and returns a unique batch_id for the client to connect to via WebSocket.
     """
-    print(f"API: Received a batch of {len(files)} strategies. Queuing a single batch manager task.")
+    print(f"API: Received a batch of {len(files)} strategies.")
     
-    # Convert the list of Pydantic models to a list of simple dictionaries
-    # This is safer for passing to background tasks.
-    files_data = [file.model_dump() for file in files]
-    
-    # Immediately return a confirmation to the user.
-    # You could return a "batch_id" here for future status checks.
     batch_id = str(uuid.uuid4())
     
-    # Queue ONE task: the manager. Pass the entire list of file data to it.
-    background_tasks.add_task(run_batch_manager, batch_id=batch_id, files_data=files_data)
+    # Immediately create the job record in the database so the frontend can query its status
+    create_backtest_job(batch_id)
+    
+    files_data = [file.model_dump() for file in files]
+    
+    # Pass the manager instance to the background task so it can send updates
+    background_tasks.add_task(run_batch_manager, batch_id=batch_id, files_data=files_data, manager=manager)
     
     return {"message": "Batch processing started.", "batch_id": batch_id}
 
@@ -245,3 +283,35 @@ def clear_latest_result_endpoint():
     finally:
         # Always close the session to free up the connection.
         db.close()
+
+@app.get("/api/backtest/results/{batch_id}")
+def get_job_results_endpoint(batch_id: str):
+    """
+    Retrieves the status, logs, and final results for a specific backtest batch.
+    This is the endpoint the frontend will poll.
+    """
+    job_data = get_backtest_job(batch_id)
+    if not job_data:
+        raise HTTPException(status_code=404, detail=f"Job with ID '{batch_id}' not found.")
+    return job_data
+
+
+####################################
+
+@app.websocket("/ws/results/{batch_id}")
+async def websocket_endpoint(websocket: WebSocket, batch_id: str):
+    # Manually check the origin of the WebSocket request
+    origin = websocket.headers.get('origin')
+    if origin not in origins:
+        # If the origin is not in our allowed list, close the connection
+        print(f"--- WebSocket connection from untrusted origin '{origin}' rejected. ---")
+        await websocket.close(code=1008) # 1008 = Policy Violation
+        return
+    
+    # If the origin is valid, proceed as before
+    await manager.connect(websocket, batch_id)
+    try:
+        while True:
+            await websocket.receive_text() 
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, batch_id)

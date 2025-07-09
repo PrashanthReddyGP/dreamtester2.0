@@ -12,6 +12,7 @@ import { SettingsModal } from '../components/common/SettingsModal';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'; 
 import { TerminalPanel } from '../components/common/TerminalPanel';
+import { useTerminal } from '../context/TerminalContext';
 
 interface MainLayoutProps {
   mode: 'light' | 'dark';
@@ -27,6 +28,7 @@ const navItems = [
 export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => {
   const theme = useTheme();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const { isTerminalOpen, toggleTerminal } = useTerminal();
 
   const STATUS_BAR_HEIGHT = 24;
   const [statusMessage, setStatusMessage] = useState('Ready'); // Placeholder state for the message
@@ -37,11 +39,10 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
     color: theme.palette.text.primary,
   };
   
-  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
 
-  const handleToggleTerminal = () => {
-    setIsTerminalOpen(prevState => !prevState);
-  };
+  // const handleToggleTerminal = () => {
+  //   setIsTerminalOpen(prevState => !prevState);
+  // };
 
   const handleSettingsClick = () => {
     setSettingsOpen(true);
@@ -94,7 +95,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
                 {mode === 'dark' ? <Brightness7Icon /> : <Brightness4Icon />}
               </IconButton>  
 
-              <IconButton sx={{ ml: 1 }} onClick={handleToggleTerminal} color="inherit">
+              <IconButton sx={{ ml: 1 }} onClick={() => toggleTerminal()} color="inherit">
                 <TerminalIcon />
               </IconButton>
 
@@ -122,7 +123,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
                 <>
                   <VerticalResizeHandle />
                   <Panel defaultSize={25} minSize={15} maxSize={50}>
-                    <TerminalPanel onClose={() => setIsTerminalOpen(false)} />
+                    <TerminalPanel onClose={() => toggleTerminal(false)} />
                   </Panel>
                 </>
               )}

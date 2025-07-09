@@ -108,6 +108,12 @@ export interface BacktestResultPayload {
     initial_capital: number;
 }
 
+export interface BatchSubmitResponse {
+    message: string;
+    batch_id: string;
+}
+
+
 /**
  * Submits a new backtest job to the backend.
  * @param config The configuration for the backtest, including the strategy code.
@@ -138,7 +144,7 @@ export const submitBacktest = async (config: BacktestConfig): Promise<BacktestJo
  * @param files An array of strategy file objects.
  * @returns A response from the server, likely containing job IDs for each submitted file.
  */
-export const submitBatchBacktest = async (files: StrategyFilePayload[]): Promise<BulkJobResponse> => {
+export const submitBatchBacktest = async (files: StrategyFilePayload[]): Promise<BatchSubmitResponse> => { 
     // This will call a new endpoint designed for batch submissions
     const response = await fetch(`${API_URL}/api/backtest/batch-submit`, {
         method: 'POST',
