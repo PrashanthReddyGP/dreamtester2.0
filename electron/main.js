@@ -1,36 +1,27 @@
+// electron/main.js
+
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process'); // To run the Python script
-const net = require('net'); // Import Node.js's net module
+const { spawn } = require('child_process');
+const net = require('net');
 
 let pythonProcess = null;
 let mainWindow = null;
 
-
-// --- Function to check if a port is in use ---
+// --- No changes needed for checkPortInUse or pollServer ---
 function checkPortInUse(port, callback) {
     const server = net.createServer(function(socket) {
         socket.write('Echo server\r\n');
         socket.pipe(socket);
     });
-
     server.listen(port, '127.0.0.1');
-    server.on('error', function (e) {
-        // If we get an 'EADDRINUSE' error, it means the port is in use (success for us!)
-        callback(true);
-    });
-    server.on('listening', function (e) {
-        // If we can listen, it means the port is free.
-        server.close();
-        callback(false);
-    });
+    server.on('error', function (e) { callback(true); });
+    server.on('listening', function (e) { server.close(); callback(false); });
 }
 
-// --- Function to poll for the backend server ---
 function pollServer(port, callback) {
     let attempts = 0;
-    const maxAttempts = 20; // Try for 10 seconds (20 * 500ms)
-    
+    const maxAttempts = 20;
     function tryConnect() {
         console.log(`Checking if backend is up on port ${port} (Attempt ${attempts + 1})...`);
         checkPortInUse(port, (isInUse) => {
@@ -40,99 +31,87 @@ function pollServer(port, callback) {
             } else {
                 attempts++;
                 if (attempts < maxAttempts) {
-                    setTimeout(tryConnect, 500); // Wait 500ms and try again
+                    setTimeout(tryConnect, 500);
                 } else {
                     console.error('Backend server did not start in time.');
-                    // You might want to show an error dialog to the user here
                     app.quit();
                 }
             }
         });
     }
-    
     tryConnect();
 }
 
-// --- Python Backend Handling ---
-function createPythonProcess() {
-    // Path to the Python executable inside the .venv
-    // This is crucial for using the correct environment
-    const pythonExe = path.join(__dirname, '..', 'backend', '.venv', 'Scripts', 'python.exe');
-    const pythonScript = path.join(__dirname, '..', 'backend', 'main.py');
 
+// --- THIS FUNCTION IS MODIFIED FOR CORRECT PATHS ---
+function createPythonProcess() {
+    const isDev = !app.isPackaged;
+
+    // `__dirname` is ".../Dreamtester_2.0/electron"
+    // We go UP one level to the project root.
+    const projectRoot = path.join(__dirname, '..'); 
+
+    // In production, the backend is in 'resources/backend'
+    // In development, it's in './backend' relative to the project root.
+    const backendPath = isDev 
+      ? path.join(projectRoot, 'backend')
+      : path.join(process.resourcesPath, 'backend');
+
+    const pythonExe = path.join(backendPath, '.venv', 'Scripts', 'python.exe');
+    const scriptCwd = backendPath;
     const spawnArgs = ['-u', '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000'];
 
-    console.log('Spawning Python backend with command:', pythonExe, spawnArgs.join(' '));
+    console.log('--- Spawning Python Backend ---');
+    console.log(`Mode: ${isDev ? 'Development' : 'Production'}`);
+    console.log(`Executable: ${pythonExe}`);
+    console.log(`CWD: ${scriptCwd}`);
+    console.log('-----------------------------');
 
     pythonProcess = spawn(pythonExe, spawnArgs, {
-        cwd: path.join(__dirname, '..', 'backend'),
-        stdio: 'pipe' // This is the key change!
+        cwd: scriptCwd,
+        stdio: 'pipe'
     });
 
-    pythonProcess.stdout.on('data', (data) => {
-        console.log(`[dev:electron] Python stdout: ${data.toString().trim()}`);
-    });
-    pythonProcess.stderr.on('data', (data) => {
-        const stderrStr = data.toString().trim();
-        if (stderrStr.includes('ERROR')) {
-            console.error(`[dev:electron] Python stderr: ${stderrStr}`);
-        } else {
-            console.log(`[dev:electron] Python info: ${stderrStr}`);
-        }
-    });
-    pythonProcess.on('close', (code) => {
-        console.log(`[dev:electron] Python process exited with code ${code}`);
-    });
+    pythonProcess.stdout.on('data', (data) => console.log(`[Python] ${data.toString().trim()}`));
+    pythonProcess.stderr.on('data', (data) => console.error(`[Python stderr] ${data.toString().trim()}`));
+    pythonProcess.on('close', (code) => console.log(`Python process exited with code ${code}`));
 }
 
+// --- No changes needed for killPythonProcess ---
 function killPythonProcess() {
     if (pythonProcess) {
         console.log('Killing Python process...');
-        // On Windows, 'SIGINT' (Ctrl+C) might not be enough.
-        // 'taskkill' is a more reliable way to terminate a process tree.
         if (process.platform === 'win32') {
             const { exec } = require('child_process');
-            exec(`taskkill /pid ${pythonProcess.pid} /f /t`, (error, stdout, stderr) => {
-                if (error) {
-                    console.error(`Error killing process: ${error.message}`);
-                    return;
-                }
-                if (stderr) {
-                    console.error(`Stderr on kill: ${stderr}`);
-                    return;
-                }
-                console.log(`Successfully killed process: ${stdout}`);
-            });
+            exec(`taskkill /pid ${pythonProcess.pid} /f /t`, (err, stdout, stderr) => { /* ... */ });
         } else {
-            // The original kill for Mac/Linux
             pythonProcess.kill();
         }
         pythonProcess = null;
     }
 }
 
-// --- Electron App Window ---
+// --- THIS FUNCTION IS MODIFIED FOR CORRECT PATHS ---
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1280,
         height: 720,
         webPreferences: {
-            // preload: path.join(__dirname, 'preload.js'), // Optional: for secure IPC
             nodeIntegration: false,
             contextIsolation: true,
         },
     });
 
-    // Determine the URL to load
-    const startUrl = process.env.ELECTRON_START_URL || `file://${path.join(__dirname, '../frontend/dist/index.html')}`;
+    // In dev, the Vite server provides a URL.
+    // In production, we need to load the built frontend file.
+    // The path is relative to the project root, so we go up from __dirname.
+    const startUrl = process.env.ELECTRON_START_URL || `file://${path.join(__dirname, '..', 'frontend', 'dist', 'index.html')}`;
 
     console.log(`Loading URL: ${startUrl}`);
     mainWindow.loadURL(startUrl);
 
-    // To hide the default Electron Menubar
     mainWindow.removeMenu(); 
 
-    // Open DevTools in development
     if (process.env.ELECTRON_START_URL) {
         mainWindow.webContents.openDevTools();
     }
@@ -142,21 +121,18 @@ function createWindow() {
     });
 }
 
+// --- No changes needed for app lifecycle events ---
 app.on('ready', () => {
-    console.log('Starting Python backend...');
+    console.log('App ready, starting backend...');
     createPythonProcess();
-
     pollServer(8000, createWindow);
 });
-
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         app.quit();
     }
 });
-
 app.on('will-quit', killPythonProcess);
-
 app.on('activate', () => {
     if (mainWindow === null) {
         createWindow();

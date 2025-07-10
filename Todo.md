@@ -60,3 +60,5 @@ ADVANCED FEATURES:
 SECURITY:
 
 [] We are taking the code from the client and executing it on the server end. If the strategy code is from some hacker and it contains code to inject into your computer, when you send it to server/when you click backtest, it runs and injects whatever there in the file. For now its fine, but when you share/others download and use other's strategies, it can be dangerous!!!
+
+-----------------------
