@@ -126,7 +126,8 @@ export const ExplorerPanel: React.FC<{
       onRename: (itemId: string, currentName: string) => void;
       onImportFiles: (files: ImportedFile[]) => void;
       onClearAll: () => void;
-  }> = ({ fileSystem, onFileSelect, selectedFileId, onNewFile, onNewFolder, onDelete, onRename, onImportFiles, onClearAll }) => {
+      onBacktestFile: (file: FileSystemItem) => void;
+  }> = ({ fileSystem, onFileSelect, selectedFileId, onNewFile, onNewFolder, onDelete, onRename, onImportFiles, onClearAll, onBacktestFile }) => {
   
   const { setNodeRef: setRootDroppableRef } = useDroppable({
       id: 'root-droppable-area',
@@ -207,6 +208,13 @@ export const ExplorerPanel: React.FC<{
 
   const handleClose = () => {
     setContextMenu(null);
+  };
+
+  const handleBacktest = () => {
+      if(contextMenu?.item) {
+          onBacktestFile(contextMenu.item);
+      }
+      handleClose();
   };
 
   const handleNewFile = () => {
@@ -431,6 +439,9 @@ export const ExplorerPanel: React.FC<{
              <MenuItem key="rename" onClick={handleRename}>Rename</MenuItem>,
              <MenuItem key="export" onClick={handleExport}>
                 <ListItemText>Export</ListItemText>
+             </MenuItem>,
+             <MenuItem key="backtest" onClick={handleBacktest}>
+                <ListItemText>Backtest</ListItemText>
              </MenuItem>,
              <MenuItem key="delete" onClick={handleDelete} sx={{ color: 'error.main' }}>Delete</MenuItem>
         ]}

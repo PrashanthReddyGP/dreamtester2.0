@@ -273,8 +273,8 @@ export const StrategyLab: React.FC = () => {
 
     const handleSaveContent = async (): Promise<FileSystemItem[]> => {
         if (!selectedFileId) {
-            alert("No file selected to save.");
-            return [];
+            console.warn("handleSaveContent called with no file selected.");
+            return fileSystem; // Return the current state if there's nothing to save
         }
         try {
             await fetch(`${API_URL}/api/strategies/${selectedFileId}`, {
@@ -291,6 +291,13 @@ export const StrategyLab: React.FC = () => {
             alert("Error: Could not save strategy.");
             throw error;
         }
+    };
+
+    const hasUnsavedChanges = (): boolean => {
+        if (!selectedFileId) return false;
+        const savedFile = findFileById(fileSystem, selectedFileId);
+        // Compare the code in the editor with the code from the last loaded fileSystem state
+        return savedFile?.content !== currentEditorCode;
     };
 
     const handleOpenRenameDialog = (itemId: string, currentName: string) => {
@@ -449,13 +456,16 @@ export const StrategyLab: React.FC = () => {
         try {
             clearResults();
 
-            console.log("Saving strategy before running backtest...");
+            let updatedFileSystem = fileSystem;
 
-            const freshFileSystem = await handleSaveContent();
+            if (hasUnsavedChanges()) {
+                console.log("Unsaved changes detected. Saving open file before batch backtest...");
+                updatedFileSystem = await handleSaveContent();
+            }
 
             // Filter the top-level fileSystem array directly.
             // We only want items where the type is 'file'.
-            const rootFiles: StrategyFilePayload[] = freshFileSystem
+            const rootFiles: StrategyFilePayload[] = updatedFileSystem
                 .filter(item => item.type === 'file' && item.content)
                 .map(file => ({
                     id: file.id,
@@ -490,6 +500,79 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
+    const handleBacktestSingleFile = async (fileToRun: FileSystemItem) => {
+        if (!fileToRun || fileToRun.type !== 'file') {
+            alert("Invalid file provided for backtest.");
+            return;
+        }
+
+        console.log(`Running single backtest for: ${fileToRun.name}`);
+        
+        setIsBacktestRunning(true);
+        toggleTerminal(true);
+
+        try {
+            clearResults();
+
+            let finalFileContent = fileToRun.content;
+            
+            // 1. Check for unsaved changes
+            if (hasUnsavedChanges()) {
+                console.log("Unsaved changes detected. Saving open file before single backtest...");
+                const updatedFileSystem = await handleSaveContent();
+                
+                // If the file we want to run is the one that was just saved,
+                // we need to get its updated content from the fresh file system.
+                if (fileToRun.id === selectedFileId) {
+                    const freshlySavedFile = findFileById(updatedFileSystem, fileToRun.id);
+                    finalFileContent = freshlySavedFile?.content;
+                }
+            }
+
+            if (!finalFileContent) {
+                alert("File has no content to backtest.");
+                setIsBacktestRunning(false);
+                return;
+            }
+
+            const fileToBacktest: StrategyFilePayload = {
+                id: fileToRun.id,
+                name: fileToRun.name,
+                content: finalFileContent,
+            };
+
+            // The `submitBatchBacktest` API can handle an array with just one item
+            const result = await submitBatchBacktest([fileToBacktest]);
+            
+            console.log("Single file backtest submitted successfully!", result);
+
+            if (result.batch_id) {
+                connectToBatch(result.batch_id);
+            } else {
+                console.error("No batch_id received from server!");
+            }
+
+            navigate('/analysis');
+
+        } catch (error) {
+            console.error("Failed to run single file backtest:", error);
+            alert(`Error: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
+        } finally {
+            setIsBacktestRunning(false);
+        }
+    };
+    
+    const findFileById = (nodes: FileSystemItem[], id: string): FileSystemItem | null => {
+        for (const node of nodes) {
+            if (node.type === 'file' && node.id === id) return node;
+            if (node.children) {
+                const found = findFileById(node.children, id);
+                if (found) return found;
+            }
+        }
+        return null;
+    }
+
     const [isOptimizeModalOpen, setIsOptimizeModalOpen] = useState(false);
     const [isOptimizing, setIsOptimizing] = useState(false);
 
@@ -505,58 +588,58 @@ export const StrategyLab: React.FC = () => {
         setIsOptimizeModalOpen(false);
     };
     
-const handleRunOptimization = async (config: OptimizationConfig) => {
-    // 1. Set initial loading states and provide feedback
-    console.log("Submitting optimization with config:", config);
-    setIsOptimizing(true);
+    const handleRunOptimization = async (config: OptimizationConfig) => {
+        // 1. Set initial loading states and provide feedback
+        console.log("Submitting optimization with config:", config);
+        setIsOptimizing(true);
 
-    try {
-        // 2. Prepare the application state for a new run
-        clearResults(); // Clear any previous results in the Analysis Hub
+        try {
+            // 2. Prepare the application state for a new run
+            clearResults(); // Clear any previous results in the Analysis Hub
 
-        await handleSaveContent(); // Best practice: ensure the latest code is saved on the server
+            await handleSaveContent(); // Best practice: ensure the latest code is saved on the server
 
-        // 3. Make the actual API call to the backend
-        const response = await fetch(`${API_URL}/api/optimize/submit`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(config),
-        });
+            // 3. Make the actual API call to the backend
+            const response = await fetch(`${API_URL}/api/optimize/submit`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(config),
+            });
 
-        // 4. Handle non-successful HTTP responses (e.g., 400, 500 errors)
-        if (!response.ok) {
-            // Try to get a detailed error message from the backend's JSON response
-            const errorData = await response.json().catch(() => ({ detail: 'An unknown server error occurred.' }));
-            // Throw an error to be caught by the catch block
-            throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
+            // 4. Handle non-successful HTTP responses (e.g., 400, 500 errors)
+            if (!response.ok) {
+                // Try to get a detailed error message from the backend's JSON response
+                const errorData = await response.json().catch(() => ({ detail: 'An unknown server error occurred.' }));
+                // Throw an error to be caught by the catch block
+                throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
+            }
+
+            // 5. Handle the successful response
+            const result = await response.json();
+
+            // 6. Connect to the WebSocket stream and navigate to the results page
+            if (result.batch_id) {
+                connectToBatch(result.batch_id); // This function is from your useTerminal context
+                navigate('/analysis'); // Redirect the user to see the results stream in
+                toggleTerminal(true); // Open the terminal to show live logs from the backend
+            } else {
+                // This is an important edge case to handle
+                throw new Error("Submission was successful, but no batch ID was returned from the server.");
+            }
+
+        } catch (error) {
+            // 7. Catch any errors (from the network, API, or thrown manually) and display them
+            console.error("Failed to run optimization:", error);
+            // Use a user-friendly alert to show the error
+            alert(`Error submitting optimization: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
+        } finally {
+            // 8. This block ALWAYS runs, ensuring the UI is cleaned up correctly
+            setIsOptimizing(false);       // Reset the loading state on the button
+            handleCloseOptimizeModal(); // Close the modal, whether the submission succeeded or failed
         }
-
-        // 5. Handle the successful response
-        const result = await response.json();
-
-        // 6. Connect to the WebSocket stream and navigate to the results page
-        if (result.batch_id) {
-            connectToBatch(result.batch_id); // This function is from your useTerminal context
-            navigate('/analysis'); // Redirect the user to see the results stream in
-            toggleTerminal(true); // Open the terminal to show live logs from the backend
-        } else {
-            // This is an important edge case to handle
-            throw new Error("Submission was successful, but no batch ID was returned from the server.");
-        }
-
-    } catch (error) {
-        // 7. Catch any errors (from the network, API, or thrown manually) and display them
-        console.error("Failed to run optimization:", error);
-        // Use a user-friendly alert to show the error
-        alert(`Error submitting optimization: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
-    } finally {
-        // 8. This block ALWAYS runs, ensuring the UI is cleaned up correctly
-        setIsOptimizing(false);       // Reset the loading state on the button
-        handleCloseOptimizeModal(); // Close the modal, whether the submission succeeded or failed
-    }
-};
+    };
 
 
   return (
@@ -568,6 +651,7 @@ const handleRunOptimization = async (config: OptimizationConfig) => {
                         fileSystem={fileSystem}
                         onFileSelect={handleFileSelect}
                         selectedFileId={selectedFileId}
+                        onBacktestFile={handleBacktestSingleFile}
                         onNewFile={(folderId) => handleOpenNewItemDialog('file', folderId)}
                         onNewFolder={(folderId) => handleOpenNewItemDialog('folder', folderId)}
                         onDelete={handleOpenDeleteConfirm}

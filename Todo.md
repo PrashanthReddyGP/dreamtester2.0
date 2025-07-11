@@ -20,12 +20,13 @@ FUNCTIONALITY:
 [] Backtest performance improvements
 [-] Clear previous metrics
 [-] Send changed 
-[] Improved UX with parallel updates
+[-] Improved UX with parallel updates
 [-] Logging Terminal in App
+[] Solo-backtest Option
 
 [-] Portfolio backtesting
 
-[] Data Saving Efficiency
+[-] Data Saving Efficiency
     [-] Ohlcv data
     [X] Indicators data
     [X] Metrics
