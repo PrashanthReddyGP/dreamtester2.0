@@ -156,6 +156,7 @@ export const TradeLogTab: FC<{ trades: Trades }> = ({ trades }) => {
           '& .MuiDataGrid-columnHeaderTitle': {
             fontWeight: 600,
           },
+          
           '& .MuiDataGrid-cell': {
             borderBottom: `1px solid ${theme.palette.divider}`,
             borderRight: `1px solid ${theme.palette.divider}`,

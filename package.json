@@ -2,15 +2,17 @@
   "name": "dreamtester-2.0",
   "productName": "Dreamtester 2.0",
   "version": "1.0.0",
-  "description": "A backtesting and trading application.",
+  "description": "A quantitative backtesting and trading application.",
+  "author": "Prashanth Reddy GP",
   "main": "electron/main.js",
   "scripts": {
     "start": "concurrently -k \"npm:dev:frontend\" \"npm:dev:electron\"",
     "dev:frontend": "vite frontend --config frontend/vite.config.js",
     "dev:electron": "wait-on tcp:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron-forge start",
     "package": "electron-forge package",
-    "make": "npm run build:frontend && electron-forge make",
-    "build:frontend": "vite build --config frontend/vite.config.js"
+    "make": "npm run build:frontend && npm run build:backend && electron-forge make",
+    "build:frontend": "vite build frontend --config frontend/vite.config.js",
+    "build:backend": "backend\\.venv\\Scripts\\activate && pyinstaller backend/main.py --paths backend --add-data \"backend/core;core\" --hidden-import=appdirs --noconfirm --onefile --name=backend_app --distpath=backend/dist"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -21,7 +23,7 @@
     "@monaco-editor/react": "^4.7.0",
     "@mui/icons-material": "^7.2.0",
     "@mui/material": "^7.2.0",
-    "@mui/x-data-grid": "^8.6.0",
+    "@mui/x-data-grid": "^8.7.0",
     "@mui/x-date-pickers": "^8.6.0",
     "@tauri-apps/api": "^2.6.0",
     "@types/jszip": "^3.4.0",

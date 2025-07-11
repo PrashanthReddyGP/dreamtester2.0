@@ -3,7 +3,7 @@ import pandas as pd
 from numba import njit
 from datetime import datetime
 
-def calculate_metrics(strategy_data, initialCapital):
+def calculate_metrics(strategy_data, initialCapital, commission):
     
     print("  - Calculating metrics (Sharpe, Drawdown)...")
 
@@ -291,7 +291,8 @@ def calculate_metrics(strategy_data, initialCapital):
         "Winrate": round(winrate, 2),
         "RR": rr,
         "Max_Open_Trades": maxOpenTrades,
-        "Avg_Open_Trades": avgOpenTrades
+        "Avg_Open_Trades": avgOpenTrades,
+        "Commission": commission
     }
 
     # if netProfit < 0:

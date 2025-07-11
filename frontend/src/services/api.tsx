@@ -66,6 +66,7 @@ export type StrategyMetrics = {
     RR: number;
     Max_Open_Trades: number;
     Avg_Open_Trades: number;
+    Commission: number
 };
 
 export interface Trades {

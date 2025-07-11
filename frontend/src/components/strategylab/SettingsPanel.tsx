@@ -4,14 +4,15 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { DatePicker, LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
-import { Save } from 'lucide-react';
+import { Save, ArrowDown01 } from 'lucide-react';
 
 export const SettingsPanel: React.FC<{
   onSave: () => Promise<void>;
   isSaveDisabled: boolean;
-  onRunBacktest: () => void; 
+  onRunBacktest: () => void;
+  onOptimizeStrategy: () => void;
   isBacktestRunning: boolean;
-}> = ({ onSave, isSaveDisabled, onRunBacktest, isBacktestRunning }) => {
+}> = ({ onSave, isSaveDisabled, onRunBacktest, onOptimizeStrategy, isBacktestRunning }) => {
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
@@ -39,9 +40,15 @@ export const SettingsPanel: React.FC<{
         <Box sx={{ flexGrow: 1 }} /> 
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+          
           <Button variant="contained" size="large" startIcon={<PlayArrowIcon />} fullWidth onClick={onRunBacktest} disabled={isBacktestRunning || isSaveDisabled}>
             {isBacktestRunning ? 'Running...' : 'Run Backtest'}
           </Button>
+
+          <Button variant="contained" size="large" startIcon={<ArrowDown01 />} fullWidth onClick={onOptimizeStrategy} disabled={isBacktestRunning || isSaveDisabled}>
+            {isBacktestRunning ? 'Fetching Data...' : 'Optimize Strategy'}
+          </Button>
+
           <Button 
             variant="outlined" 
             size="large" 
@@ -52,6 +59,7 @@ export const SettingsPanel: React.FC<{
           >
             Save Strategy
           </Button>
+
         </Box>
       </Box>
     </LocalizationProvider>

@@ -1,72 +1,60 @@
 // src/context/AnalysisContext.tsx
-import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
-import { websocketService } from '../services/websocketService';
-import type { StrategyResult } from '../services/api'; // Assuming StrategyResult type is in api.ts
+import React, { createContext, useState, useContext, useCallback } from 'react';
+import type {ReactNode} from 'react';
+import type { StrategyResult } from '../services/api';
 
-// Define the shape of the context state
 interface AnalysisContextType {
   results: StrategyResult[];
   isComplete: boolean;
+  addResult: (result: StrategyResult) => void;
   clearResults: () => void;
+  markComplete: () => void;
 }
 
-// Create the context
 const AnalysisContext = createContext<AnalysisContextType | undefined>(undefined);
 
-export const AnalysisContextProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [results, setResults] = useState<StrategyResult[]>([]);
   const [isComplete, setIsComplete] = useState(false);
 
-  useEffect(() => {
-    // Subscribe to the websocket service when the component mounts
-    const subscription = websocketService.subscribe((data) => {
-      const { type, payload } = data;
-
-      // This context ONLY cares about 'strategy_result' and 'batch_complete' messages
-      if (type === 'strategy_result') {
-        console.log("AnalysisContext: Received a new strategy result.", payload.strategy_name);
-        setResults(prevResults => {
-            // Check if a result with the same name already exists (e.g., for Portfolio updates)
-            const existingIndex = prevResults.findIndex(r => r.strategy_name === payload.strategy_name);
-            if (existingIndex > -1) {
-                // Replace the existing result
-                const newResults = [...prevResults];
-                newResults[existingIndex] = payload;
-                return newResults;
-            } else {
-                // Add the new result
-                return [...prevResults, payload];
-            }
-        });
-      } else if (type === 'batch_complete') {
-        console.log("AnalysisContext: Batch is complete.");
-        setIsComplete(true);
+  // This single method handles both batch and optimization results
+  const addResult = useCallback((newResult: StrategyResult) => {
+    setResults(prev => {
+      // This logic correctly handles portfolio updates by replacing the result
+      const existingIndex = prev.findIndex(r => r.strategy_name === newResult.strategy_name);
+      if (existingIndex > -1) {
+        const updatedResults = [...prev];
+        updatedResults[existingIndex] = newResult;
+        return updatedResults;
       }
+      // For all other cases (including all optimization runs), it just adds the new result
+      return [...prev, newResult];
     });
+  }, []);
 
-    // Unsubscribe when the component unmounts to prevent memory leaks
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []); // The empty dependency array ensures this runs only once
-
-  // Function to be called from StrategyLab before starting a new run
   const clearResults = useCallback(() => {
     setResults([]);
     setIsComplete(false);
   }, []);
 
-  return (
-    <AnalysisContext.Provider value={{ results, isComplete, clearResults }}>
-      {children}
-    </AnalysisContext.Provider>
-  );
+  const markComplete = useCallback(() => {
+    setIsComplete(true);
+  }, []);
+  
+  const value = {
+    results,
+    isComplete,
+    addResult,
+    clearResults,
+    markComplete,
+  };
+
+  return <AnalysisContext.Provider value={value}>{children}</AnalysisContext.Provider>;
 };
 
-// Custom hook for easy consumption
-export const useAnalysis = () => {
+export const useAnalysis = (): AnalysisContextType => {
   const context = useContext(AnalysisContext);
-  if (context === undefined) {
+  if (!context) {
     throw new Error('useAnalysis must be used within an AnalysisContextProvider');
   }
   return context;

@@ -4,6 +4,7 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const net = require('net');
+const fs = require('fs');
 
 let pythonProcess = null;
 let mainWindow = null;
@@ -45,35 +46,44 @@ function pollServer(port, callback) {
 
 // --- THIS FUNCTION IS MODIFIED FOR CORRECT PATHS ---
 function createPythonProcess() {
+    
     const isDev = !app.isPackaged;
 
-    // `__dirname` is ".../Dreamtester_2.0/electron"
-    // We go UP one level to the project root.
-    const projectRoot = path.join(__dirname, '..'); 
+    const logDir = path.join(app.getPath('userData'), 'logs');
+    if (!isDev) {
+        if (!fs.existsSync(logDir)) {
+            fs.mkdirSync(logDir, { recursive: true });
+        }
+    }
+    const stdoutLog = isDev ? null : fs.openSync(path.join(logDir, 'backend-stdout.log'), 'a');
+    const stderrLog = isDev ? null : fs.openSync(path.join(logDir, 'backend-stderr.log'), 'a');
 
-    // In production, the backend is in 'resources/backend'
-    // In development, it's in './backend' relative to the project root.
-    const backendPath = isDev 
-      ? path.join(projectRoot, 'backend')
-      : path.join(process.resourcesPath, 'backend');
+    if (isDev) {
+        const projectRoot = path.join(__dirname, '..');
+        const backendPath = path.join(projectRoot, 'backend');
+        const pythonExe = path.join(backendPath, '.venv', 'Scripts', 'python.exe');
+        const spawnArgs = ['-u', '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000'];
+        
+        console.log('--- Spawning Python Backend (DEV) ---');
+        pythonProcess = spawn(pythonExe, spawnArgs, { cwd: backendPath, stdio: 'pipe' });
 
-    const pythonExe = path.join(backendPath, '.venv', 'Scripts', 'python.exe');
-    const scriptCwd = backendPath;
-    const spawnArgs = ['-u', '-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8000'];
+    } else {
+        // In production, we run the single, bundled executable.
+        const exePath = path.join(process.resourcesPath, 'backend_app.exe');
 
-    console.log('--- Spawning Python Backend ---');
-    console.log(`Mode: ${isDev ? 'Development' : 'Production'}`);
-    console.log(`Executable: ${pythonExe}`);
-    console.log(`CWD: ${scriptCwd}`);
-    console.log('-----------------------------');
+        console.log('--- Spawning Python Backend (PROD) ---');
+        console.log(`Executable: ${exePath}`);
+        pythonProcess = spawn(exePath, [], {
+            detached: true, // Important for logging
+            stdio: ['ignore', stdoutLog, stderrLog] // stdin, stdout, stderr
+        });
+        pythonProcess.unref(); // Allow parent to exit independently
+    }
 
-    pythonProcess = spawn(pythonExe, spawnArgs, {
-        cwd: scriptCwd,
-        stdio: 'pipe'
-    });
-
-    pythonProcess.stdout.on('data', (data) => console.log(`[Python] ${data.toString().trim()}`));
-    pythonProcess.stderr.on('data', (data) => console.error(`[Python stderr] ${data.toString().trim()}`));
+    if(isDev) {
+        pythonProcess.stdout.on('data', (data) => console.log(`[Python] ${data.toString().trim()}`));
+        pythonProcess.stderr.on('data', (data) => console.error(`[Python stderr] ${data.toString().trim()}`));
+    }
     pythonProcess.on('close', (code) => console.log(`Python process exited with code ${code}`));
 }
 
@@ -83,7 +93,17 @@ function killPythonProcess() {
         console.log('Killing Python process...');
         if (process.platform === 'win32') {
             const { exec } = require('child_process');
-            exec(`taskkill /pid ${pythonProcess.pid} /f /t`, (err, stdout, stderr) => { /* ... */ });
+            exec(`taskkill /pid ${pythonProcess.pid} /f /t`, (error, stdout, stderr) => {
+                if (error) {
+                    console.error(`Error killing process: ${error.message}`);
+                    return;
+                }
+                if (stderr) {
+                    console.error(`Stderr on kill: ${stderr}`);
+                    return;
+                }
+                console.log(`Successfully killed process: ${stdout}`);
+            });
         } else {
             pythonProcess.kill();
         }

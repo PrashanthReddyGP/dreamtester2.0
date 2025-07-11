@@ -21,6 +21,8 @@ import type { StrategyFilePayload, BatchSubmitResponse } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useTerminal } from '../context/TerminalContext';
 import { useAnalysis } from '../context/AnalysisContext';
+import { OptimizeModal } from '../components/strategylab/OptimizeModal';
+import type { OptimizationConfig } from '../components/strategylab/OptimizeModal';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -448,6 +450,7 @@ export const StrategyLab: React.FC = () => {
             clearResults();
 
             console.log("Saving strategy before running backtest...");
+
             const freshFileSystem = await handleSaveContent();
 
             // Filter the top-level fileSystem array directly.
@@ -487,6 +490,75 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
+    const [isOptimizeModalOpen, setIsOptimizeModalOpen] = useState(false);
+    const [isOptimizing, setIsOptimizing] = useState(false);
+
+    const handleOpenOptimizeModal = () => {
+        if (!selectedFileId) {
+            alert("Please select a strategy file to optimize.");
+            return;
+        }
+        setIsOptimizeModalOpen(true);
+    };
+
+    const handleCloseOptimizeModal = () => {
+        setIsOptimizeModalOpen(false);
+    };
+    
+const handleRunOptimization = async (config: OptimizationConfig) => {
+    // 1. Set initial loading states and provide feedback
+    console.log("Submitting optimization with config:", config);
+    setIsOptimizing(true);
+
+    try {
+        // 2. Prepare the application state for a new run
+        clearResults(); // Clear any previous results in the Analysis Hub
+
+        await handleSaveContent(); // Best practice: ensure the latest code is saved on the server
+
+        // 3. Make the actual API call to the backend
+        const response = await fetch(`${API_URL}/api/optimize/submit`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(config),
+        });
+
+        // 4. Handle non-successful HTTP responses (e.g., 400, 500 errors)
+        if (!response.ok) {
+            // Try to get a detailed error message from the backend's JSON response
+            const errorData = await response.json().catch(() => ({ detail: 'An unknown server error occurred.' }));
+            // Throw an error to be caught by the catch block
+            throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
+        }
+
+        // 5. Handle the successful response
+        const result = await response.json();
+
+        // 6. Connect to the WebSocket stream and navigate to the results page
+        if (result.batch_id) {
+            connectToBatch(result.batch_id); // This function is from your useTerminal context
+            navigate('/analysis'); // Redirect the user to see the results stream in
+            toggleTerminal(true); // Open the terminal to show live logs from the backend
+        } else {
+            // This is an important edge case to handle
+            throw new Error("Submission was successful, but no batch ID was returned from the server.");
+        }
+
+    } catch (error) {
+        // 7. Catch any errors (from the network, API, or thrown manually) and display them
+        console.error("Failed to run optimization:", error);
+        // Use a user-friendly alert to show the error
+        alert(`Error submitting optimization: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
+    } finally {
+        // 8. This block ALWAYS runs, ensuring the UI is cleaned up correctly
+        setIsOptimizing(false);       // Reset the loading state on the button
+        handleCloseOptimizeModal(); // Close the modal, whether the submission succeeded or failed
+    }
+};
+
+
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <Box sx={{ height: '100%', width: '100vw' }}>
@@ -513,11 +585,12 @@ export const StrategyLab: React.FC = () => {
                     />
                 </Panel>
                 <ResizeHandle />
-                <Panel defaultSize={15} minSize={15}>
+                <Panel defaultSize={16} minSize={16}>
                   <SettingsPanel 
                     onSave={handleSaveContent}
                     isSaveDisabled={!selectedFileId}
                     onRunBacktest={handleRunBacktest}
+                    onOptimizeStrategy={handleOpenOptimizeModal}
                     isBacktestRunning={isBacktestRunning}
                   />
                 </Panel>
@@ -556,6 +629,14 @@ export const StrategyLab: React.FC = () => {
                 dialogText="Please enter a new name for the item."
                 confirmButtonText="Rename"
                 initialValue={renameDialogState.currentName}
+            />
+
+            <OptimizeModal
+                open={isOptimizeModalOpen}
+                onClose={handleCloseOptimizeModal}
+                onSubmit={handleRunOptimization}
+                strategyCode={currentEditorCode}
+                isSubmitting={isOptimizing}
             />
 
         </Box>

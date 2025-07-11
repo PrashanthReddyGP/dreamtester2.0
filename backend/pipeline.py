@@ -1,6 +1,10 @@
 # backend/pipeline.py
+import os
+import re
+import ast
 import uuid
 import asyncio
+import itertools
 import traceback
 import pandas as pd
 import numpy as np
@@ -108,8 +112,8 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
     
     for res_tuple  in raw_results_for_portfolio:
         
-        strategy_data, _, metrics, monthly_returns = res_tuple
-        
+        strategy_data, _, metrics, monthly_returns, _ = res_tuple
+                
         # Use helper to prepare the serializable dict for this strategy
         all_processed_results_for_db.append(
             prepare_strategy_payload(strategy_data, metrics, monthly_returns)
@@ -130,7 +134,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
         #     temp_signals = signals_df.copy()
 
         #     temp_signals['timestamp'] = temp_signals['timestamp'].astype(np.int64) // 10**9
-        #     temp_signals['Exit_Time'] = temp_signals['Exit_Time'].astype(np.int64) // 10**9
+        #     temp_signals['Exit_Time'] = temp_signals['Exit_Time'].astype(np.int64) // 10**9F
 
         #     signals_json = temp_signals.to_dict(orient='records')
         # else:
@@ -152,8 +156,13 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
         try:
             combined_df, combined_dfSignals = pd.DataFrame(), pd.DataFrame()
             
+            all_no_fee_equity = 0
+
             for res_tuple in raw_results_for_portfolio:
-                result, _, _, _ = res_tuple
+                result, _, _, _, no_fee_equity = res_tuple
+                
+                all_no_fee_equity += no_fee_equity
+                
                 df, df_signals = result.get('ohlcv'), result.get('signals')
                 
                 if df is not None: 
@@ -184,7 +193,10 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
             aligned_equity = pd.Series([initialCapital] * len_diff + portfolio_equity, index=complete_df.index)
             
             portfolio_strategy_data = {'strategy_name': 'Portfolio', 'equity': aligned_equity, 'ohlcv': complete_df, 'signals': combined_dfSignals[combined_dfSignals['Signal'] != 0]}
-            portfolio_metrics, portfolio_returns = calculate_metrics(portfolio_strategy_data, initialCapital)
+
+            commission = round((((all_no_fee_equity - (portfolio_equity[-1] - portfolio_equity[0])) * 100 )/ all_no_fee_equity), 2)
+            
+            portfolio_metrics, portfolio_returns = calculate_metrics(portfolio_strategy_data, initialCapital, commission)
 
             # Prepare payload for both WebSocket and final DB save
             portfolio_payload = prepare_strategy_payload(portfolio_strategy_data, portfolio_metrics, portfolio_returns)
@@ -230,7 +242,7 @@ def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: st
         update_job_status(batch_id, "running", log_msg)
         
         # This pure function does all the heavy lifting
-        strategy_data, strategy_instance, strategy_metrics, monthly_returns = run_single_backtest(batch_id, manager, job_id, file_name, file_content, initialCapital, client)
+        strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity = run_single_backtest(batch_id, manager, job_id, file_name, file_content, initialCapital, client)
         
         # Prepare the payload for the UI
         single_result_payload = prepare_strategy_payload(strategy_data, strategy_metrics, monthly_returns)
@@ -246,7 +258,7 @@ def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: st
         print(f"WORKER: Job {job_id} for {file_name} completed and sent update.")
         
         # Return the raw data for the manager to use later for the portfolio
-        return strategy_data, strategy_instance, strategy_metrics, monthly_returns
+        return strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity
         
     except Exception as e:
         error_msg = f"ERROR in {file_name}: {traceback.format_exc()}"
@@ -273,18 +285,18 @@ def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str,
     send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Indicators Calculation Successful"}})
 
     # 4. Run simulation
-    strategy_data = run_backtest_loop(strategy_name, strategy_instance, ohlcv_idk, initialCapital)
+    strategy_data, commission, no_fee_equity = run_backtest_loop(strategy_name, strategy_instance, ohlcv_idk, initialCapital)
     send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Backtestloop Successful"}})
 
     # 5. Calculate metrics (simulated)
-    strategy_metrics, monthly_returns = calculate_metrics(strategy_data, initialCapital)
+    strategy_metrics, monthly_returns = calculate_metrics(strategy_data, initialCapital, commission)
     send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Metrics Calculation Successful"}})
 
     print(f"--- Core backtest for {asset} finished ---")
     send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Core backtest for {file_name} finished"}})
 
     # In a real app, this would return the full results object
-    return strategy_data, strategy_instance, strategy_metrics, monthly_returns
+    return strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity
 
 # --- Helper function to make a dictionary JSON-serializable ---
 def convert_to_json_serializable(obj):
@@ -396,3 +408,148 @@ def format_datetime_columns_for_json(df: pd.DataFrame) -> pd.DataFrame:
     #          formatted_df[col_name] = str_series.replace({pd.NaT: None})
 
     return formatted_df
+
+
+
+def modify_indicator_list(code_str: str, modifications: dict) -> str:
+    tree = ast.parse(code_str)
+    class IndicatorModifier(ast.NodeTransformer):
+        def visit_Assign(self, node):
+            if isinstance(node.targets[0], ast.Attribute) and node.targets[0].attr == 'indicators':
+                if isinstance(node.value, ast.List):
+                    for indicator_idx, indicator_tuple_node in enumerate(node.value.elts):
+                        if indicator_idx in modifications:
+                            param_tuple_node = indicator_tuple_node.elts[2]
+                            for param_idx, _ in enumerate(param_tuple_node.elts):
+                                if param_idx in modifications[indicator_idx]:
+                                    new_value = modifications[indicator_idx][param_idx]
+                                    # Replace the old value node with a new one
+                                    param_tuple_node.elts[param_idx] = ast.Constant(value=new_value)
+            return self.generic_visit(node)
+    modifier = IndicatorModifier()
+    modified_tree = modifier.visit(tree)
+    ast.fix_missing_locations(modified_tree)
+    return ast.unparse(modified_tree)
+
+
+def build_new_indicator_line(original_code: str, modifications: dict) -> str:
+    """
+    Rebuilds the `self.indicators` list as a string using the modifications.
+    This is much safer than modifying the AST.
+    """
+    # 1. First, parse the original line to get the structure and non-modified values
+    match = re.search(r"self\.indicators\s*=\s*(\[.*?\])", original_code, re.DOTALL)
+    if not match:
+        raise ValueError("Could not find 'self.indicators = [...]' in the strategy code.")
+    
+    # Safely evaluate the list string to get a Python list object
+    # This is safe because we're only evaluating the part inside the brackets
+    indicators_list = eval(match.group(1))
+
+    # 2. Apply the modifications to the Python list object
+    for indicator_idx, params_to_change in modifications.items():
+        if indicator_idx < len(indicators_list):
+            # Get the parameter tuple, e.g., (50,)
+            original_params = list(indicators_list[indicator_idx][2])
+            for param_idx, new_value in params_to_change.items():
+                if param_idx < len(original_params):
+                    original_params[param_idx] = new_value
+            
+            # Recreate the indicator tuple with the modified parameter tuple
+            original_tuple = list(indicators_list[indicator_idx])
+            original_tuple[2] = tuple(original_params)
+            indicators_list[indicator_idx] = tuple(original_tuple)
+
+    # 3. Convert the modified Python list back into a perfectly formatted string
+    # e.g., "self.indicators = [('SMA', '1m', (70,)), ...]"
+    return f"self.indicators = {str(indicators_list)}"
+
+
+
+def process_optimization_job(batch_id: str, manager: any, job_id: str, run_num: int, total_runs: int, original_code: str, modifications: dict, params: dict, strategy_display_name: str):
+    try:
+        # Generate the specific version of the code for this run
+        new_indicator_line = build_new_indicator_line(original_code, modifications)
+        
+        modified_code = re.sub(
+            r"self\.indicators\s*=\s*\[.*?\]",
+            new_indicator_line,
+            original_code,
+            flags=re.DOTALL
+        )
+        
+        log_msg = f"({run_num}/{total_runs}) Running: {strategy_display_name}"
+        send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": log_msg}})
+        
+        # Reuse your existing backtesting engine
+        initialCapital = 1000 # Make this dynamic from config later
+        client = get_client('binance') # Or pass from manager
+        strategy_data, _, strategy_metrics, monthly_returns, _ = run_single_backtest(
+            batch_id, manager, job_id, strategy_display_name, modified_code, initialCapital, client
+        )
+        
+        # Prepare the payload for the UI
+        single_result_payload = prepare_strategy_payload(strategy_data, strategy_metrics, monthly_returns)
+        
+        send_websocket_update(manager, batch_id, {
+            "type": "strategy_result",
+            "payload": convert_to_json_serializable(single_result_payload)
+        })
+    except Exception as e:
+        error_msg = f"ERROR in run {strategy_display_name}: {traceback.format_exc()}"
+        print(error_msg)
+        fail_job(batch_id, error_msg)
+        send_websocket_update(manager, batch_id, {"type": "error", "payload": {"message": f"Run '{strategy_display_name}' failed."}})
+
+
+def run_indicator_optimization_manager(batch_id: str, config: dict, manager: any):
+    print(f"--- OPTIMIZATION MANAGER ({batch_id}): Starting job ---")
+    update_job_status(batch_id, "running", "Generating parameter combinations...")
+    send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": "Generating parameter combinations..."}})
+    
+    params_to_optimize = config['parametersToOptimize']
+    original_code = config['strategyCode']
+
+    param_ranges = [np.arange(p['start'], p['end'] + p['step'], p['step']) for p in params_to_optimize]
+    all_combinations = list(itertools.product(*param_ranges))
+    total_runs = len(all_combinations)
+    
+    print(f"Total optimization runs to execute: {total_runs}")
+    send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"Generated {total_runs} parameter sets to test."}})
+
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+        futures = []
+        for i, combo in enumerate(all_combinations):
+            modifications = {}
+            current_params = {}
+            param_strings = []
+            for j, param_config in enumerate(params_to_optimize):
+                indicator_idx = param_config['indicatorIndex']
+                param_idx = param_config['paramIndex']
+                param_name = param_config['name']
+                
+                if indicator_idx not in modifications:
+                    modifications[indicator_idx] = {}
+                
+                current_value = combo[j]
+                modifications[indicator_idx][param_idx] = current_value
+                current_params[param_name] = current_value
+                
+                param_strings.append(f"{param_name.replace('_', ' ').replace('param ', '#')}={current_value}")
+                
+            strategy_display_name = ", ".join(param_strings)
+            future = executor.submit(
+                process_optimization_job,
+                batch_id, manager, str(uuid.uuid4()), i + 1, total_runs,
+                original_code, modifications, current_params, strategy_display_name
+            )
+            futures.append(future)
+        
+        for future in as_completed(futures):
+            future.result() # Wait for all tasks to complete and raise exceptions if any
+
+    update_job_status(batch_id, "completed", "Optimization finished.")
+    send_websocket_update(manager, batch_id, {"type": "batch_complete", "payload": {"message": "Optimization complete."}})
+    print(f"--- OPTIMIZATION MANAGER ({batch_id}): Job finished. ---")
+
+

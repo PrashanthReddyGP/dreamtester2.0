@@ -1,15 +1,23 @@
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
+const path = require('path'); // Make sure path is required at the top
 
 module.exports = {
   packagerConfig: {
     asar: true,
+    extraResource: [
+      './backend/dist/backend_app.exe'
+    ]
   },
   rebuildConfig: {},
   makers: [
     {
       name: '@electron-forge/maker-squirrel',
-      config: {},
+      platforms: ['win32'],
+      config: {
+        "author": "Prashanth Reddy GP",
+        "description": "A quantitative trade backtesting application"
+      },
     },
     {
       name: '@electron-forge/maker-zip',
@@ -17,10 +25,12 @@ module.exports = {
     },
     {
       name: '@electron-forge/maker-deb',
+      platforms: 'linux',
       config: {},
     },
     {
       name: '@electron-forge/maker-rpm',
+      platforms: 'linux',
       config: {},
     },
   ],

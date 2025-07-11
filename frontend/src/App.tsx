@@ -7,10 +7,67 @@ import { StrategyLab } from './pages/StrategyLab';
 import { AnalysisHub } from './pages/AnalysisHub';
 import { AnimatedPage } from './components/common/AnimatedPage';
 import { loader } from '@monaco-editor/react';
+
 import AppContext from './context/AppContext';
 import type { SettingsState, ApiKeySet } from './context/types';
-import { TerminalContextProvider } from './context/TerminalContext'; 
-import { AnalysisContextProvider } from './context/AnalysisContext';
+import { TerminalContextProvider, useTerminal } from './context/TerminalContext';
+import { AnalysisContextProvider, useAnalysis } from './context/AnalysisContext';
+import { websocketService } from './services/websocketService';
+
+
+
+// --- 1. THE NEW WebSocketManager COMPONENT ---
+// This component does not render any UI. Its sole purpose is to listen
+// to the WebSocket service and route data to the correct context.
+const WebSocketManager: React.FC = () => {
+    const { addLog, setIsConnected } = useTerminal();
+    const { addResult, markComplete } = useAnalysis();
+
+    useEffect(() => {
+        // Subscribe to the central WebSocket service
+        const subscription = websocketService.subscribe((data: any) => {
+            const { type, payload } = data;
+
+            // This switch statement is the router for all incoming data
+            switch (type) {
+                case 'log':
+                    addLog(payload.level || 'INFO', payload.message);
+                    break;
+                case 'error':
+                    addLog('ERROR', `ERROR: ${payload.message}`);
+                    break;
+                case 'strategy_result':
+                    addResult(payload);
+                    break;
+                case 'batch_complete':
+                    addLog('SUCCESS', '--- BATCH COMPLETE ---');
+                    markComplete();
+                    break;
+                case 'system':
+                    if (payload.event === 'open') {
+                        setIsConnected(true);
+                        addLog('SYSTEM', 'Connection established. Waiting for logs...');
+                    } else if (payload.event === 'close') {
+                        setIsConnected(false);
+                        addLog('SYSTEM', 'Connection closed.');
+                    } else if (payload.event === 'error') {
+                        addLog('ERROR', payload.message || 'A WebSocket error occurred.');
+                    }
+                    break;
+                default:
+                    console.warn("Unhandled WebSocket message type:", type);
+            }
+        });
+
+        // Unsubscribe when the component unmounts to prevent memory leaks
+        return () => {
+            subscription.unsubscribe();
+        };
+    // The dependency array ensures this effect always has the latest versions of the context methods
+    }, [addLog, setIsConnected, addResult, markComplete]);
+
+    return null; // This component renders nothing
+};
 
 loader.init().then((monacoInstance) => {
   const darkTheme = getAppTheme('dark');
@@ -82,7 +139,6 @@ function App() {
         throw new Error(errorData.detail || 'Failed to save keys on the server.');
       }
       
-      // After saving, reload the data to ensure UI is in sync
       await loadInitialData(); 
       return await response.json();
 
@@ -96,85 +152,14 @@ function App() {
     loadInitialData();
   }, []);
 
-  // const [latestBacktest, setLatestBacktest] = useState<BacktestResultPayload | null>(null);
-  // const [isBacktestLoading, setIsBacktestLoading] = useState(false); // Start as false
-  // const [backtestError, setBacktestError] = useState<string | null>(null);
-
-  // const isPollingRef = useRef(false);
-
-  // const fetchLatestResults = () => {
-  //   console.log("Starting to poll for latest backtest results...");
-
-  //   // Guard clause to prevent multiple concurrent polling loops
-  //   if (isPollingRef.current) {
-  //     console.log("Polling is already active. Exiting.");
-  //     return;
-  //   }
-    
-  //   // Set the initial state for the loading process
-  //   setIsBacktestLoading(true);
-  //   setBacktestError(null);
-  //   setLatestBacktest(null);
-
-  //   isPollingRef.current = true;
-
-  //   const poll = async () => {
-  //       // We define a variable to check if the component is still mounted and waiting
-  //       // This is a way to access the "current" state inside the async function
-  //       if (!isPollingRef.current) {
-  //         console.log("Polling was cancelled.");
-  //         return;
-  //       }
-
-  //       try {
-  //           const result = await getLatestBacktestResult();
-            
-  //           if (result) {
-  //               // SUCCESS: We got the data
-  //               console.log("Successfully fetched backtest results.");
-  //               setLatestBacktest(result);
-  //               setIsBacktestLoading(false);
-  //               isPollingRef.current = false; 
-  //           } else {
-  //             // No result yet, poll again
-  //             setTimeout(poll, 5000);
-  //           }
-
-  //       } catch (err) {
-  //           console.error("Polling failed with an error:", err);
-  //           setBacktestError("Failed to load backtest results.");
-  //           setIsBacktestLoading(false);
-  //           isPollingRef.current = false;
-  //       }
-  //   };
-
-  //   poll(); // Start the polling
-  // };
-
-  // const clearLatestBacktest = () => {
-  //   console.log("Clearing latest backtest data from global state...");
-  //   setLatestBacktest(null);
-  //   setBacktestError(null);
-  //   setIsBacktestLoading(true); // Set to true to immediately show the loading spinner on the Analysis page
-  //   isPollingRef.current = false;
-  // };
-
-  const contextValue = {
-    settings,
-    isLoading,
-    error,
-    saveApiKeys,
-    // latestBacktest,
-    // isBacktestLoading,
-    // backtestError,
-    // fetchLatestResults,
-    // clearLatestBacktest,
-  };
+  const contextValue = { settings, isLoading, error, saveApiKeys };
 
   return (
     <AppContext.Provider value={contextValue}>
       <TerminalContextProvider>
         <AnalysisContextProvider>
+          <WebSocketManager />
+
           <ThemeProvider theme={theme}>
             <Router>
               <Routes>
@@ -182,7 +167,7 @@ function App() {
                   <Route path="/" element={<Navigate to="/lab" replace />} />
                   <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
                   <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
-                  <Route path="/automation" element={<div  style={{display:'flex', justifyContent:'center', alignItems:'center', width:'100%'}}><AnimatedPage>Automation Page</AnimatedPage></div>} />
+                  <Route path="/automation" element={<div style={{display:'flex', justifyContent:'center', alignItems:'center', width:'100%'}}><AnimatedPage>Automation Page</AnimatedPage></div>} />
                 </Route>
               </Routes>
             </Router>

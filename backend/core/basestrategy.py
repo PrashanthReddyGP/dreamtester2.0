@@ -29,6 +29,9 @@ class BaseStrategy:
         
         self.rr = 3
         
+        self.commission = 0
+        self.no_fee_equity = 0
+        
         if df is not None and not df.empty:
             
             self.open = df['open'].values
@@ -59,6 +62,39 @@ class BaseStrategy:
     # def stoploss_condition(self, i, j):
     #     """Override this method in specific strategy class to define exit conditions."""
     #     raise NotImplementedError
+    
+    def _get_indicator_column_name(self, indicator_tuple):
+        """
+        Generates the DataFrame column name based on an indicator tuple.
+        This MUST match the naming convention used in your process_indicators.py.
+        """
+        name, timeframe, params = indicator_tuple
+        
+        name = name.lower() # Standardize to lowercase
+        
+        if name == 'sma':
+            # Assumes your process_indicators creates columns like 'sma_50', 'sma_200'
+            length = int(params[0]) 
+            return f'sma_{length}'
+        
+        elif name == 'atr':
+            # This is based on your example code which expects 'stoploss_short' and 'atr'
+            # We will assume the primary column for the JIT function is 'stoploss_short'
+            # Your indicator calculator must create this column.
+            # NOTE: Your example passes both stoploss_short and atr. We will handle this in Step 2.
+            # For this helper, we'll map it to the main stop-loss column.
+            return 'stoploss_short'
+            
+        elif name == 'hl oscillator':
+            return 'hl_oscillator'
+            
+        # Add elif blocks for every other indicator type you use...
+        # elif name == 'rsi':
+        #     return f'rsi_{params[0]}'
+            
+        else:
+            # Fallback for simple indicators that use their own name
+            return name.replace(' ', '_')
     
     def optimized_run(self):
         pass
@@ -147,7 +183,7 @@ class BaseStrategy:
         
         dfSignals = df[df['Signal'] != 0]
         
-        return self.equity, dfSignals, df
+        return self.equity, dfSignals, df, self.commission, self.no_fee_equity
     
     def portfolio(self, timestamps, results, rrs, reductions, commissioned_returns_combined):
 
@@ -183,5 +219,5 @@ class BaseStrategy:
             
             # Update the previous timestamp to the current one for the next iteration
             previous_timestamp = current_timestamp
-        
+
         return self.portfolio_equity
