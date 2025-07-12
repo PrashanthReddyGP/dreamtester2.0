@@ -22,7 +22,7 @@ FUNCTIONALITY:
 [-] Send changed 
 [-] Improved UX with parallel updates
 [-] Logging Terminal in App
-[] Solo-backtest Option
+[-] Solo-backtest Option
 
 [-] Portfolio backtesting
 
