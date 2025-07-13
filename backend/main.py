@@ -28,12 +28,13 @@ try:
         get_backtest_job 
     )
 
-    from pipeline import run_indicator_optimization_manager, run_batch_manager
+    from pipeline import run_optimization_manager, run_batch_manager
 
     ##########################################
 
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 
     class BacktestSubmitConfig(BaseModel):
         strategyCode: str
@@ -82,14 +83,23 @@ try:
         start: float
         end: float
         step: float
+        
+    class OptimizableParameterModel(BaseModel):
+        id: str
+        type: str
+        name: str
+        value: float
+        enabled: bool
+        start: float
+        end: float
+        step: float
+        indicatorIndex: Optional[int] = None 
+        paramIndex: Optional[int] = None
+
 
     class OptimizationSubmitBody(BaseModel):
-        strategyCode: str
-        asset: str
-        timeframe: str
-        startDate: Optional[str] = None
-        endDate: Optional[str] = None
-        parametersToOptimize: List[OptimizationParam]
+        strategy_code: str
+        parameters_to_optimize: List[OptimizableParameterModel]
 
 
     # Create the FastAPI application instance
@@ -229,11 +239,10 @@ try:
 
     #########################################################################################
 
-    @app.post("/api/strategies/parse-indicators")
-    async def parse_indicators_from_strategy(request: Request):
+    @app.post("/api/strategies/parse-parameters")
+    async def parse_strategy_parameters(request: Request):
         """
-        Safely parses a Python strategy file to find the `self.indicators` list
-        and default settings like symbol, timeframe, and dates from the __init__ method.
+        Parses a strategy file for both `self.params` (like rr) and `self.indicators`.
         """
         code_bytes = await request.body()
         code_str = code_bytes.decode('utf-8')
@@ -250,7 +259,7 @@ try:
                 "startDate": "2000-01-01",
                 "endDate": "2100-12-31"
             },
-            "indicators": []
+            "optimizable_params": [], # A unified list
         }
 
         # ast.walk traverses all nodes in the tree
@@ -272,39 +281,41 @@ try:
                         # Now look for assignments within __init__
                         for sub_node in item.body:
                             if isinstance(sub_node, ast.Assign):
+                                
                                 target = sub_node.targets[0]
-                                if isinstance(target, ast.Attribute):
-                                    attr_name = target.attr
-                                    # Safely evaluate the assigned value
-                                    try:
-                                        value = ast.literal_eval(sub_node.value)
-                                        if attr_name == 'symbol':
-                                            parsed_data["settings"]["symbol"] = value
-                                        elif attr_name == 'timeframe':
-                                            parsed_data["settings"]["timeframe"] = value
-                                        # Handle both snake_case and camelCase for dates
-                                        elif attr_name in ['start_date', 'startDate']:
-                                            parsed_data["settings"]["startDate"] = value
-                                        elif attr_name in ['end_date', 'endDate']:
-                                            parsed_data["settings"]["endDate"] = value
-                                        elif attr_name == 'indicators' and isinstance(value, list):
-                                            # This part is for parsing the indicators list
-                                            for i, element_tuple in enumerate(value):
-                                                if isinstance(element_tuple, tuple) and len(element_tuple) >= 3:
-                                                    indicator_name = element_tuple[0]
-                                                    default_params = element_tuple[2]
-                                                    
-                                                    indicator_config = {"id": f"indicator_{i}", "name": indicator_name, "originalIndex": i, "params": []}
-                                                    for j, p_val in enumerate(default_params):
-                                                        indicator_config["params"].append({
-                                                            "id": f"param_{i}_{j}", "originalIndex": j, "value": p_val,
-                                                            "start": p_val, "end": p_val, "step": 1, "enabled": False
-                                                        })
-                                                    parsed_data["indicators"].append(indicator_config)
-                                    except (ValueError, SyntaxError):
-                                        # Could not evaluate the node, skip it
-                                        pass
-        
+                                
+                                if not isinstance(target, ast.Attribute):
+                                    continue
+                                
+                                # --- 1. Parse `self.params` dictionary ---
+                                if target.attr == 'params' and isinstance(sub_node.value, ast.Dict):
+                                    for i, key_node in enumerate(sub_node.value.keys):
+                                        param_name = ast.literal_eval(key_node)
+                                        default_value = ast.literal_eval(sub_node.value.values[i])
+                                        
+                                        parsed_data["optimizable_params"].append({
+                                            "type": "strategy_param", # New type
+                                            "name": param_name,
+                                            "value": default_value,
+                                            "id": f"sp_{param_name}"
+                                        })
+                                
+                                # --- 2. Parse `self.indicators` list ---
+                                elif target.attr == 'indicators' and isinstance(sub_node.value, ast.List):
+                                    for i, element_tuple in enumerate(ast.literal_eval(sub_node.value)):
+                                        indicator_name, _, params = element_tuple
+                                        
+                                        # For each numeric parameter in the indicator...
+                                        for j, p_val in enumerate(params):
+                                            parsed_data["optimizable_params"].append({
+                                                "type": "indicator_param", # New type
+                                                "name": f"{indicator_name} #{j+1}",
+                                                "value": p_val,
+                                                "id": f"ip_{i}_{j}",
+                                                "indicatorIndex": i,
+                                                "paramIndex": j
+                                            })
+                break # Stop after finding __init__
         return parsed_data
 
     ###########################################################################################
@@ -362,7 +373,7 @@ try:
         create_backtest_job(batch_id) # Reuse the same job table for tracking
         
         background_tasks.add_task(
-            run_indicator_optimization_manager,
+            run_optimization_manager,
             batch_id=batch_id,
             config=body.model_dump(), # Pass the entire validated config
             manager=manager
@@ -394,7 +405,7 @@ try:
     if __name__ == "__main__":
         import uvicorn
         # Make sure to pass the 'app' object you created earlier
-        uvicorn.run(app, host="127.0.0.1", port=8000)
+        uvicorn.run(app, host="127.0.0.1", port=8000, ws_per_message_deflate=False)
         
 except Exception as e:
     # If any error occurs, print it and wait for user input

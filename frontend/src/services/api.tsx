@@ -1,4 +1,5 @@
 // frontend/src/services/api.tsx
+import type { OptimizationConfig } from '../components/strategylab/OptimizeModal'; // Import the type
 
 // The base URL for your backend
 const API_URL = 'http://127.0.0.1:8000';
@@ -113,6 +114,10 @@ export interface BatchSubmitResponse {
     batch_id: string;
 }
 
+export interface SubmissionResponse {
+    message: string;
+    batch_id: string;
+}
 
 /**
  * Submits a new backtest job to the backend.

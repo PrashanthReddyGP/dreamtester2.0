@@ -466,34 +466,24 @@ def build_new_indicator_line(original_code: str, modifications: dict) -> str:
 
 
 
-def process_optimization_job(batch_id: str, manager: any, job_id: str, run_num: int, total_runs: int, original_code: str, modifications: dict, params: dict, strategy_display_name: str):
+def process_optimization_job(batch_id: str, manager: any, job_id: str, run_num: int, total_runs: int, original_code: str, modifications_for_run: list, strategy_display_name: str):
     try:
-        # Generate the specific version of the code for this run
-        new_indicator_line = build_new_indicator_line(original_code, modifications)
-        
-        modified_code = re.sub(
-            r"self\.indicators\s*=\s*\[.*?\]",
-            new_indicator_line,
-            original_code,
-            flags=re.DOTALL
-        )
+        modified_code = modify_strategy_code(original_code, modifications_for_run)
         
         log_msg = f"({run_num}/{total_runs}) Running: {strategy_display_name}"
         send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": log_msg}})
         
-        # Reuse your existing backtesting engine
-        initialCapital = 1000 # Make this dynamic from config later
-        client = get_client('binance') # Or pass from manager
-        strategy_data, _, strategy_metrics, monthly_returns, _ = run_single_backtest(
+        # The rest of the function is the same, it just uses the modified_code
+        initialCapital = 1000
+        client = get_client('binance')
+        strategy_data, _, metrics, monthly_returns, _ = run_single_backtest(
             batch_id, manager, job_id, strategy_display_name, modified_code, initialCapital, client
         )
         
-        # Prepare the payload for the UI
-        single_result_payload = prepare_strategy_payload(strategy_data, strategy_metrics, monthly_returns)
-        
+        full_payload = prepare_strategy_payload(strategy_data, metrics, monthly_returns)
         send_websocket_update(manager, batch_id, {
             "type": "strategy_result",
-            "payload": convert_to_json_serializable(single_result_payload)
+            "payload": convert_to_json_serializable(full_payload)
         })
     except Exception as e:
         error_msg = f"ERROR in run {strategy_display_name}: {traceback.format_exc()}"
@@ -502,54 +492,77 @@ def process_optimization_job(batch_id: str, manager: any, job_id: str, run_num: 
         send_websocket_update(manager, batch_id, {"type": "error", "payload": {"message": f"Run '{strategy_display_name}' failed."}})
 
 
-def run_indicator_optimization_manager(batch_id: str, config: dict, manager: any):
-    print(f"--- OPTIMIZATION MANAGER ({batch_id}): Starting job ---")
-    update_job_status(batch_id, "running", "Generating parameter combinations...")
-    send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": "Generating parameter combinations..."}})
-    
-    params_to_optimize = config['parametersToOptimize']
-    original_code = config['strategyCode']
+def run_optimization_manager(batch_id: str, config: dict, manager: any): # Renamed from run_indicator_optimization_manager
+    params_to_optimize = config['parameters_to_optimize']
+    original_code = config['strategy_code']
 
     param_ranges = [np.arange(p['start'], p['end'] + p['step'], p['step']) for p in params_to_optimize]
     all_combinations = list(itertools.product(*param_ranges))
     total_runs = len(all_combinations)
-    
+
     print(f"Total optimization runs to execute: {total_runs}")
+
     send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"Generated {total_runs} parameter sets to test."}})
 
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
-        futures = []
         for i, combo in enumerate(all_combinations):
-            modifications = {}
-            current_params = {}
+            
+            modifications_for_run = []
             param_strings = []
+            
             for j, param_config in enumerate(params_to_optimize):
-                indicator_idx = param_config['indicatorIndex']
-                param_idx = param_config['paramIndex']
-                param_name = param_config['name']
-                
-                if indicator_idx not in modifications:
-                    modifications[indicator_idx] = {}
-                
-                current_value = combo[j]
-                modifications[indicator_idx][param_idx] = current_value
-                current_params[param_name] = current_value
-                
-                param_strings.append(f"{param_name.replace('_', ' ').replace('param ', '#')}={current_value}")
-                
+                current_value = round(combo[j], 4) # Get the value for this combination
+                # Add the specific modification instruction for this run
+                modifications_for_run.append({**param_config, 'value': current_value})
+                param_strings.append(f"{param_config['name']}={current_value}")
+            
             strategy_display_name = ", ".join(param_strings)
+
             future = executor.submit(
                 process_optimization_job,
                 batch_id, manager, str(uuid.uuid4()), i + 1, total_runs,
-                original_code, modifications, current_params, strategy_display_name
+                original_code, modifications_for_run, strategy_display_name
             )
-            futures.append(future)
+
+        #     futures.append(future)
         
-        for future in as_completed(futures):
-            future.result() # Wait for all tasks to complete and raise exceptions if any
+        # for future in as_completed(futures):
+        #     future.result() # Wait for all tasks to complete and raise exceptions if any
 
     update_job_status(batch_id, "completed", "Optimization finished.")
     send_websocket_update(manager, batch_id, {"type": "batch_complete", "payload": {"message": "Optimization complete."}})
     print(f"--- OPTIMIZATION MANAGER ({batch_id}): Job finished. ---")
 
 
+def modify_strategy_code(original_code: str, modifications: list) -> str:
+    """
+    A generic function to modify both `self.params` and `self.indicators`
+    in the strategy code string before a run.
+    """
+    modified_code = original_code
+
+    # --- Step 1: Modify `self.params` dictionary ---
+    params_match = re.search(r"self\.params\s*=\s*(\{.*?\})", modified_code, re.DOTALL)
+    if params_match:
+        params_dict = ast.literal_eval(params_match.group(1))
+        for mod in modifications:
+            if mod['type'] == 'strategy_param':
+                params_dict[mod['name']] = mod['value']
+        new_params_line = f"self.params = {str(params_dict)}"
+        modified_code = re.sub(r"self\.params\s*=\s*\{.*?\}", new_params_line, modified_code, flags=re.DOTALL)
+
+    # --- Step 2: Modify `self.indicators` list ---
+    indicators_match = re.search(r"self\.indicators\s*=\s*(\[.*?\])", modified_code, re.DOTALL)
+    if indicators_match:
+        indicators_list = ast.literal_eval(indicators_match.group(1))
+        for mod in modifications:
+            if mod['type'] == 'indicator_param':
+                ind_params = list(indicators_list[mod['indicatorIndex']][2])
+                ind_params[mod['paramIndex']] = mod['value']
+                ind_tuple = list(indicators_list[mod['indicatorIndex']])
+                ind_tuple[2] = tuple(ind_params)
+                indicators_list[mod['indicatorIndex']] = tuple(ind_tuple)
+        new_indicators_line = f"self.indicators = {str(indicators_list)}"
+        modified_code = re.sub(r"self\.indicators\s*=\s*\[.*?\]", new_indicators_line, modified_code, flags=re.DOTALL)
+
+    return modified_code

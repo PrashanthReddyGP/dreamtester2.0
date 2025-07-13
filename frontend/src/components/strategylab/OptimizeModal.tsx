@@ -62,19 +62,8 @@ interface ParsedStrategyData {
 
 // The final configuration object that will be sent to the backend to start the optimization
 export interface OptimizationConfig {
-  strategyCode: string;
-  asset: string;
-  timeframe: string;
-  startDate: string;
-  endDate: string;
-  parametersToOptimize: {
-      indicatorIndex: number;
-      paramIndex: number;
-      name: string;
-      start: number;
-      end: number;
-      step: number;
-  }[];
+  strategy_code: string;
+  parameters_to_optimize: OptimizableParameter[]; // Send the whole object
 }
 
 interface OptimizeModalProps {
@@ -83,6 +72,19 @@ interface OptimizeModalProps {
   onSubmit: (config: OptimizationConfig) => void;
   strategyCode: string | null;
   isSubmitting: boolean;
+}
+
+interface OptimizableParameter {
+    id: string;
+    type: 'strategy_param' | 'indicator_param';
+    name: string;
+    value: number;
+    enabled: boolean;
+    start: number;
+    end: number;
+    step: number;
+    indicatorIndex?: number;
+    paramIndex?: number;
 }
 
 const fetchParsedStrategyData = async (code: string): Promise<ParsedStrategyData> => {
@@ -100,17 +102,26 @@ const fetchParsedStrategyData = async (code: string): Promise<ParsedStrategyData
   return response.json();
 };
 
-// --- The Main Modal Component ---
-export const OptimizeModal: React.FC<OptimizeModalProps> = ({
-  open,
-  onClose,
-  onSubmit,
-  strategyCode,
-  isSubmitting,
-}) => {
-  const [indicators, setIndicators] = useState<OptimizableIndicator[]>([]);
-  const [settings, setSettings] = useState<StrategySettings | null>(null);
+const fetchOptimizableParams = async (code: string): Promise<OptimizableParameter[]> => {
+    const response = await fetch(`${API_URL}/api/strategies/parse-parameters`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: code,
+    });
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: "An unknown error" }));
+        throw new Error(errorData.detail);
+    }
+    const data = await response.json();
+    return data.optimizable_params.map((p: any) => ({
+        ...p,
+        enabled: false, start: p.value, end: p.value, step: 1,
+    }));
+};
 
+// --- The Main Modal Component ---
+export const OptimizeModal: React.FC<OptimizeModalProps> = ({ open, onClose, onSubmit, strategyCode, isSubmitting }) => {
+  const [params, setParams] = useState<OptimizableParameter[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -118,62 +129,29 @@ export const OptimizeModal: React.FC<OptimizeModalProps> = ({
     if (open && strategyCode) {
       setIsLoading(true);
       setError(null);
-      setIndicators([]);
-      setSettings(null);
-
-      fetchParsedStrategyData(strategyCode)
-        .then(data => {
-            setIndicators(data.indicators);
-            setSettings(data.settings);
-        })
+      fetchOptimizableParams(strategyCode)
+        .then(data => setParams(data))
         .catch(err => setError(err.message))
         .finally(() => setIsLoading(false));
     }
   }, [open, strategyCode]);
 
-  const handleParamChange = (indicatorId: string, paramId: string, field: keyof IndicatorParam, value: any) => {
-    setIndicators(prev => prev.map(ind =>
-      ind.id === indicatorId
-        ? { ...ind, params: ind.params.map(p => p.id === paramId ? { ...p, [field]: value } : p) }
-        : ind
-    ));
+
+  const handleParamChange = (id: string, field: keyof OptimizableParameter, value: any) => {
+    setParams(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p));
   };
 
   const handleSubmit = () => {
-    if (!strategyCode || !settings) {
-      setError("Error: Strategy code or settings are missing.");
-      return;
+    if (!strategyCode) {
+      setError("Strategy code is missing."); return;
     }
-
-    const parametersToOptimize: OptimizationConfig['parametersToOptimize'] = [];
-    
-    indicators.forEach(indicator => {
-      indicator.params.forEach(param => {
-        if (param.enabled) {
-          parametersToOptimize.push({
-            indicatorIndex: indicator.originalIndex,
-            paramIndex: param.originalIndex,
-            name: `${indicator.name}_param_${param.originalIndex}`, 
-            start: param.start,
-            end: param.end,
-            step: param.step,
-          });
-        }
-      });
-    });
-
-    if (parametersToOptimize.length === 0) {
-      setError("Please enable at least one parameter to optimize.");
-      return;
+    const enabledParams = params.filter(p => p.enabled);
+    if (enabledParams.length === 0) {
+      setError("Please enable at least one parameter to optimize."); return;
     }
-
     const config: OptimizationConfig = {
-      strategyCode,
-      asset: settings.symbol,
-      timeframe: settings.timeframe,
-      startDate: settings.startDate,
-      endDate: settings.endDate,
-      parametersToOptimize,
+      strategy_code : strategyCode,
+      parameters_to_optimize: enabledParams,
     };
     onSubmit(config);
   };
@@ -181,52 +159,39 @@ export const OptimizeModal: React.FC<OptimizeModalProps> = ({
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        Configure Strategy Optimization
+        Configure Optimization
         <IconButton aria-label="close" onClick={onClose}><CloseIcon /></IconButton>
       </DialogTitle>
-      
       <DialogContent dividers>
-        {isLoading && (
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', my: 4, gap: 2 }}>
-            <CircularProgress />
-            <Typography>Parsing strategy file...</Typography>
-          </Box>
-        )}
+        {isLoading && ( <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}><CircularProgress /><Typography sx={{ml:2}}>Parsing Strategy...</Typography></Box> )}
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-        
-        {!isLoading && !error && settings && (
-          <Box>
-            {indicators.length === 0 ? (
-              <Alert severity="info" sx={{ mt: 2 }}>No indicators found in the `self.indicators` list.</Alert>
-            ) : (
-              indicators.map(indicator => (
-                <Box key={indicator.id} sx={{ mb: 2 }}>
-                  <Typography sx={{ fontWeight: 500 }}>{indicator.name}</Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    Default: ({indicator.params.map(p => p.value).join(', ')})
-                  </Typography>
-                  {indicator.params.map(param => (
-                    <Box key={param.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 1, ml: 2, mt: 1 }}>
-                      <FormControlLabel
-                        control={<Checkbox checked={param.enabled} onChange={e => handleParamChange(indicator.id, param.id, 'enabled', e.target.checked)} />}
-                        label={`Param #${param.originalIndex + 1}`}
-                      />
-                      <TextField label="Start" type="number" variant="outlined" size="small" defaultValue={param.value} onChange={e => handleParamChange(indicator.id, param.id, 'start', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
-                      <TextField label="End" type="number" variant="outlined" size="small" defaultValue={param.value} onChange={e => handleParamChange(indicator.id, param.id, 'end', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
-                      <TextField label="Step" type="number" variant="outlined" size="small" defaultValue={1} onChange={e => handleParamChange(indicator.id, param.id, 'step', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
+        {!isLoading && !error && (
+            <Box>
+                <Typography variant="h6">Strategy Parameters</Typography>
+                {params.filter(p => p.type === 'strategy_param').map(param => (
+                    <Box key={param.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 1, ml: 2 }}>
+                        <FormControlLabel control={<Checkbox checked={param.enabled} onChange={e => handleParamChange(param.id, 'enabled', e.target.checked)} />} label={param.name} />
+                        <TextField label="Start" type="number" variant="outlined" size="small" defaultValue={param.value} onChange={e => handleParamChange(param.id, 'start', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
+                        <TextField label="End" type="number" variant="outlined" size="small" defaultValue={param.value} onChange={e => handleParamChange(param.id, 'end', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
+                        <TextField label="Step" type="number" variant="outlined" size="small" defaultValue={1} onChange={e => handleParamChange(param.id, 'step', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
                     </Box>
-                  ))}
-                </Box>
-              ))
-            )}
-          </Box>
+                ))}
+                <Divider sx={{ my: 2 }} />
+                <Typography variant="h6">Indicator Parameters</Typography>
+                {params.filter(p => p.type === 'indicator_param').map(param => (
+                    <Box key={param.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 1, ml: 2 }}>
+                        <FormControlLabel control={<Checkbox checked={param.enabled} onChange={e => handleParamChange(param.id, 'enabled', e.target.checked)} />} label={param.name} />
+                        <TextField label="Start" type="number" variant="outlined" size="small" defaultValue={param.value} onChange={e => handleParamChange(param.id, 'start', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
+                        <TextField label="End" type="number" variant="outlined" size="small" defaultValue={param.value} onChange={e => handleParamChange(param.id, 'end', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
+                        <TextField label="Step" type="number" variant="outlined" size="small" defaultValue={1} onChange={e => handleParamChange(param.id, 'step', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
+                    </Box>
+                ))}
+            </Box>
         )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={isSubmitting}>Cancel</Button>
-        <Button onClick={handleSubmit} variant="contained" disabled={isLoading || isSubmitting || indicators.length === 0}>
-          {isSubmitting ? 'Optimizing...' : 'Run Optimization'}
-        </Button>
+        <Button onClick={handleSubmit} variant="contained" disabled={isLoading || isSubmitting}>Run Optimization</Button>
       </DialogActions>
     </Dialog>
   );
