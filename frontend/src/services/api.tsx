@@ -164,6 +164,21 @@ export const submitBatchBacktest = async (files: StrategyFilePayload[]): Promise
 };
 
 
+export const fetchAvailableSymbols = async (exchange: string): Promise<string[]> => {
+    try {
+        const response = await fetch(`${API_URL}/api/exchange/symbols/${exchange}`);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch symbols from server.`);
+        }
+        const symbols: string[] = await response.json();
+        // ccxt returns symbols like "BTC/USDT", which is perfect.
+        return symbols;
+    } catch (error) {
+        console.error("Error fetching available symbols:", error);
+        // Return a fallback list on error so the UI doesn't crash
+        return ['BTCUSDT', 'ETHUSDT', 'BNBUSDT'];
+    }
+};
 
 // /**
 //  * Fetches the most recently completed backtest result.

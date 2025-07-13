@@ -576,3 +576,47 @@ def modify_strategy_code(original_code: str, modifications: list) -> str:
         modified_code = re.sub(r"self\.indicators\s*=\s*\[.*?\]", new_indicators_line, modified_code, flags=re.DOTALL)
 
     return modified_code
+
+
+def run_asset_screening_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+    print(f"--- ASSET SCREENER ({batch_id}): Starting job ---")
+    
+    symbols_to_screen = config['symbols_to_screen']
+    original_code = config['strategy_code']
+    total_runs = len(symbols_to_screen)
+    
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Starting to screen {total_runs} assets..."}})
+    
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+        for i, symbol in enumerate(symbols_to_screen):
+            
+            # --- Dynamically modify the code to set the symbol ---
+            # This is much more robust than relying on the backtest engine to do it.
+            modified_code = re.sub(
+                r"self\.symbol\s*=\s*['\"].*?['\"]", # Find `self.symbol = '...'`
+                f"self.symbol = '{symbol}'",      # Replace it with the current symbol
+                original_code
+            )
+            
+            # The "name" of the strategy for this run is just the symbol itself
+            strategy_display_name = symbol
+            
+            executor.submit(
+                # We can reuse the same backtest worker!
+                process_backtest_job, # Reusing the simple batch worker is perfect
+                batch_id=batch_id,
+                manager=manager,
+                job_id=str(uuid.uuid4()),
+                file_name=strategy_display_name,
+                file_content=modified_code, # Pass the modified code
+                initialCapital=1000, # This could also be a config option
+                client=get_client('binance'),
+                queue=queue,
+                loop=loop
+            )
+            
+    # The manager doesn't wait, it just submits all jobs. The completion message is sent
+    # after the last worker finishes, which we can track if needed, or just let the user see.
+    # For now, we assume the job is "done" when all tasks are submitted.
+    # A more advanced version would use `as_completed` to send the final message.
+    print(f"--- ASSET SCREENER ({batch_id}): All screening jobs submitted. ---")

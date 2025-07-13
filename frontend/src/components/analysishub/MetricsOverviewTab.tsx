@@ -38,7 +38,7 @@ const metricsConfig = [
     { key: 'Profit_Percentage', label: 'Total Return', tooltip: 'Total return as a percentage of the initial capital.', format: formatPercent },
     { key: 'Annual_Return', label: 'Annual Return', tooltip: 'The geometric average amount of money earned by an investment each year.', format: formatPercent },
     { key: 'Commission', label: 'Commissions', tooltip: 'The overall commissions deducted on this trade span.', format: formatPercent, color: 'error.main' }, 
-    { key: 'Avg_Monthly_Return', label: 'Monthly Return', tooltip: 'The average monthly return.', format: formatPercent },
+    { key: 'Max_Drawdown_Duration_days', label: 'DD Duration', tooltip: 'The longest time it took to recover from a peak (days).', unit: ' days' },
     { key: 'Max_Drawdown', label: 'Max Drawdown', tooltip: 'The largest peak-to-trough decline in portfolio value.', format: formatPercent, color: 'error.main' },
     { key: 'Winrate', label: 'Win Rate', tooltip: 'The percentage of trades that were profitable.', format: formatPercent },
     { key: 'RR', label: 'Risk:Reward', tooltip: 'The average profit from winning trades divided by the average loss from losing trades.', format: formatRatio },

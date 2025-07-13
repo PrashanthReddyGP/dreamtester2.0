@@ -3,9 +3,11 @@ import traceback
 try:
     import ast
     import sys
+    import time
     import uuid
     import asyncio
-    from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request
+    from typing import List
+    from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, Response
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel, Field
     from typing import Optional, List, Dict
@@ -28,12 +30,14 @@ try:
         get_backtest_job 
     )
 
-    from pipeline import run_optimization_manager, run_batch_manager
+    from pipeline import run_optimization_manager, run_asset_screening_manager, run_batch_manager
+    from core.connect_to_brokerage import get_client
 
     ##########################################
 
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 
     class BacktestSubmitConfig(BaseModel):
         strategyCode: str
@@ -101,7 +105,9 @@ try:
         parameters_to_optimize: List[OptimizableParameterModel]
 
 
-
+    class AssetScreeningBody(BaseModel):
+        strategy_code: str
+        symbols_to_screen: List[str]
 
     class ConnectionManager:
         def __init__(self):
@@ -161,6 +167,9 @@ try:
         allow_methods=["*"], # Allows all methods (GET, POST, OPTIONS, etc.)
         allow_headers=["*"], # Allows all headers
     )
+
+    symbol_cache = {}
+    CACHE_DURATION_SECONDS = 3600  # Cache for 1 hour
 
 
 
@@ -343,6 +352,60 @@ try:
                                             })
                 break # Stop after finding __init__
         return parsed_data
+
+    @app.post("/api/screen/submit")
+    async def submit_asset_screening(body: AssetScreeningBody, background_tasks: BackgroundTasks, request: Request):
+        batch_id = str(uuid.uuid4())
+        create_backtest_job(batch_id)
+        
+        config_dict = body.model_dump()
+        queue = request.app.state.websocket_queue
+        main_loop = asyncio.get_running_loop()
+        
+        # Call the new manager function
+        background_tasks.add_task(
+            run_asset_screening_manager,
+            batch_id=batch_id,
+            config=config_dict,
+            manager=manager,
+            queue=queue,
+            loop=main_loop
+        )
+        return {"message": "Asset screening job started.", "batch_id": batch_id}
+
+    @app.get("/api/exchange/symbols/{exchange_name}", response_model=List[str])
+    async def get_exchange_symbols(exchange_name: str, response: Response):
+        """
+        Fetches all available trading symbols (pairs) for a given exchange.
+        Results are cached for 1 hour to reduce API calls to the exchange.
+        """
+        current_time = time.time()
+        
+        # Check if a valid cache exists
+        if exchange_name in symbol_cache:
+            cache_time, cached_symbols = symbol_cache[exchange_name]
+            if current_time - cache_time < CACHE_DURATION_SECONDS:
+                print(f"Serving symbols for '{exchange_name}' from cache.")
+                return cached_symbols
+                
+        try:
+            print(f"Fetching fresh symbols for '{exchange_name}' from the exchange.")
+            client = get_client(exchange_name)
+            
+            # Fetch all symbols from Binance USDⓈ-M Futures
+            futures_exchange_info = client.exchange_info()
+            symbols = [symbol['symbol'] for symbol in futures_exchange_info['symbols'] if symbol['status'] == 'TRADING']
+            
+            # Sort symbols alphabetically
+            sorted_symbols = sorted(symbols)
+            
+            return sorted_symbols
+            
+        except Exception as e:
+            print(f"ERROR: Could not fetch symbols for {exchange_name}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch symbols for {exchange_name}.")
+
+
 
     ###########################################################################################
 

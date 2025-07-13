@@ -22,7 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTerminal } from '../context/TerminalContext';
 import { useAnalysis } from '../context/AnalysisContext';
 import { OptimizeModal } from '../components/strategylab/OptimizeModal';
-import type { OptimizationConfig } from '../components/strategylab/OptimizeModal';
+import type { OptimizationConfig, TestSubmissionConfig } from '../components/strategylab/OptimizeModal';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -641,6 +641,62 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
+    const handleRunAdvancedTest = async (config: TestSubmissionConfig) => {
+        setIsOptimizing(true);
+        console.log("Submitting optimization with config:", config);
+
+        try {
+            clearResults();
+            await handleSaveContent();
+
+            let response;
+            if (config.mode === 'parameters') {
+                // Call the parameter optimization endpoint
+                const { mode, ...payload } = config; // Remove mode before sending
+                response = await fetch(`${API_URL}/api/optimize/submit`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+            } else { // config.mode === 'assets'
+                // Call the asset screening endpoint
+                const { mode, ...payload } = config; // Remove mode before sending
+                response = await fetch(`${API_URL}/api/screen/submit`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+            }
+            
+            if (!response.ok) {
+                // Try to get a detailed error message from the backend's JSON response
+                const errorData = await response.json().catch(() => ({ detail: 'An unknown server error occurred.' }));
+                // Throw an error to be caught by the catch block
+                throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
+            }
+
+            // 5. Handle the successful response
+            const result = await response.json();
+
+            // 6. Connect to the WebSocket stream and navigate to the results page
+            if (result.batch_id) {
+                connectToBatch(result.batch_id); // This function is from your useTerminal context
+                navigate('/analysis'); // Redirect the user to see the results stream in
+                toggleTerminal(true); // Open the terminal to show live logs from the backend
+            } else {
+                // This is an important edge case to handle
+                throw new Error("Submission was successful, but no batch ID was returned from the server.");
+            }
+
+        } catch (error) {
+            console.error("Failed to run optimization:", error);
+            // Use a user-friendly alert to show the error
+            alert(`Error submitting optimization: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
+        } finally {
+            setIsOptimizing(false);
+            handleCloseOptimizeModal();
+        }
+    };
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -718,7 +774,7 @@ export const StrategyLab: React.FC = () => {
             <OptimizeModal
                 open={isOptimizeModalOpen}
                 onClose={handleCloseOptimizeModal}
-                onSubmit={handleRunOptimization}
+                onSubmit={handleRunAdvancedTest}
                 strategyCode={currentEditorCode}
                 isSubmitting={isOptimizing}
             />
