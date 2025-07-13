@@ -12,7 +12,7 @@ class BaseStrategy:
         self.timeframe = timeframe
         self.start_date = start_date
         self.end_date = end_date
-        
+
         # Indicators as a dictionary, specifying the indicator type and parameters
         self.indicators = [
             ('ATR', '1m', (100, 8))
@@ -23,12 +23,12 @@ class BaseStrategy:
         self.initial_capital = capital
         self.capital = capital
         self.cash = cash
-        self.risk_percent = risk_percent
         self.equity = [capital]  # Track equity over time
         self.portfolio_equity = [capital]
         
-        self.rr = 3
-        
+        self.rr = 2
+        self.risk_percent = risk_percent
+
         self.commission = 0
         self.no_fee_equity = 0
         
@@ -72,29 +72,32 @@ class BaseStrategy:
         
         name = name.lower() # Standardize to lowercase
         
-        if name == 'sma':
+        if name != 'sma':
+            return name.replace(' ', '_')
+        else:
             # Assumes your process_indicators creates columns like 'sma_50', 'sma_200'
             length = int(params[0]) 
             return f'sma_{length}'
-        
-        elif name == 'atr':
-            # This is based on your example code which expects 'stoploss_short' and 'atr'
-            # We will assume the primary column for the JIT function is 'stoploss_short'
-            # Your indicator calculator must create this column.
-            # NOTE: Your example passes both stoploss_short and atr. We will handle this in Step 2.
-            # For this helper, we'll map it to the main stop-loss column.
-            return 'stoploss_short'
+    
+    # --- THIS IS THE NEW, CENTRALIZED LOGIC ---
+    def _get_indicator_args(self):
+        """
+        Iterates through self.indicators and builds the list of numpy arrays
+        to be passed to the JIT function. This method handles all special cases.
+        """
+        args = []
+        for indicator_tuple in self.indicators:
+            indicator_name = indicator_tuple[0].lower()
             
-        elif name == 'hl oscillator':
-            return 'hl_oscillator'
-            
-        # Add elif blocks for every other indicator type you use...
-        # elif name == 'rsi':
-        #     return f'rsi_{params[0]}'
-            
-        else:
-            # Fallback for simple indicators that use their own name
-            return name.replace(' ', '_')
+            # --- HANDLE SPECIAL CASES CENTRALLY ---
+            if indicator_name != 'sma':
+                pass
+            else:
+                column_name = self._get_indicator_column_name(indicator_tuple)
+                args.append(self.df[column_name].values)
+                
+        return args
+
     
     def optimized_run(self):
         pass
