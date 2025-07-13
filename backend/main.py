@@ -35,7 +35,6 @@ try:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-
     class BacktestSubmitConfig(BaseModel):
         strategyCode: str
         asset: str
@@ -102,19 +101,6 @@ try:
         parameters_to_optimize: List[OptimizableParameterModel]
 
 
-    # Create the FastAPI application instance
-    app = FastAPI()
-
-    origins = ["http://localhost:5173"]
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["*"], # Allows all methods (GET, POST, OPTIONS, etc.)
-        allow_headers=["*"], # Allows all headers
-    )
-
 
 
     class ConnectionManager:
@@ -143,8 +129,48 @@ try:
                 tasks = [connection.send_json(message) for connection in self.active_connections[batch_id]]
                 await asyncio.gather(*tasks)
 
+    websocket_queue = asyncio.Queue()
+
     # --- 6. CREATE A SINGLE, GLOBAL INSTANCE OF THE MANAGER ---
     manager = ConnectionManager()
+
+
+                
+    async def websocket_sender(queue: asyncio.Queue, manager: ConnectionManager):
+        """
+        This coroutine runs forever, waiting for messages to appear in the queue
+        and sending them to the correct clients.
+        """
+        while True:
+            batch_id, message = await queue.get()
+            await manager.send_json_to_batch(batch_id, message)
+            queue.task_done()
+
+
+
+
+    # Create the FastAPI application instance
+    app = FastAPI()
+
+    origins = ["http://localhost:5173"]
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"], # Allows all methods (GET, POST, OPTIONS, etc.)
+        allow_headers=["*"], # Allows all headers
+    )
+
+
+
+    @app.on_event("startup")
+    async def startup_event():
+        # Create the queue here. It will be passed to tasks as needed.
+        app.state.websocket_queue = asyncio.Queue()
+        # Start the websocket_sender task and give it the queue
+        asyncio.create_task(websocket_sender(app.state.websocket_queue, manager))
+
 
 
 
@@ -337,7 +363,7 @@ try:
         return {"job_id": job_id}
 
     @app.post("/api/backtest/batch-submit")
-    def submit_batch_backtest_endpoint(files: List[StrategyFileModel], background_tasks: BackgroundTasks):    
+    async def submit_batch_backtest_endpoint(files: List[StrategyFileModel], background_tasks: BackgroundTasks, request: Request):
         """
         Accepts a batch of strategies, creates a job record, queues a background task,
         and returns a unique batch_id for the client to connect to via WebSocket.
@@ -351,8 +377,18 @@ try:
         
         files_data = [file.model_dump() for file in files]
         
-        # Pass the manager instance to the background task so it can send updates
-        background_tasks.add_task(run_batch_manager, batch_id=batch_id, files_data=files_data, manager=manager)
+        # Get the queue and pass it
+        queue = request.app.state.websocket_queue
+        main_loop = asyncio.get_running_loop() # Get the loop
+
+        background_tasks.add_task(
+            run_batch_manager, 
+            batch_id=batch_id, 
+            files_data=files_data, 
+            manager=manager,
+            queue=queue,
+            loop=main_loop
+        )
         
         return {"message": "Batch processing started.", "batch_id": batch_id}
 
@@ -368,15 +404,22 @@ try:
         return job_data
 
     @app.post("/api/optimize/submit")
-    def submit_optimization(body: OptimizationSubmitBody, background_tasks: BackgroundTasks):
+    async def submit_optimization(body: OptimizationSubmitBody, background_tasks: BackgroundTasks, request: Request):
         batch_id = str(uuid.uuid4())
         create_backtest_job(batch_id) # Reuse the same job table for tracking
         
+        config_dict = body.model_dump()
+        # Get the queue from the app state and pass it to the background task
+        queue = request.app.state.websocket_queue
+        main_loop = asyncio.get_running_loop()
+
         background_tasks.add_task(
             run_optimization_manager,
             batch_id=batch_id,
-            config=body.model_dump(), # Pass the entire validated config
-            manager=manager
+            config=config_dict,
+            manager=manager,
+            queue=queue,
+            loop=main_loop
         )
         return {"message": "Optimization job started.", "batch_id": batch_id}
 
@@ -400,7 +443,6 @@ try:
                 await websocket.receive_text() 
         except WebSocketDisconnect:
             manager.disconnect(websocket, batch_id)
-
 
     if __name__ == "__main__":
         import uvicorn

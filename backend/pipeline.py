@@ -21,26 +21,34 @@ from core.metrics import calculate_metrics
 from core.connect_to_brokerage import get_client
 
 
-
-def send_websocket_update(manager: any, batch_id: str, message: dict):
+def send_update_to_queue(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, batch_id: str, message: dict):
     """
-    Safely runs the async send_json_to_batch function from a synchronous context.
+    A thread-safe way to send a message from a sync worker
+    to the async WebSocket sender task.
     """
-    # Get the current event loop or create a new one if none exists
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:  # 'There is no current event loop...'
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    # This logic remains the same, it finds the main event loop
+    loop.call_soon_threadsafe(queue.put_nowait, (batch_id, message))
 
-    # Schedule the async task to be run
-    loop.run_until_complete(manager.send_json_to_batch(batch_id, message))
+
+# def send_websocket_update(manager: any, batch_id: str, message: dict):
+#     """
+#     Safely runs the async send_json_to_batch function from a synchronous context.
+#     """
+#     # Get the current event loop or create a new one if none exists
+#     try:
+#         loop = asyncio.get_running_loop()
+#     except RuntimeError:  # 'There is no current event loop...'
+#         loop = asyncio.new_event_loop()
+#         asyncio.set_event_loop(loop)
+
+#     # Schedule the async task to be run
+#     loop.run_until_complete(manager.send_json_to_batch(batch_id, message))
 
 
 
 
 # --- NEW: The Batch Manager Function ---
-def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
+def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop): 
     """
     Orchestrates the batch in parallel. It now primarily collects raw data
     for the final portfolio calculation, as workers send their own UI updates.
@@ -48,7 +56,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
     print(f"--- BATCH MANAGER ({batch_id}): Starting PARALLEL batch processing ---")
     
     # --- 2. SEND INITIAL STATUS UPDATE ---
-    send_websocket_update(manager, batch_id, {
+    send_update_to_queue(loop, queue, batch_id, {
         "type": "log", "payload": {"level": "INFO", "message": f"Starting batch of {len(files_data)} strategies..."}
     })
     
@@ -67,7 +75,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
         
         # Create a dictionary to map a "future" object back to its file_name
         future_to_file = {
-            executor.submit(process_backtest_job, batch_id, manager, str(uuid.uuid4()), file['name'], file['content'], initialCapital, client): file
+            executor.submit(process_backtest_job, batch_id, manager, str(uuid.uuid4()), file['name'], file['content'], initialCapital, client, queue, loop): file
             for file in files_data
         }
         
@@ -83,7 +91,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
                 # Check if the job failed and returned None
                 if result_tuple is None:
                     print(f"--> Manager skipping failed job: {file_info['name']}")
-                    send_websocket_update(manager, batch_id, {"type": "error", "payload": {"message": f"{file_info['name']}: Skipping failed job!"}})
+                    send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": f"{file_info['name']}: Skipping failed job!"}})
                     continue
                 
                 # The worker has already sent the update, so we just collect the result
@@ -95,15 +103,15 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
                 print(f"!!! {error_msg} !!!")
                 traceback.print_exc()
                 fail_job(batch_id, error_msg)
-                send_websocket_update(manager, batch_id, {"type": "error", "payload": {"message": error_msg}})
+                send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": error_msg}})
 
     # --- 5. Now, all backtests are done. Proceed with combining the results. ---
     print("--- BATCH MANAGER: All backtests complete. Preparing final results... ---")
-    send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"All backtests complete. Preparing final results..."}})
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"All backtests complete. Preparing final results..."}})
 
     if not raw_results_for_portfolio:
         fail_job(batch_id, "No strategies completed successfully.")
-        send_websocket_update(manager, batch_id, {"type": "error", "payload": {"message": "No strategies completed successfully."}})
+        send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": "No strategies completed successfully."}})
         return
     
     # Let's clean up the `strategies_results` list before we use it.
@@ -151,7 +159,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
     if len(raw_results_for_portfolio) > 1:
         
         print("--- BATCH MANAGER: Calculating portfolio... ---")
-        send_websocket_update(manager, batch_id, {"type": "log", "payload": {"level": "INFO", "message": "Calculating portfolio performance..."}})
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "INFO", "message": "Calculating portfolio performance..."}})
 
         try:
             combined_df, combined_dfSignals = pd.DataFrame(), pd.DataFrame()
@@ -202,7 +210,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
             portfolio_payload = prepare_strategy_payload(portfolio_strategy_data, portfolio_metrics, portfolio_returns)
             
             # Send the portfolio result to the UI
-            send_websocket_update(manager, batch_id, {
+            send_update_to_queue(loop, queue, batch_id, {
                 "type": "strategy_result", 
                 "payload": convert_to_json_serializable(portfolio_payload)
             })
@@ -214,7 +222,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
             error_msg = f"ERROR calculating portfolio: {traceback.format_exc()}"
             print(f"!!! CRITICAL PORTFOLIO ERROR !!!\n{error_msg}")
             fail_job(batch_id, error_msg)
-            send_websocket_update(manager, batch_id, {"type": "error", "payload": {"message": "Failed to calculate portfolio."}})
+            send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": "Failed to calculate portfolio."}})
 
         
     # --- PREPARE THE FINAL JSON PAYLOAD ---
@@ -226,35 +234,35 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any):
 
     save_backtest_results(batch_id=batch_id, results=convert_to_json_serializable(final_db_payload))
     update_job_status(batch_id, "completed", "Batch complete.")
-    send_websocket_update(manager, batch_id, {"type": "batch_complete", "payload": {"message": "All tasks finished."}})
+    send_update_to_queue(loop, queue, batch_id, {"type": "batch_complete", "payload": {"message": "All tasks finished."}})
     
     print(f"--- BATCH MANAGER: Job {batch_id} finished and saved. ---")
         
 
 # process_backtest_job should now RETURN the results instead of just printing
-def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: str, file_content: str, initialCapital: int, client):
+def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: str, file_content: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
     """
     Processes a SINGLE backtest job, sends live updates, and returns its results.
     """
     try:
         log_msg = f"Starting backtest for: {file_name}"
-        send_websocket_update(manager, batch_id, {"type": "log", "payload": {"level": "INFO", "message": log_msg}})
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "INFO", "message": log_msg}})
         update_job_status(batch_id, "running", log_msg)
         
         # This pure function does all the heavy lifting
-        strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity = run_single_backtest(batch_id, manager, job_id, file_name, file_content, initialCapital, client)
+        strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity = run_single_backtest(batch_id, manager, job_id, file_name, file_content, initialCapital, client, queue, loop)
         
         # Prepare the payload for the UI
         single_result_payload = prepare_strategy_payload(strategy_data, strategy_metrics, monthly_returns)
         
         # Send the result for this single strategy IMMEDIATELY to the UI
-        send_websocket_update(manager, batch_id, {
+        send_update_to_queue(loop, queue, batch_id, {
             "type": "strategy_result",
             "payload": convert_to_json_serializable(single_result_payload)
         })
         
         log_msg_done = f"Finished processing: {file_name}"
-        send_websocket_update(manager, batch_id, {"type": "log", "payload": {"level": "SUCCESS", "message": log_msg_done}})
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "SUCCESS", "message": log_msg_done}})
         print(f"WORKER: Job {job_id} for {file_name} completed and sent update.")
         
         # Return the raw data for the manager to use later for the portfolio
@@ -264,36 +272,36 @@ def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: st
         error_msg = f"ERROR in {file_name}: {traceback.format_exc()}"
         print(f"!!! CRITICAL ERROR IN WORKER job_id={job_id} !!!\n{error_msg}")
         fail_job(batch_id, error_msg)
-        send_websocket_update(manager, batch_id, {"type": "error", "payload": {"message": f"Failed in {file_name}. See server logs."}})
+        send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": f"Failed in {file_name}. See server logs."}})
         return None
 
 # This is a placeholder for your actual backtest engine
-def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str, strategy_code: str, initialCapital: int, client):
+def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str, strategy_code: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
     
     print(f"--- Running core backtest for {file_name} ---")
-    send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"Running core backtest for {file_name}"}})
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Running core backtest for {file_name}"}})
 
     # 1. Parse the code of config
     strategy_instance, strategy_name = parse_file(job_id, file_name, strategy_code)
     
     # 2. Fetch data
     asset, ohlcv = fetch_candlestick_data(client, strategy_instance)
-    send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Ohlcv Fetch Successful"}})
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Ohlcv Fetch Successful"}})
 
     # 3. Calculate indicators
     ohlcv_idk = calculate_indicators(strategy_instance, ohlcv)
-    send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Indicators Calculation Successful"}})
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Indicators Calculation Successful"}})
 
     # 4. Run simulation
     strategy_data, commission, no_fee_equity = run_backtest_loop(strategy_name, strategy_instance, ohlcv_idk, initialCapital)
-    send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Backtestloop Successful"}})
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Backtestloop Successful"}})
 
     # 5. Calculate metrics (simulated)
     strategy_metrics, monthly_returns = calculate_metrics(strategy_data, initialCapital, commission)
-    send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Metrics Calculation Successful"}})
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Metrics Calculation Successful"}})
 
     print(f"--- Core backtest for {asset} finished ---")
-    send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Core backtest for {file_name} finished"}})
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Core backtest for {file_name} finished"}})
 
     # In a real app, this would return the full results object
     return strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity
@@ -466,22 +474,22 @@ def build_new_indicator_line(original_code: str, modifications: dict) -> str:
 
 
 
-def process_optimization_job(batch_id: str, manager: any, job_id: str, run_num: int, total_runs: int, original_code: str, modifications_for_run: list, strategy_display_name: str):
+def process_optimization_job(batch_id: str, manager: any, job_id: str, run_num: int, total_runs: int, original_code: str, modifications_for_run: list, strategy_display_name: str, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
     try:
         modified_code = modify_strategy_code(original_code, modifications_for_run)
         
         log_msg = f"({run_num}/{total_runs}) Running: {strategy_display_name}"
-        send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": log_msg}})
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": log_msg}})
         
         # The rest of the function is the same, it just uses the modified_code
         initialCapital = 1000
         client = get_client('binance')
         strategy_data, _, metrics, monthly_returns, _ = run_single_backtest(
-            batch_id, manager, job_id, strategy_display_name, modified_code, initialCapital, client
+            batch_id, manager, job_id, strategy_display_name, modified_code, initialCapital, client, queue, loop
         )
         
         full_payload = prepare_strategy_payload(strategy_data, metrics, monthly_returns)
-        send_websocket_update(manager, batch_id, {
+        send_update_to_queue(loop, queue, batch_id, {
             "type": "strategy_result",
             "payload": convert_to_json_serializable(full_payload)
         })
@@ -489,10 +497,10 @@ def process_optimization_job(batch_id: str, manager: any, job_id: str, run_num: 
         error_msg = f"ERROR in run {strategy_display_name}: {traceback.format_exc()}"
         print(error_msg)
         fail_job(batch_id, error_msg)
-        send_websocket_update(manager, batch_id, {"type": "error", "payload": {"message": f"Run '{strategy_display_name}' failed."}})
+        send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": f"Run '{strategy_display_name}' failed."}})
 
 
-def run_optimization_manager(batch_id: str, config: dict, manager: any): # Renamed from run_indicator_optimization_manager
+def run_optimization_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
     params_to_optimize = config['parameters_to_optimize']
     original_code = config['strategy_code']
 
@@ -502,7 +510,7 @@ def run_optimization_manager(batch_id: str, config: dict, manager: any): # Renam
 
     print(f"Total optimization runs to execute: {total_runs}")
 
-    send_websocket_update(manager, batch_id, {"type": "log", "payload": {"message": f"Generated {total_runs} parameter sets to test."}})
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Generated {total_runs} parameter sets to test."}})
 
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
         for i, combo in enumerate(all_combinations):
@@ -518,10 +526,12 @@ def run_optimization_manager(batch_id: str, config: dict, manager: any): # Renam
             
             strategy_display_name = ", ".join(param_strings)
 
-            future = executor.submit(
+            executor.submit(
                 process_optimization_job,
                 batch_id, manager, str(uuid.uuid4()), i + 1, total_runs,
-                original_code, modifications_for_run, strategy_display_name
+                original_code, modifications_for_run, strategy_display_name,
+                queue=queue,
+                loop=loop
             )
 
         #     futures.append(future)
@@ -530,7 +540,7 @@ def run_optimization_manager(batch_id: str, config: dict, manager: any): # Renam
         #     future.result() # Wait for all tasks to complete and raise exceptions if any
 
     update_job_status(batch_id, "completed", "Optimization finished.")
-    send_websocket_update(manager, batch_id, {"type": "batch_complete", "payload": {"message": "Optimization complete."}})
+    send_update_to_queue(loop, queue, batch_id, {"type": "batch_complete", "payload": {"message": "Optimization complete."}})
     print(f"--- OPTIMIZATION MANAGER ({batch_id}): Job finished. ---")
 
 
