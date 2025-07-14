@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import inspect
 import importlib.util
@@ -18,19 +19,26 @@ def parse_file(job_id, file_name, strategy_code):
     """
     Dynamically imports a strategy from code in a thread-safe manner.
     """
+
     temp_filepath = None
     strategy_name = os.path.splitext(file_name)[0]
-    unique_module_name = f"{strategy_name}_{job_id.replace('-', '_')}"
+    # unique_module_name = f"{strategy_name}_{job_id.replace('-', '_')}"
     
     # Use a try...finally block to GUARANTEE cleanup happens
     try:
         # --- 1. Create the temporary .py file ---
-        temp_filepath = os.path.join(TEMP_STRATEGY_DIR, f"{unique_module_name}.py")
+        
+        sanitized_name = re.sub(r'[ |/\\:*?"<>|=]', '_', file_name)
+        temp_filename = f"{sanitized_name}_{job_id.replace('-', '_')}.py"
+        temp_filepath = os.path.join(TEMP_STRATEGY_DIR, temp_filename)
+        
         with open(temp_filepath, "w", encoding='utf-8') as f:
             f.write(strategy_code)
 
+        module_name = os.path.splitext(temp_filename)[0]
+
         # --- 2. Prepare for import ---
-        spec = importlib.util.spec_from_file_location(unique_module_name, temp_filepath)
+        spec = importlib.util.spec_from_file_location(module_name, temp_filepath)
         if spec is None or spec.loader is None:
             raise ImportError(f"Could not create module spec for {file_name}")
             
@@ -73,7 +81,7 @@ def parse_file(job_id, file_name, strategy_code):
                 print(f"Error removing temp .py file: {e}")
         
         # Cleanup the .pyc file if it exists in the __pycache__ directory
-        pyc_path = os.path.join(TEMP_STRATEGY_DIR, "__pycache__", f"{unique_module_name}.cpython-311.pyc") # Adjust python version if needed
+        pyc_path = os.path.join(TEMP_STRATEGY_DIR, "__pycache__", f"{module_name}.cpython-311.pyc") # Adjust python version if needed
         if os.path.exists(pyc_path):
             try:
                 os.remove(pyc_path)

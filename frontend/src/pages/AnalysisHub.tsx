@@ -1,87 +1,71 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Box, Typography, CircularProgress } from '@mui/material';
 import { Panel, PanelGroup } from 'react-resizable-panels';
+import { DataGrid } from '@mui/x-data-grid'; // Import the DataGrid
+import type {GridColDef, GridRenderCellParams} from '@mui/x-data-grid'
 
 // Import the components we just created
 import { StrategyListPanel } from '../components/analysishub/StrategyListPanel';
 import { AnalysisContentPanel } from '../components/analysishub/AnalysisContentPanel';
-import { getLatestBacktestResult } from '../services/api';
-import type { BacktestResultPayload, StrategyResult } from '../services/api';
+import type { StrategyResult } from '../services/api';
 import { ResizeHandle } from '../components/common/ResizeHandle';
-import { useAppContext } from '../context/AppContext'; // Import the context hook
+import { useAnalysis } from '../context/AnalysisContext';
 
 export const AnalysisHub: React.FC = () => {
-  const { latestBacktest, isBacktestLoading, backtestError, fetchLatestResults } = useAppContext();
+  
+  const { results, isComplete } = useAnalysis();
   const [selectedStrategy, setSelectedStrategy] = useState<StrategyResult | null>(null);
-  // const [backtestData, setBacktestData] = useState<BacktestResultPayload | null>(null);
-  // const [isLoading, setIsLoading] = useState(true);
-  // const [error, setError] = useState<string | null>(null);
 
-  // useEffect(() => {
-  //     // A self-calling async function to handle polling
-  //     const pollForResult = async () => {
-  //         try {
-  //             const result = await getLatestBacktestResult();
-  //             if (result && result.strategies_results.length > 0) {
-  //                 setBacktestData(result);
-  //                 // Automatically select the first strategy in the list by default.
-  //                 // This is often the "Portfolio" result if you added it first.
-  //                 setSelectedStrategy(result.strategies_results[0]);
-  //                 setIsLoading(false);
-  //             } else if (result) {
-  //                 // Result was returned but empty, means no strategies were run
-  //                 setError("No strategies were successfully backtested.");
-  //                 setIsLoading(false);
-  //             }
-  //             else {
-  //                 // No result yet (backend returned null), so poll again.
-  //                 setTimeout(pollForResult, 5000);
-  //             }
-
-  //         } catch (err) {
-  //               setError("Failed to load backtest results. Is the backend running?");
-  //             setIsLoading(false);
-  //         }
-  //     };
-
-  //     pollForResult(); // Start the polling process
-  // }, []); // The empty dependency array ensures this runs only once on mount
-
-  React.useEffect(() => {
-      if (latestBacktest && latestBacktest.strategies_results.length > 0) {
-          // If there's no selected strategy yet, or if the selected one is not in the new data,
-          // default to the first one.
-          const currentSelectionExists = latestBacktest.strategies_results.some(s => s.strategy_name === selectedStrategy?.strategy_name);
-          if (!selectedStrategy || !currentSelectionExists) {
-              setSelectedStrategy(latestBacktest.strategies_results[0]);
-          }
+  useEffect(() => {
+    // This logic now works for both batch and optimization runs.
+    // It ensures something is always selected if results exist.
+    if (results.length > 0) {
+      // If nothing is selected, select the first result in the list.
+      if (!selectedStrategy) {
+        setSelectedStrategy(results[0]);
+      } 
+      // This handles a tricky edge case: if a previous selection disappears
+      // (which shouldn't happen in this new model, but is good for robustness),
+      // it re-selects the first item.
+      else if (!results.some(r => r.strategy_name === selectedStrategy.strategy_name)) {
+        setSelectedStrategy(results[0]);
       }
-  }, [latestBacktest, selectedStrategy]);
+    } else {
+        // If results are cleared, clear the selection
+        setSelectedStrategy(null);
+    }
+  }, [results, selectedStrategy]);
 
   const handleSelectStrategy = (strategyName: string) => {
-      const foundStrategy = latestBacktest?.strategies_results.find(s => s.strategy_name === strategyName);
-      if (foundStrategy) {
-          setSelectedStrategy(foundStrategy);
-      }
+    const foundStrategy = results.find(s => s.strategy_name === strategyName);
+    if (foundStrategy) {
+      setSelectedStrategy(foundStrategy);
+    }
   };
 
-  if (isBacktestLoading) {
+  // Condition 1: The process has started but no results have arrived yet.
+  if (results.length === 0 && !isComplete) {
       return (
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', width: '100vw' }}>
-              <CircularProgress />
-              <Typography sx={{ ml: 2 }}>Waiting for backtest results...</Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', width: '100vw' }}>
+              <CircularProgress sx={{ mb: 2 }} />
+              <Typography variant="h6">Running Backtest...</Typography>
+              <Typography variant="body1" color="text.secondary">
+                  Results will appear here in real-time.
+              </Typography>
           </Box>
       );
   }
   
-  if (backtestError) return <Typography color="error">{backtestError}</Typography>;
-
-  if (!latestBacktest || !selectedStrategy) {
-      return (
-        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', width: '100vw' }}>
-          <Typography sx={{ p: 4 }}>No backtest data available. Run a new backtest from the Strategy Lab.</Typography>
-        </Box>
-      )
+  // Condition 2: The process is finished, but there are no results (all failed).
+  if (results.length === 0 && isComplete) {
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', width: '100vw' }}>
+          <Typography variant="h5" color="error">Backtest Failed</Typography>
+          <Typography variant="body1" color="text.secondary">
+              No strategies completed successfully. Check the terminal for error logs.
+          </Typography>
+      </Box>
+    )
   }
 
   return (
@@ -91,23 +75,20 @@ export const AnalysisHub: React.FC = () => {
 
         <Panel style={{flexGrow:1}}>
           <StrategyListPanel
-            results={latestBacktest.strategies_results.map(s => ({ id: s.strategy_name, name: s.strategy_name }))}
-            selectedId={selectedStrategy.strategy_name}
+            results={results.map(s => ({ id: s.strategy_name, name: s.strategy_name }))}
+            selectedId={selectedStrategy?.strategy_name || ''}
             onSelect={handleSelectStrategy}
-            onReload={fetchLatestResults} 
-            isLoading={isBacktestLoading}
           />
         </Panel>
 
         <ResizeHandle/>
         
         <Panel style={{flexGrow:4}}>
-          {selectedStrategy && latestBacktest? (
+          {selectedStrategy ? (
             <AnalysisContentPanel 
-                // Pass the selected strategy object down
+                results={results}
                 result={selectedStrategy} 
-                // Also pass down the initial capital for PnL calculations
-                initialCapital={latestBacktest.initial_capital}
+                initialCapital={1000}
             />
             ) : (
                 <Typography sx={{ p: 4 }}>Select a strategy to view results.</Typography>
@@ -118,4 +99,4 @@ export const AnalysisHub: React.FC = () => {
 
     </Box>
   );
-};
+}

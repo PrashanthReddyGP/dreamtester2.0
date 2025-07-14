@@ -32,7 +32,18 @@ def calculate_indicators(strategy_instance, df):
                 df = idk.calculate_wma(df, length)
                 
             else:
-                print(f"WMA takes 1 Input Value, But {len(params)} were given...")
+                print(f"WMA takes 1 Input Value, But {len(params)} were given...")        
+                
+        if name == 'HMA':
+            
+            # Ensure you have only 1 value
+            if len(params) == 1:
+                # Convert the first three params to integers (or float, as needed)
+                length = int(params[0])  # or float(params[0]) if you need float
+                df = idk.calculate_hma(df, length)
+                
+            else:
+                print(f"HMA takes 1 Input Value, But {len(params)} were given...")
         
         if name == 'SMA':
 

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
 import { Box, CssBaseline, AppBar, Toolbar, Typography, IconButton, Button, useTheme, Paper } from '@mui/material';
 import ScienceIcon from '@mui/icons-material/Science';
+import TerminalIcon from '@mui/icons-material/Terminal';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
@@ -9,6 +10,9 @@ import Brightness7Icon from '@mui/icons-material/Brightness7';
 import SettingsIcon from '@mui/icons-material/Settings';
 import { SettingsModal } from '../components/common/SettingsModal';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'; 
+import { TerminalPanel } from '../components/common/TerminalPanel';
+import { useTerminal } from '../context/TerminalContext';
 
 interface MainLayoutProps {
   mode: 'light' | 'dark';
@@ -24,19 +28,30 @@ const navItems = [
 export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => {
   const theme = useTheme();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const { isTerminalOpen, toggleTerminal } = useTerminal();
 
   const STATUS_BAR_HEIGHT = 24;
   const [statusMessage, setStatusMessage] = useState('Ready'); // Placeholder state for the message
-
-  const handleSettingsClick = () => {
-    setSettingsOpen(true);
-  };
 
   // Style for active NavLink
   const activeLinkStyle = {
     backgroundColor: theme.palette.action.hover,
     color: theme.palette.text.primary,
   };
+  
+
+  // const handleToggleTerminal = () => {
+  //   setIsTerminalOpen(prevState => !prevState);
+  // };
+
+  const handleSettingsClick = () => {
+    setSettingsOpen(true);
+  };
+
+  // A simple vertical resize handle
+  const VerticalResizeHandle = () => (
+    <PanelResizeHandle style={{ height: '1px', background: theme.palette.divider }} />
+  );
 
   return (
     <>
@@ -75,9 +90,15 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
               ))}
             </Box>
             <Box>
+
               <IconButton sx={{ ml: 1 }} onClick={toggleTheme} color="inherit">
                 {mode === 'dark' ? <Brightness7Icon /> : <Brightness4Icon />}
+              </IconButton>  
+
+              <IconButton sx={{ ml: 1 }} onClick={() => toggleTerminal()} color="inherit">
+                <TerminalIcon />
               </IconButton>
+
               <IconButton sx={{ ml: 1 }} color="inherit" onClick={handleSettingsClick}>
                 <SettingsIcon />
               </IconButton>
@@ -85,43 +106,52 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
           </Toolbar>
         </AppBar>
 
-        <Box
-          component="main"
-          sx={{
-            height: '100vh',
-            width: '100vw',
-            display: 'flex',
-            flexDirection: 'column',
-            bgcolor: 'background.default',
-            // overflow: 'clip'
-          }}
-        >
+        <Box component="main" sx={{height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', bgcolor: 'background.default',}}>
+          
           <Toolbar />
           
-          <Box sx={{ flexGrow: 1, display: 'flex', height: `calc(100vh - 64px - ${STATUS_BAR_HEIGHT}px)`, overflow:'hidden'}}>
-            <Outlet />
+          <Box sx={{height: `calc(100vh - 64px - ${STATUS_BAR_HEIGHT}px)`}}>
+          
+            <PanelGroup direction="vertical">
+          
+              <Panel style={{display:'flex'}}>
+                <Outlet />
+              </Panel>
+
+              {/* Conditionally Render the Terminal Panel and its Handle */}
+              {isTerminalOpen && (
+                <>
+                  <VerticalResizeHandle />
+                  <Panel defaultSize={25} minSize={15} maxSize={50}>
+                    <TerminalPanel onClose={() => toggleTerminal(false)} />
+                  </Panel>
+                </>
+              )}
+          
+            </PanelGroup>
+          
           </Box>
 
-        <Paper 
-          component="footer" 
-          square 
-          elevation={0}
-          sx={{
-            height: `${STATUS_BAR_HEIGHT}px`,
-            borderTop: 1,
-            borderColor: 'divider',
-            display: 'flex',
-            alignItems: 'center',
-            px: 2,
-            gap: 1,
-            backgroundColor: 'background.paper'
-          }}
-        >
-          <CheckCircleOutlineIcon sx={{ color: 'success.main', fontSize: '1rem' }} />
-          <Typography variant="caption" color="text.secondary">
-            {statusMessage}
-          </Typography>
-        </Paper>
+          <Paper 
+            component="footer" 
+            square 
+            elevation={0}
+            sx={{
+              height: `${STATUS_BAR_HEIGHT}px`,
+              borderTop: 1,
+              borderColor: 'divider',
+              display: 'flex',
+              alignItems: 'center',
+              px: 2,
+              gap: 1,
+              backgroundColor: 'background.paper'
+            }}
+          >
+            <CheckCircleOutlineIcon sx={{ color: 'success.main', fontSize: '1rem' }} />
+            <Typography variant="caption" color="text.secondary">
+              {statusMessage}
+            </Typography>
+          </Paper>
 
         </Box>
 

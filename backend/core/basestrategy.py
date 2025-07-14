@@ -12,7 +12,7 @@ class BaseStrategy:
         self.timeframe = timeframe
         self.start_date = start_date
         self.end_date = end_date
-        
+
         # Indicators as a dictionary, specifying the indicator type and parameters
         self.indicators = [
             ('ATR', '1m', (100, 8))
@@ -23,11 +23,14 @@ class BaseStrategy:
         self.initial_capital = capital
         self.capital = capital
         self.cash = cash
-        self.risk_percent = risk_percent
         self.equity = [capital]  # Track equity over time
         self.portfolio_equity = [capital]
         
-        self.rr = 3
+        self.rr = 2
+        self.risk_percent = risk_percent
+
+        self.commission = 0
+        self.no_fee_equity = 0
         
         if df is not None and not df.empty:
             
@@ -59,6 +62,42 @@ class BaseStrategy:
     # def stoploss_condition(self, i, j):
     #     """Override this method in specific strategy class to define exit conditions."""
     #     raise NotImplementedError
+    
+    def _get_indicator_column_name(self, indicator_tuple):
+        """
+        Generates the DataFrame column name based on an indicator tuple.
+        This MUST match the naming convention used in your process_indicators.py.
+        """
+        name, timeframe, params = indicator_tuple
+        
+        name = name.lower() # Standardize to lowercase
+        
+        if name != 'sma':
+            return name.replace(' ', '_')
+        else:
+            # Assumes your process_indicators creates columns like 'sma_50', 'sma_200'
+            length = int(params[0]) 
+            return f'sma_{length}'
+    
+    # --- THIS IS THE NEW, CENTRALIZED LOGIC ---
+    def _get_indicator_args(self):
+        """
+        Iterates through self.indicators and builds the list of numpy arrays
+        to be passed to the JIT function. This method handles all special cases.
+        """
+        args = []
+        for indicator_tuple in self.indicators:
+            indicator_name = indicator_tuple[0].lower()
+            
+            # --- HANDLE SPECIAL CASES CENTRALLY ---
+            if indicator_name != 'sma':
+                pass
+            else:
+                column_name = self._get_indicator_column_name(indicator_tuple)
+                args.append(self.df[column_name].values)
+                
+        return args
+
     
     def optimized_run(self):
         pass
@@ -147,7 +186,7 @@ class BaseStrategy:
         
         dfSignals = df[df['Signal'] != 0]
         
-        return self.equity, dfSignals, df
+        return self.equity, dfSignals, df, self.commission, self.no_fee_equity
     
     def portfolio(self, timestamps, results, rrs, reductions, commissioned_returns_combined):
 
@@ -183,5 +222,5 @@ class BaseStrategy:
             
             # Update the previous timestamp to the current one for the next iteration
             previous_timestamp = current_timestamp
-        
+
         return self.portfolio_equity

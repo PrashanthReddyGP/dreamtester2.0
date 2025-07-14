@@ -7,10 +7,67 @@ import { StrategyLab } from './pages/StrategyLab';
 import { AnalysisHub } from './pages/AnalysisHub';
 import { AnimatedPage } from './components/common/AnimatedPage';
 import { loader } from '@monaco-editor/react';
+
 import AppContext from './context/AppContext';
 import type { SettingsState, ApiKeySet } from './context/types';
-import { getLatestBacktestResult } from './services/api'; // Import the service
-import type { BacktestResultPayload } from './services/api';
+import { TerminalContextProvider, useTerminal } from './context/TerminalContext';
+import { AnalysisContextProvider, useAnalysis } from './context/AnalysisContext';
+import { websocketService } from './services/websocketService';
+
+
+
+// --- 1. THE NEW WebSocketManager COMPONENT ---
+// This component does not render any UI. Its sole purpose is to listen
+// to the WebSocket service and route data to the correct context.
+const WebSocketManager: React.FC = () => {
+    const { addLog, setIsConnected } = useTerminal();
+    const { addResult, markComplete } = useAnalysis();
+
+    useEffect(() => {
+        // Subscribe to the central WebSocket service
+        const subscription = websocketService.subscribe((data: any) => {
+            const { type, payload } = data;
+
+            // This switch statement is the router for all incoming data
+            switch (type) {
+                case 'log':
+                    addLog(payload.level || 'INFO', payload.message);
+                    break;
+                case 'error':
+                    addLog('ERROR', `ERROR: ${payload.message}`);
+                    break;
+                case 'strategy_result':
+                    addResult(payload);
+                    break;
+                case 'batch_complete':
+                    addLog('SUCCESS', '--- BATCH COMPLETE ---');
+                    markComplete();
+                    break;
+                case 'system':
+                    if (payload.event === 'open') {
+                        setIsConnected(true);
+                        addLog('SYSTEM', 'Connection established. Waiting for logs...');
+                    } else if (payload.event === 'close') {
+                        setIsConnected(false);
+                        addLog('SYSTEM', 'Connection closed.');
+                    } else if (payload.event === 'error') {
+                        addLog('ERROR', payload.message || 'A WebSocket error occurred.');
+                    }
+                    break;
+                default:
+                    console.warn("Unhandled WebSocket message type:", type);
+            }
+        });
+
+        // Unsubscribe when the component unmounts to prevent memory leaks
+        return () => {
+            subscription.unsubscribe();
+        };
+    // The dependency array ensures this effect always has the latest versions of the context methods
+    }, [addLog, setIsConnected, addResult, markComplete]);
+
+    return null; // This component renders nothing
+};
 
 loader.init().then((monacoInstance) => {
   const darkTheme = getAppTheme('dark');
@@ -22,14 +79,13 @@ loader.init().then((monacoInstance) => {
   });
 });
 
-const API_URL = 'http://127.0.0.1:8000'; // Your FastAPI backend URL
+const API_URL = 'http://127.0.0.1:8000'; // FastAPI backend URL
 
 function App() {
+  
   const [mode, setMode] = useState<'light' | 'dark'>('dark');
-
   const [settings, setSettings] = useState<SettingsState>({});
   const [isLoading, setIsLoading] = useState(true);
-
   const [error, setError] = useState<string | null>(null);
 
   const toggleTheme = () => {
@@ -83,7 +139,6 @@ function App() {
         throw new Error(errorData.detail || 'Failed to save keys on the server.');
       }
       
-      // After saving, reload the data to ensure UI is in sync
       await loadInitialData(); 
       return await response.json();
 
@@ -97,64 +152,28 @@ function App() {
     loadInitialData();
   }, []);
 
-  const [latestBacktest, setLatestBacktest] = useState<BacktestResultPayload | null>(null);
-  const [isBacktestLoading, setIsBacktestLoading] = useState(false); // Start as false
-  const [backtestError, setBacktestError] = useState<string | null>(null);
-
-  const fetchLatestResults = () => {
-    // Prevent multiple polls from running at once
-    if (isBacktestLoading) return;
-    
-    setIsBacktestLoading(true);
-    setBacktestError(null);
-    setLatestBacktest(null); // Clear old results while new one is loading
-
-    const poll = async () => {
-        try {
-            const result = await getLatestBacktestResult();
-            if (result) {
-                setLatestBacktest(result);
-                setIsBacktestLoading(false);
-            } else {
-                // Keep polling if still loading and no error
-                if (isBacktestLoading) {
-                    setTimeout(poll, 5000);
-                }
-            }
-        } catch (err) {
-            setBacktestError("Failed to load backtest results.");
-            setIsBacktestLoading(false);
-        }
-    };
-
-    poll(); // Start the polling
-  };
-  
-  const contextValue = {
-    settings,
-    isLoading,
-    error,
-    saveApiKeys,
-    latestBacktest,
-    isBacktestLoading,
-    backtestError,
-    fetchLatestResults,
-  };
+  const contextValue = { settings, isLoading, error, saveApiKeys };
 
   return (
     <AppContext.Provider value={contextValue}>
-      <ThemeProvider theme={theme}>
-        <Router>
-          <Routes>
-            <Route element={<MainLayout mode={mode} toggleTheme={toggleTheme} />}>
-              <Route path="/" element={<Navigate to="/lab" replace />} />
-              <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
-              <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
-              <Route path="/automation" element={<div  style={{display:'flex', justifyContent:'center', alignItems:'center', width:'100%'}}><AnimatedPage>Automation Page</AnimatedPage></div>} />
-            </Route>
-          </Routes>
-        </Router>
-      </ThemeProvider>
+      <TerminalContextProvider>
+        <AnalysisContextProvider>
+          <WebSocketManager />
+
+          <ThemeProvider theme={theme}>
+            <Router>
+              <Routes>
+                <Route element={<MainLayout mode={mode} toggleTheme={toggleTheme} />}>
+                  <Route path="/" element={<Navigate to="/lab" replace />} />
+                  <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
+                  <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
+                  <Route path="/automation" element={<div style={{display:'flex', justifyContent:'center', alignItems:'center', width:'100%'}}><AnimatedPage>Automation Page</AnimatedPage></div>} />
+                </Route>
+              </Routes>
+            </Router>
+          </ThemeProvider>
+        </AnalysisContextProvider>
+      </TerminalContextProvider>
     </AppContext.Provider>
   );
 }

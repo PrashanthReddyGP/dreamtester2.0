@@ -32,7 +32,7 @@ def run_backtest_loop(strategy_name, strategy_instance, df, initialCapital):
     print(f"Running strategy: {strategy_instance}")
     
     try:
-        equity, dfSignals, strategy_df = strategy_instance.run()
+        equity, dfSignals, strategy_df, commission, no_fee_equity = strategy_instance.run()
         
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 
@@ -41,7 +41,7 @@ def run_backtest_loop(strategy_name, strategy_instance, df, initialCapital):
             'strategy_name': strategy_name,
             'equity': equity,
             'ohlcv':df,
-            'signals': dfSignals
+            'signals': dfSignals,
         }
         
         # strategiesList.append(strategy_data)
@@ -53,7 +53,7 @@ def run_backtest_loop(strategy_name, strategy_instance, df, initialCapital):
         
         # combined_dfSignals = pd.concat([combined_dfSignals, dfSignals], ignore_index=True)
         
-        return strategy_data
+        return strategy_data, commission, no_fee_equity
         
     except Exception as e:
         print(f"Error running strategy {strategy_instance}: {e}")

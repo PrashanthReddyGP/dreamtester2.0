@@ -17,7 +17,7 @@ const calculateDrawdown = (equityCurve: number[][]) => {
   });
 };
 
-export const OverviewTab: React.FC<{
+export const EquityTab: React.FC<{
   equity: EquityCurvePoint[];
   initialCapital: number;
   isPortfolio: boolean; 

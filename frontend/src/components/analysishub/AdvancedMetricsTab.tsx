@@ -18,6 +18,7 @@ import {
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 
 import type { MonthlyReturns, StrategyMetrics } from '../../services/api';
+import { color } from 'echarts';
 
 // The MetricItem sub-component is used to render each individual metric line.
 interface MetricItemProps {
@@ -47,7 +48,7 @@ const MetricItem: FC<MetricItemProps> = ({ label, value, tooltip, color }) => (
 
 
 // 2. The main component now accepts the `metrics` object as a prop.
-export const MetricsTab: FC<{ metrics: StrategyMetrics, monthlyReturns: MonthlyReturns }> = ({ metrics, monthlyReturns }) => {
+export const AdvancedMetricsTab: FC<{ metrics: StrategyMetrics, monthlyReturns: MonthlyReturns }> = ({ metrics, monthlyReturns }) => {
   const theme = useTheme();
 
   // Helper functions for formatting the values consistently.
@@ -67,6 +68,7 @@ export const MetricsTab: FC<{ metrics: StrategyMetrics, monthlyReturns: MonthlyR
     { key: 'Gross_Profit', label: 'Gross Profit', tooltip: 'Total profit or loss after all trades.', format: formatCurrency, color: metrics.Net_Profit >= 0 ? 'success.main' : 'error.main' },
     { key: 'Profit_Percentage', label: 'Total Return', tooltip: 'Total return as a percentage of the initial capital.', format: formatPercent },
     { key: 'Annual_Return', label: 'Annualized Return', tooltip: 'The geometric average amount of money earned by an investment each year.', format: formatPercent },
+    { key: 'Commission', label: 'Commissions', tooltip: 'The overall commissions deducted on this trade span.', format: formatPercent, color: 'error.main' }, 
     { key: 'Avg_Monthly_Return', label: 'Avg Monthly Return', tooltip: 'The geometric average amount of money earned by an investment each month.', format: formatPercent },
     { key: 'Total_Trades', label: 'Total Trades', tooltip: 'The total number of closed trades executed.' },
     { key: 'Open_Trades', label: 'Open Trades', tooltip: 'The geometric average amount of money earned by an investment each year.' },
@@ -78,7 +80,7 @@ export const MetricsTab: FC<{ metrics: StrategyMetrics, monthlyReturns: MonthlyR
     { key: 'Sharpe_Ratio', label: 'Sharpe Ratio', tooltip: 'Measures risk-adjusted return, considering volatility.', format: formatRatio },
     { key: 'Profit_Factor', label: 'Profit Factor', tooltip: 'Gross profits divided by gross losses. Higher is better.', format: formatRatio },
     { key: 'Calmar_Ratio', label: 'Calmar Ratio', tooltip: 'Measures return relative to the maximum drawdown.', format: formatRatio },
-    { key: 'RR', label: 'Avg. Risk/Reward Ratio', tooltip: 'The average profit from winning trades divided by the average loss from losing trades.', format: formatRatio },
+    { key: 'RR', label: 'Risk/Reward Ratio', tooltip: 'The average profit from winning trades divided by the average loss from losing trades.', format: formatRatio },
     { key: 'Equity_Efficiency_Rate', label: 'Equity Efficiency Rate', tooltip: 'A custom metric for strategy quality.', format: formatRatio },
     { key: 'Strategy_Quality', label: 'Strategy Quality', tooltip: 'A qualitative assessment of the strategy.' },
     { key: 'Winrate', label: 'Win Rate', tooltip: 'The percentage of trades that were profitable.', format: formatPercent },

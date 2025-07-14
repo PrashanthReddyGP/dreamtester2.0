@@ -23,4 +23,5 @@ export interface AppContextType {
   isBacktestLoading: boolean;
   backtestError: string | null;
   fetchLatestResults: () => void; // A function to trigger the fetch/poll
+  clearLatestBacktest: () => void; // A function to trigger the fetch/poll
 }

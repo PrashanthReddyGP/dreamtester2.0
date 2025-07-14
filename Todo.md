@@ -18,16 +18,19 @@ FUNCTIONALITY:
 [-] Calculating Indicators
 [-] Running backtest
 [] Backtest performance improvements
+[-] Clear previous metrics
+[-] Send changed 
+[-] Improved UX with parallel updates
+[-] Logging Terminal in App
+[-] Solo-backtest Option
 
 [-] Portfolio backtesting
 
-[] Data Saving Efficiency
+[-] Data Saving Efficiency
     [-] Ohlcv data
     [X] Indicators data
-    [] Metrics
-    [] Equity
-
-[] Improved UX with parallel updates
+    [X] Metrics
+    [X] Equity
 
 ---------------------
 
@@ -44,6 +47,10 @@ ENHANCEMENTS:
 ADVANCED FEATURES:
 
 [] Strategy Parameter Optimization
+    [-] Indicators
+    [-] Trade Parameters
+    [-] Symbols
+    [] Custom Optimization (20, 50, 100 || 20, 50, 100 with 50, 100, 200 without 50 50 or 100 100)
 [] Randomize Stategy Conditions
 [] AI integrated Strategies
 [] Advanced Trading Features
@@ -52,9 +59,12 @@ ADVANCED FEATURES:
     [] Trailing Stop
     [] Martingale and Anti-Martingale Risk Management
 [] Machine Learning
+[] Genetic Algorithms
 
 ----------------------
 
 SECURITY:
 
 [] We are taking the code from the client and executing it on the server end. If the strategy code is from some hacker and it contains code to inject into your computer, when you send it to server/when you click backtest, it runs and injects whatever there in the file. For now its fine, but when you share/others download and use other's strategies, it can be dangerous!!!
+
+-----------------------
