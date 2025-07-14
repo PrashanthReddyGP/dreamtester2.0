@@ -620,3 +620,95 @@ def run_asset_screening_manager(batch_id: str, config: dict, manager: any, queue
     # For now, we assume the job is "done" when all tasks are submitted.
     # A more advanced version would use `as_completed` to send the final message.
     print(f"--- ASSET SCREENER ({batch_id}): All screening jobs submitted. ---")
+    
+    
+def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+    """
+    A single, powerful manager that handles asset screening, parameter optimization,
+    or both combined.
+    """
+    print(f"--- UNIFIED TEST MANAGER ({batch_id}): Starting job ---")
+    
+    # --- 1. Get configuration from the payload ---
+    original_code = config['strategy_code']
+    symbols_to_screen = config.get('symbols_to_screen', [])
+    params_to_optimize = config.get('parameters_to_optimize', [])
+
+    # --- 2. Handle the "symbols" part ---
+    # If no symbols are provided, parse the default from the file.
+    if not symbols_to_screen:
+        try:
+            match = re.search(r"self\.symbol\s*=\s*['\"](.*?)['\"]", original_code)
+            if match:
+                symbols_to_screen.append(match.group(1))
+            else:
+                raise ValueError("No symbols provided and no default `self.symbol` found in file.")
+        except Exception as e:
+            fail_job(batch_id, str(e))
+            return
+
+    # --- 3. Handle the "parameters" part ---
+    # Generate all parameter combinations. If params_to_optimize is empty, this will
+    # result in a list with one "empty" combination, which is exactly what we want.
+    param_ranges = [np.arange(p['start'], p['end'] + p['step'], p['step']) for p in params_to_optimize]
+    all_param_combinations = list(itertools.product(*param_ranges))
+
+    # --- 4. Calculate total runs and prepare the job ---
+    total_runs = len(symbols_to_screen) * len(all_param_combinations)
+    if total_runs == 0:
+        fail_job(batch_id, "No jobs to run.")
+        return
+        
+    print(f"Total runs to execute: {total_runs}")
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Generated {total_runs} total backtests to run."}})
+
+    # --- 5. The Nested Loop Logic ---
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+        run_counter = 0
+        # Outer loop for symbols
+        for symbol in symbols_to_screen:
+            # Modify the code ONCE per symbol
+            code_with_symbol = re.sub(
+                r"self\.symbol\s*=\s*['\"].*?['\"]",
+                f"self.symbol = '{symbol}'",
+                original_code
+            )
+
+            # Inner loop for parameter combinations
+            for combo in all_param_combinations:
+                run_counter += 1
+                modifications_for_run = []
+                param_strings = []
+
+                for j, param_config in enumerate(params_to_optimize):
+                    current_value = round(combo[j], 4)
+                    modifications_for_run.append({**param_config, 'value': current_value})
+                    param_strings.append(f"{param_config['name']}={current_value}")
+                
+                # Create the final modified code for this specific run
+                final_modified_code = modify_strategy_code(code_with_symbol, modifications_for_run)
+
+                # Create the descriptive name for the UI
+                param_part = ", ".join(param_strings)
+                strategy_display_name = f"{symbol}" + (f" | {param_part}" if param_part else "")
+
+                # Submit the job to the worker pool
+                executor.submit(
+                    process_backtest_job, # We can reuse the simplest worker
+                    batch_id=batch_id,
+                    manager=manager,
+                    job_id=str(uuid.uuid4()),
+                    file_name=strategy_display_name,
+                    file_content=final_modified_code,
+                    initialCapital=1000,
+                    client=get_client('binance'),
+                    queue=queue,
+                    loop=loop
+                )
+
+    # Note: A truly robust implementation would wait for all futures to complete
+    # before sending the final "batch_complete" message. For simplicity, we omit that here.
+    # The current implementation will send "batch_complete" after all jobs are submitted.
+    update_job_status(batch_id, "completed", "All tests submitted.")
+    send_update_to_queue(loop, queue, batch_id, {"type": "batch_complete", "payload": {"message": "All tests submitted."}})
+    print(f"--- UNIFIED MANAGER ({batch_id}): All {total_runs} jobs submitted. ---")

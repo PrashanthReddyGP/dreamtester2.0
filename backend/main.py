@@ -30,7 +30,7 @@ try:
         get_backtest_job 
     )
 
-    from pipeline import run_optimization_manager, run_asset_screening_manager, run_batch_manager
+    from pipeline import run_unified_test_manager, run_optimization_manager, run_asset_screening_manager, run_batch_manager
     from core.connect_to_brokerage import get_client
 
     ##########################################
@@ -103,7 +103,11 @@ try:
     class OptimizationSubmitBody(BaseModel):
         strategy_code: str
         parameters_to_optimize: List[OptimizableParameterModel]
-
+        
+    class SuperOptimizationConfig(BaseModel):
+        strategy_code: str
+        parameters_to_optimize: List[OptimizableParameterModel]
+        symbols_to_screen: List[str]
 
     class AssetScreeningBody(BaseModel):
         strategy_code: str
@@ -286,15 +290,10 @@ try:
             tree = ast.parse(code_str)
         except SyntaxError as e:
             raise HTTPException(status_code=400, detail=f"Python syntax error in strategy file: {e}")
-
+        
         parsed_data = {
-            "settings": {
-                "symbol": "ADAUSDT",  # Default fallback
-                "timeframe": "1d",
-                "startDate": "2000-01-01",
-                "endDate": "2100-12-31"
-            },
-            "optimizable_params": [], # A unified list
+            "settings": {}, # Start with an empty settings dict
+            "optimizable_params": []
         }
 
         # ast.walk traverses all nodes in the tree
@@ -313,17 +312,24 @@ try:
                 # Once inside the correct class, look for the __init__ method
                 for item in node.body:
                     if isinstance(item, ast.FunctionDef) and item.name == '__init__':
+                        
+                        for arg in item.args.defaults:
+                            try:
+                                val = ast.literal_eval(arg)
+                                # This part is tricky, we need to match arg to name.
+                                # For simplicity, we'll let the assignments below override this.
+                            except (ValueError, SyntaxError):
+                                pass
+                        
                         # Now look for assignments within __init__
                         for sub_node in item.body:
-                            if isinstance(sub_node, ast.Assign):
-                                
-                                target = sub_node.targets[0]
-                                
-                                if not isinstance(target, ast.Attribute):
-                                    continue
-                                
+                            
+                            # We only care about `self.variable = ...` assignments
+                            if isinstance(sub_node, ast.Assign) and isinstance(sub_node.targets[0], ast.Attribute):
+                                target_attr = sub_node.targets[0].attr
+
                                 # --- 1. Parse `self.params` dictionary ---
-                                if target.attr == 'params' and isinstance(sub_node.value, ast.Dict):
+                                if target_attr == 'params' and isinstance(sub_node.value, ast.Dict):
                                     for i, key_node in enumerate(sub_node.value.keys):
                                         param_name = ast.literal_eval(key_node)
                                         default_value = ast.literal_eval(sub_node.value.values[i])
@@ -336,7 +342,7 @@ try:
                                         })
                                 
                                 # --- 2. Parse `self.indicators` list ---
-                                elif target.attr == 'indicators' and isinstance(sub_node.value, ast.List):
+                                elif target_attr == 'indicators' and isinstance(sub_node.value, ast.List):
                                     for i, element_tuple in enumerate(ast.literal_eval(sub_node.value)):
                                         indicator_name, _, params = element_tuple
                                         
@@ -350,6 +356,23 @@ try:
                                                 "indicatorIndex": i,
                                                 "paramIndex": j
                                             })
+                                            
+                                else:
+                                    try:
+                                        value = ast.literal_eval(sub_node.value)
+                                        if target_attr == 'symbol':
+                                            parsed_data["settings"]["symbol"] = value
+                                        elif target_attr == 'timeframe':
+                                            parsed_data["settings"]["timeframe"] = value
+                                        elif target_attr in ['start_date', 'startDate']:
+                                            parsed_data["settings"]["startDate"] = value
+                                        elif target_attr in ['end_date', 'endDate']:
+                                            parsed_data["settings"]["endDate"] = value
+                                    except (ValueError, SyntaxError):
+                                        # Ignore assignments that aren't simple literals
+                                        # e.g., self.x = some_function()
+                                        pass
+
                 break # Stop after finding __init__
         return parsed_data
 
@@ -467,7 +490,7 @@ try:
         return job_data
 
     @app.post("/api/optimize/submit")
-    async def submit_optimization(body: OptimizationSubmitBody, background_tasks: BackgroundTasks, request: Request):
+    async def submit_optimization(body: SuperOptimizationConfig, background_tasks: BackgroundTasks, request: Request):
         batch_id = str(uuid.uuid4())
         create_backtest_job(batch_id) # Reuse the same job table for tracking
         
@@ -477,7 +500,7 @@ try:
         main_loop = asyncio.get_running_loop()
 
         background_tasks.add_task(
-            run_optimization_manager,
+            run_unified_test_manager,
             batch_id=batch_id,
             config=config_dict,
             manager=manager,

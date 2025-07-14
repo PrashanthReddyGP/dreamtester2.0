@@ -22,7 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTerminal } from '../context/TerminalContext';
 import { useAnalysis } from '../context/AnalysisContext';
 import { OptimizeModal } from '../components/strategylab/OptimizeModal';
-import type { OptimizationConfig, TestSubmissionConfig } from '../components/strategylab/OptimizeModal';
+import type { OptimizationConfig, TestSubmissionConfig, SuperOptimizationConfig } from '../components/strategylab/OptimizeModal';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -641,7 +641,7 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
-    const handleRunAdvancedTest = async (config: TestSubmissionConfig) => {
+    const handleRunAdvancedTest = async (config: SuperOptimizationConfig) => {
         setIsOptimizing(true);
         console.log("Submitting optimization with config:", config);
 
@@ -650,23 +650,13 @@ export const StrategyLab: React.FC = () => {
             await handleSaveContent();
 
             let response;
-            if (config.mode === 'parameters') {
-                // Call the parameter optimization endpoint
-                const { mode, ...payload } = config; // Remove mode before sending
-                response = await fetch(`${API_URL}/api/optimize/submit`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-            } else { // config.mode === 'assets'
-                // Call the asset screening endpoint
-                const { mode, ...payload } = config; // Remove mode before sending
-                response = await fetch(`${API_URL}/api/screen/submit`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-            }
+            
+            // Call the parameter optimization endpoint
+            response = await fetch(`${API_URL}/api/optimize/submit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config),
+            });
             
             if (!response.ok) {
                 // Try to get a detailed error message from the backend's JSON response

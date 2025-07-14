@@ -47,6 +47,10 @@ ENHANCEMENTS:
 ADVANCED FEATURES:
 
 [] Strategy Parameter Optimization
+    [-] Indicators
+    [-] Trade Parameters
+    [-] Symbols
+    [] Custom Optimization (20, 50, 100 || 20, 50, 100 with 50, 100, 200 without 50 50 or 100 100)
 [] Randomize Stategy Conditions
 [] AI integrated Strategies
 [] Advanced Trading Features
@@ -55,6 +59,7 @@ ADVANCED FEATURES:
     [] Trailing Stop
     [] Martingale and Anti-Martingale Risk Management
 [] Machine Learning
+[] Genetic Algorithms
 
 ----------------------
 

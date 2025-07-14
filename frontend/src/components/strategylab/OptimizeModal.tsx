@@ -88,7 +88,7 @@ export interface TestSubmissionConfig {
 interface OptimizeModalProps {
   open: boolean;
   onClose: () => void;
-  onSubmit: (config: TestSubmissionConfig) => void; 
+  onSubmit: (config: SuperOptimizationConfig) => void; 
   strategyCode: string | null;
   isSubmitting: boolean;
 }
@@ -167,6 +167,19 @@ const fetchAllParameters = async (code: string): Promise<OptimizableParameter[]>
     }));
 };
 
+const fetchAllParametersAndSettings = async (code: string): Promise<any> => { // Using `any` for simplicity, can be typed
+    const response = await fetch(`${API_URL}/api/strategies/parse-parameters`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: code,
+    });
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: "An unknown error" }));
+        throw new Error(errorData.detail);
+    }
+    return response.json();
+};
+
 // --- The Main Modal Component ---
 export const OptimizeModal: React.FC<OptimizeModalProps> = ({ open, onClose, onSubmit, strategyCode, isSubmitting }) => {
   const [params, setParams] = useState<OptimizableParameter[]>([]);
@@ -174,77 +187,81 @@ export const OptimizeModal: React.FC<OptimizeModalProps> = ({ open, onClose, onS
   const [error, setError] = useState<string | null>(null);
 
   const [mode, setMode] = useState<'parameters' | 'assets'>('parameters');
-
   const [symbolList, setSymbolList] = useState<string[]>([]);
   const [isFetchingSymbols, setIsFetchingSymbols] = useState(false);
-  
-  const [selectedSymbols, setSelectedSymbols] = useState<string[]>(['BTCUSDT', 'ETHUSDT']);
+  const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
+  const [defaultSymbol, setDefaultSymbol] = useState<string | null>(null);
+
+  const hasFetchedData = React.useRef(false);
 
   useEffect(() => {
-      // We only need to fetch this once.
-      if (open) {
-          setIsFetchingSymbols(true);
-          fetchAvailableSymbols('binance') // Hardcode binance for now, or make it dynamic
-              .then(symbols => {
-                  setSymbolList(symbols);
-              })
-              .finally(() => {
-                  setIsFetchingSymbols(false);
-              });
-      }
-  }, [open]); // Run only when the modal is opened
+    // If the modal is not open, reset the fetch tracker.
+    if (!open) {
+      hasFetchedData.current = false;
+      return;
+    }
 
-
-  useEffect(() => {
-    if (open && strategyCode && mode === 'parameters') {
+    // Only fetch data if the modal is open AND we haven't fetched it yet.
+    if (open && strategyCode && !hasFetchedData.current) {
       setIsLoading(true);
       setError(null);
-      fetchAllParameters(strategyCode)
-        .then(data => setParams(data))
-        .catch(err => setError(err.message))
-        .finally(() => setIsLoading(false));
+
+      // Fetch both symbols and parameters at the same time.
+      Promise.all([
+        fetchAvailableSymbols('binance'),
+        fetchAllParametersAndSettings(strategyCode)
+      ]).then(([fetchedSymbols, parsedData]) => {
+          // --- Handle Symbols ---
+          setSymbolList(fetchedSymbols);
+          const symbolFromFile = parsedData.settings?.symbol;
+          if (symbolFromFile) {
+              setDefaultSymbol(symbolFromFile);
+              setSelectedSymbols([symbolFromFile]);
+          } else {
+              setSelectedSymbols([]);
+          }
+
+          // --- Handle Parameters ---
+          const optimizableParams = parsedData.optimizable_params.map((p: any) => ({
+              ...p, enabled: false, start: p.value, end: p.value, step: 1,
+          }));
+          setParams(optimizableParams);
+
+          // Mark that we have successfully fetched the data.
+          hasFetchedData.current = true;
+
+      }).catch(err => {
+          setError(err.message);
+      }).finally(() => {
+          setIsLoading(false);
+      });
     }
-  }, [open, strategyCode, mode]); // Add `mode` as a dependency
+  }, [open, strategyCode]); // This effect now correctly depends only on `open` and `strategyCode`.
 
   const handleParamChange = (id: string, field: keyof OptimizableParameter, value: any) => {
     setParams(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p));
   };
 
   const handleModeChange = (event: React.MouseEvent<HTMLElement>, newMode: 'parameters' | 'assets' | null) => {
-      if (newMode !== null) {
-          setMode(newMode);
-          setError(null); // Clear errors when switching modes
-      }
+    if (newMode !== null) {
+        setMode(newMode);
+    }
   };
 
   const handleSubmit = () => {
     if (!strategyCode) {
       setError("Strategy code is missing."); return;
     }
-
-    let config: TestSubmissionConfig;
-
-    if (mode === 'parameters') {
-      const enabledParams = params.filter(p => p.enabled);
-      if (enabledParams.length === 0) {
-        setError("Please enable at least one parameter to optimize."); return;
-      }
-      config = {
-        mode: 'parameters',
-        strategy_code: strategyCode,
-        parameters_to_optimize: enabledParams,
-      };
-    } else { // mode === 'assets'
-      if (selectedSymbols.length === 0) {
-        setError("Please select at least one asset to screen."); return;
-      }  
-      config = {
-        mode: 'assets',
-        strategy_code: strategyCode,
-        symbols_to_screen: selectedSymbols,
-      };
+    const enabledParams = params.filter(p => p.enabled);
+    const symbolsToTest = selectedSymbols;
+    if (symbolsToTest.length === 0) {
+        setError("Please select at least one asset to test."); return;
     }
-    // Call the single, unified onSubmit prop
+    const config: SuperOptimizationConfig = {
+      strategy_code: strategyCode,
+      symbols_to_screen: symbolsToTest,
+      parameters_to_optimize: enabledParams,
+    };
     onSubmit(config);
   };
 
@@ -257,83 +274,62 @@ export const OptimizeModal: React.FC<OptimizeModalProps> = ({ open, onClose, onS
       <DialogContent dividers>
         <Box sx={{ width: '100%', display: 'flex', justifyContent: 'center', mb: 2 }}>
             <ToggleButtonGroup value={mode} exclusive onChange={handleModeChange} aria-label="testing mode">
-                <ToggleButton value="parameters">Optimize Parameters</ToggleButton>
-                <ToggleButton value="assets">Screen Assets</ToggleButton>
+                <ToggleButton value="parameters" disabled={isLoading}>Optimize Parameters</ToggleButton>
+                <ToggleButton value="assets" disabled={isLoading}>Screen Assets</ToggleButton>
             </ToggleButtonGroup>
         </Box>
 
+        {isLoading && (<Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}><CircularProgress /><Typography sx={{ml:2}}>Fetching Initial Data...</Typography></Box>)}
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-
-        {mode === 'parameters' && (
-
+        
+        {!isLoading && !error && (
           <>
-            {isLoading && ( <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}><CircularProgress /><Typography sx={{ml:2}}>Parsing Parameters...</Typography></Box> )}
-            
-            {!isLoading && !error && (
-                <Box>
-                    <Typography variant="h6">Strategy Parameters</Typography>
-                    {params.filter(p => p.type === 'strategy_param').map(param => (
-                        <Box key={param.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 1, ml: 2 }}>
+            {/* The content is now wrapped in a conditional based on the mode */}
+            {mode === 'parameters' && (
+              <Box>
+                  <Typography variant="h6">Strategy Parameters</Typography>
+                  {params.filter(p => p.type === 'strategy_param').map(param => (
+                      <Box key={param.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 1, ml: 2 }}>
                             <FormControlLabel control={<Checkbox checked={param.enabled} onChange={e => handleParamChange(param.id, 'enabled', e.target.checked)} />} label={param.name} />
-                            <TextField label="Start" type="number" variant="outlined" size="small" defaultValue={param.value} onChange={e => handleParamChange(param.id, 'start', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
-                            <TextField label="End" type="number" variant="outlined" size="small" defaultValue={param.value} onChange={e => handleParamChange(param.id, 'end', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
-                            <TextField label="Step" type="number" variant="outlined" size="small" defaultValue={1} onChange={e => handleParamChange(param.id, 'step', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
-                        </Box>
-                    ))}
-                    <Divider sx={{ my: 2 }} />
-                    <Typography variant="h6">Indicator Parameters</Typography>
-                    {params.filter(p => p.type === 'indicator_param').map(param => (
-                        <Box key={param.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 1, ml: 2 }}>
+                            <TextField label="Start" type="number" variant="outlined" size="small" value={param.start} onChange={e => handleParamChange(param.id, 'start', parseFloat(e.target.value) || 0)} disabled={!param.enabled || isSubmitting} />
+                            <TextField label="End" type="number" variant="outlined" size="small" value={param.end} onChange={e => handleParamChange(param.id, 'end', parseFloat(e.target.value) || 0)} disabled={!param.enabled || isSubmitting} />
+                            <TextField label="Step" type="number" variant="outlined" size="small" value={param.step} onChange={e => handleParamChange(param.id, 'step', parseFloat(e.target.value) || 1)} disabled={!param.enabled || isSubmitting} />
+                      </Box>
+                  ))}
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="h6">Indicator Parameters</Typography>
+                  {params.filter(p => p.type === 'indicator_param').map(param => (
+                      <Box key={param.id} sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 1, ml: 2 }}>
                             <FormControlLabel control={<Checkbox checked={param.enabled} onChange={e => handleParamChange(param.id, 'enabled', e.target.checked)} />} label={param.name} />
-                            <TextField label="Start" type="number" variant="outlined" size="small" defaultValue={param.value} onChange={e => handleParamChange(param.id, 'start', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
-                            <TextField label="End" type="number" variant="outlined" size="small" defaultValue={param.value} onChange={e => handleParamChange(param.id, 'end', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
-                            <TextField label="Step" type="number" variant="outlined" size="small" defaultValue={1} onChange={e => handleParamChange(param.id, 'step', parseFloat(e.target.value))} disabled={!param.enabled || isSubmitting} />
-                        </Box>
-                    ))}
-                </Box>
-            )}  
+                            <TextField label="Start" type="number" variant="outlined" size="small" value={param.start} onChange={e => handleParamChange(param.id, 'start', parseFloat(e.target.value) || 0)} disabled={!param.enabled || isSubmitting} />
+                            <TextField label="End" type="number" variant="outlined" size="small" value={param.end} onChange={e => handleParamChange(param.id, 'end', parseFloat(e.target.value) || 0)} disabled={!param.enabled || isSubmitting} />
+                            <TextField label="Step" type="number" variant="outlined" size="small" value={param.step} onChange={e => handleParamChange(param.id, 'step', parseFloat(e.target.value) || 1)} disabled={!param.enabled || isSubmitting} />
+                      </Box>
+                  ))}
+              </Box>
+            )}
+
+            {mode === 'assets' && (
+              <Box>
+                  <Typography variant="h6" gutterBottom>Asset Universe</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{mb: 2}}>
+                      Select assets to run this strategy against. If you also configure parameters, a full optimization will run on each selected asset.
+                  </Typography>
+                  <Autocomplete
+                      multiple id="asset-screener-autocomplete" options={symbolList} value={selectedSymbols} loading={isFetchingSymbols}
+                      onChange={(event, newValue) => { setSelectedSymbols(newValue); }}
+                      freeSolo
+                      renderTags={(value, getTagProps) => value.map((option, index) => {
+                          const { key, ...tagProps } = getTagProps({ index });
+                          return <Chip key={key} variant="outlined" label={option} {...tagProps} />;
+                      })}
+                      renderInput={(params) => (<TextField {...params} variant="outlined" label="Symbols to Test" placeholder="Add more symbols..." InputProps={{...params.InputProps, endAdornment: (<>{isFetchingSymbols ? <CircularProgress color="inherit" size={20} /> : null}{params.InputProps.endAdornment}</>),}}/>)}
+                  />
+              </Box>
+            )}
           </>
         )}
-
-        {mode === 'assets' && (
-
-          <Box>
-              <Typography variant="h6" gutterBottom>Asset Universe</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{mb: 2}}>
-                  Select the assets to run this strategy against. The parameters defined in the file will be used for all runs.
-              </Typography>
-              <Autocomplete
-                  multiple id="asset-screener-autocomplete" options={symbolList} value={selectedSymbols} loading={isFetchingSymbols}
-                  onChange={(event, newValue) => { setSelectedSymbols(newValue); }}
-                  freeSolo
-                      renderTags={(value: readonly string[], getTagProps) =>
-                          value.map((option: string, index: number) => {
-                              // 1. Get all the props for the tag
-                              const { key, ...tagProps } = getTagProps({ index });
-                              // 2. Apply `key` directly and spread the rest
-                              return <Chip key={key} variant="outlined" label={option} {...tagProps} />;
-                          })
-                      }
-                  renderInput={(params) => (
-                    <TextField {...params} variant="outlined" label="Symbols to Test" placeholder="Add more symbols..."
-                        InputProps={{
-                          ...params.InputProps,
-                          endAdornment: (
-                              <>
-                                  {isFetchingSymbols ? <CircularProgress color="inherit" size={20} /> : null}
-                                  {params.InputProps.endAdornment}
-                              </>
-                          ),
-                      }}
-                  />
-                )}
-              />
-          </Box>
-
-        )}
-
       </DialogContent>
-
       <DialogActions>
         <Button onClick={onClose} disabled={isSubmitting}>Cancel</Button>
         <Button onClick={handleSubmit} variant="contained" disabled={isLoading || isSubmitting}>Run Optimization</Button>
