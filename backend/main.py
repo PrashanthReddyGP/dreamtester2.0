@@ -93,9 +93,11 @@ try:
         name: str
         value: float
         enabled: bool
-        start: float
-        end: float
-        step: float
+        mode: str
+        start: Optional[float] = None
+        end: Optional[float] = None
+        step: Optional[float] = None
+        list_values: Optional[str] = None
         indicatorIndex: Optional[int] = None 
         paramIndex: Optional[int] = None
 
@@ -103,11 +105,17 @@ try:
     class OptimizationSubmitBody(BaseModel):
         strategy_code: str
         parameters_to_optimize: List[OptimizableParameterModel]
-        
+
+    class CombinationRuleModel(BaseModel):
+        param1: str
+        operator: str
+        param2: str
+
     class SuperOptimizationConfig(BaseModel):
         strategy_code: str
         parameters_to_optimize: List[OptimizableParameterModel]
         symbols_to_screen: List[str]
+        combination_rules: Optional[List[CombinationRuleModel]] = []
 
     class AssetScreeningBody(BaseModel):
         strategy_code: str
@@ -533,7 +541,7 @@ try:
     if __name__ == "__main__":
         import uvicorn
         # Make sure to pass the 'app' object you created earlier
-        uvicorn.run(app, host="127.0.0.1", port=8000, ws_per_message_deflate=False)
+        uvicorn.run(app, host="127.0.0.1", port=8000, ws_per_message_deflate=False, ws_ping_interval=20)
         
 except Exception as e:
     # If any error occurs, print it and wait for user input

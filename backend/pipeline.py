@@ -6,8 +6,9 @@ import uuid
 import asyncio
 import itertools
 import traceback
-import pandas as pd
 import numpy as np
+import pandas as pd
+import operator as op
 from datetime import time, timedelta 
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,6 +20,16 @@ from core.process_indicators import calculate_indicators
 from core.run_backtest import run_backtest_loop
 from core.metrics import calculate_metrics
 from core.connect_to_brokerage import get_client
+
+# --- Map string operators from frontend to actual Python functions ---
+OPERATOR_MAP = {
+    '<': op.lt,
+    '>': op.gt,
+    '<=': op.le,
+    '>=': op.ge,
+    '===': op.eq,
+    '!==': op.ne
+}
 
 
 def send_update_to_queue(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, batch_id: str, message: dict):
@@ -625,58 +636,80 @@ def run_asset_screening_manager(batch_id: str, config: dict, manager: any, queue
 def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
     """
     A single, powerful manager that handles asset screening, parameter optimization,
-    or both combined.
+    or both combined, with intelligent pruning of invalid combinations.
     """
     print(f"--- UNIFIED TEST MANAGER ({batch_id}): Starting job ---")
     
-    # --- 1. Get configuration from the payload ---
+    # --- Step 1: Get all configuration from the payload ---
     original_code = config['strategy_code']
     symbols_to_screen = config.get('symbols_to_screen', [])
     params_to_optimize = config.get('parameters_to_optimize', [])
+    combination_rules = config.get('combination_rules', [])
 
-    # --- 2. Handle the "symbols" part ---
-    # If no symbols are provided, parse the default from the file.
+    # --- Step 2: Handle the symbols list ---
     if not symbols_to_screen:
         try:
             match = re.search(r"self\.symbol\s*=\s*['\"](.*?)['\"]", original_code)
-            if match:
-                symbols_to_screen.append(match.group(1))
-            else:
-                raise ValueError("No symbols provided and no default `self.symbol` found in file.")
+            if match: symbols_to_screen.append(match.group(1))
+            else: raise ValueError("No symbols selected and no default `self.symbol` found in file.")
         except Exception as e:
-            fail_job(batch_id, str(e))
-            return
+            fail_job(batch_id, str(e)); return
 
-    # --- 3. Handle the "parameters" part ---
-    # Generate all parameter combinations. If params_to_optimize is empty, this will
-    # result in a list with one "empty" combination, which is exactly what we want.
-    param_ranges = [np.arange(p['start'], p['end'] + p['step'], p['step']) for p in params_to_optimize]
-    all_param_combinations = list(itertools.product(*param_ranges))
+    # --- Step 3: Generate parameter value lists ---
+    param_value_lists = []
+    if params_to_optimize:
+        for p in params_to_optimize:
+            if p.get('mode') == 'list':
+                try:
+                    values = [float(val.strip()) for val in p.get('list_values', '').split(',') if val.strip()]
+                    if values: param_value_lists.append(values)
+                except ValueError:
+                    fail_job(batch_id, f"Invalid number in list for '{p['name']}'."); return
+            else: # 'range' mode
+                param_value_lists.append(np.arange(p['start'], p['end'] + p['step'], p['step']))
+    
+    # --- Step 4: Generate ALL possible combinations ---
+    # If no params were optimized, param_value_lists is empty, and this correctly produces [()]
+    all_combinations = list(itertools.product(*param_value_lists))
 
-    # --- 4. Calculate total runs and prepare the job ---
-    total_runs = len(symbols_to_screen) * len(all_param_combinations)
-    if total_runs == 0:
-        fail_job(batch_id, "No jobs to run.")
-        return
+    # --- Step 5: Prune invalid combinations using the rules ---
+    valid_combinations = []
+    param_id_to_index = {p['id']: i for i, p in enumerate(params_to_optimize)}
+
+    for combo in all_combinations:
+        is_combo_valid = True
+        for rule in combination_rules:
+            idx1 = param_id_to_index.get(rule['param1'])
+            idx2 = param_id_to_index.get(rule['param2'])
+            
+            if idx1 is not None and idx2 is not None:
+                val1 = combo[idx1]
+                val2 = combo[idx2]
+                operator_func = OPERATOR_MAP.get(rule['operator'])
+                
+                if operator_func and not operator_func(val1, val2):
+                    is_combo_valid = False
+                    break 
         
-    print(f"Total runs to execute: {total_runs}")
-    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Generated {total_runs} total backtests to run."}})
+        if is_combo_valid:
+            valid_combinations.append(combo)
+            
+    # --- Step 6: Final setup and logging ---
+    original_total = len(all_combinations)
+    pruned_count = original_total - len(valid_combinations)
+    total_runs = len(symbols_to_screen) * len(valid_combinations)
 
-    # --- 5. The Nested Loop Logic ---
+    print(f"Pruned {pruned_count} invalid combinations. Total valid runs: {total_runs}")
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Generated {total_runs} valid tests (pruned {pruned_count} combinations)."}})
+    if total_runs == 0: fail_job(batch_id, "No valid test combinations to run after pruning."); return
+    
+    # --- Step 7: The Nested Loop Logic for Job Submission ---
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
-        run_counter = 0
-        # Outer loop for symbols
         for symbol in symbols_to_screen:
-            # Modify the code ONCE per symbol
-            code_with_symbol = re.sub(
-                r"self\.symbol\s*=\s*['\"].*?['\"]",
-                f"self.symbol = '{symbol}'",
-                original_code
-            )
-
-            # Inner loop for parameter combinations
-            for combo in all_param_combinations:
-                run_counter += 1
+            code_with_symbol = re.sub(r"self\.symbol\s*=\s*['\"].*?['\"]", f"self.symbol = '{symbol}'", original_code)
+            
+            # --- FIX: Iterate over the `valid_combinations` list ---
+            for combo in valid_combinations:
                 modifications_for_run = []
                 param_strings = []
 
@@ -685,10 +718,7 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
                     modifications_for_run.append({**param_config, 'value': current_value})
                     param_strings.append(f"{param_config['name']}={current_value}")
                 
-                # Create the final modified code for this specific run
                 final_modified_code = modify_strategy_code(code_with_symbol, modifications_for_run)
-
-                # Create the descriptive name for the UI
                 param_part = ", ".join(param_strings)
                 strategy_display_name = f"{symbol}" + (f" | {param_part}" if param_part else "")
 
