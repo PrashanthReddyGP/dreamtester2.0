@@ -5,6 +5,7 @@ try:
     import sys
     import time
     import uuid
+    import uvicorn
     import asyncio
     from typing import List
     from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, Response
@@ -191,8 +192,23 @@ try:
         app.state.websocket_queue = asyncio.Queue()
         # Start the websocket_sender task and give it the queue
         asyncio.create_task(websocket_sender(app.state.websocket_queue, manager))
+        # --- NEW: Start the heartbeat task ---
+        asyncio.create_task(heartbeat_sender(manager))
 
 
+    async def heartbeat_sender(manager: ConnectionManager):
+        """
+        Sends a simple data message every 15 seconds to all connected clients
+        to keep the connection alive and bypass network intermediaries.
+        """
+        while True:
+            await asyncio.sleep(15) # Send a heartbeat every 15 seconds
+            # Create a list of all clients across all batches
+            all_clients = [client for clients in manager.active_connections.values() for client in clients]
+            if all_clients:
+                print("--- Sending application-level heartbeat to all clients ---")
+                # Send a simple JSON message
+                await asyncio.gather(*[client.send_json({"type": "heartbeat"}) for client in all_clients], return_exceptions=True)
 
 
 
@@ -539,9 +555,8 @@ try:
             manager.disconnect(websocket, batch_id)
 
     if __name__ == "__main__":
-        import uvicorn
         # Make sure to pass the 'app' object you created earlier
-        uvicorn.run(app, host="127.0.0.1", port=8000, ws_per_message_deflate=False, ws_ping_interval=20)
+        uvicorn.run(app, host="127.0.0.1", port=8000, ws_per_message_deflate=False, ws_ping_interval=20, ws_ping_timeout=60, ws_max_size=16777216)
         
 except Exception as e:
     # If any error occurs, print it and wait for user input

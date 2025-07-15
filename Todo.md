@@ -23,6 +23,7 @@ FUNCTIONALITY:
 [-] Improved UX with parallel updates
 [-] Logging Terminal in App
 [-] Solo-backtest Option
+[-] Equity Comparison
 
 [-] Portfolio backtesting
 

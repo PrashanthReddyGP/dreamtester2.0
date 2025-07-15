@@ -26,10 +26,19 @@ const WebSocketManager: React.FC = () => {
     useEffect(() => {
         // Subscribe to the central WebSocket service
         const subscription = websocketService.subscribe((data: any) => {
+            if (!data || !data.type) return; // Add a safety check
             const { type, payload } = data;
 
             // This switch statement is the router for all incoming data
             switch (type) {
+                case 'heartbeat':
+                  // This message's only job is to generate traffic.
+                  // We receive it and do absolutely nothing with it.
+                  // You can log it for debugging if you want.
+                  // console.log('Heartbeat received.'); 
+                  break;
+                // --- END OF CHANGE ---
+
                 case 'log':
                     addLog(payload.level || 'INFO', payload.message);
                     break;

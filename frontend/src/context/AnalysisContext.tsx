@@ -1,5 +1,5 @@
 // src/context/AnalysisContext.tsx
-import React, { createContext, useState, useContext, useCallback } from 'react';
+import React, { createContext, useState, useContext, useCallback, useRef, useEffect } from 'react';
 import type {ReactNode} from 'react';
 import type { StrategyResult } from '../services/api';
 
@@ -16,31 +16,65 @@ const AnalysisContext = createContext<AnalysisContextType | undefined>(undefined
 export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [results, setResults] = useState<StrategyResult[]>([]);
   const [isComplete, setIsComplete] = useState(false);
+  const resultsBuffer = useRef<StrategyResult[]>([]);
+  const updateTimer = useRef<NodeJS.Timeout | null>(null);
 
-  // This single method handles both batch and optimization results
   const addResult = useCallback((newResult: StrategyResult) => {
-    setResults(prev => {
-      // This logic correctly handles portfolio updates by replacing the result
-      const existingIndex = prev.findIndex(r => r.strategy_name === newResult.strategy_name);
-      if (existingIndex > -1) {
-        const updatedResults = [...prev];
-        updatedResults[existingIndex] = newResult;
-        return updatedResults;
-      }
-      // For all other cases (including all optimization runs), it just adds the new result
-      return [...prev, newResult];
-    });
+    // Instead of calling setResults directly, add the new result to our buffer.
+    resultsBuffer.current.push(newResult);
+
+    // If a timer is already set, clear it. We'll set a new one.
+    // This is "debouncing" - we only update after a period of inactivity.
+    if (updateTimer.current) {
+      clearTimeout(updateTimer.current);
+    }
+
+    // Set a timer to update the actual React state in a batch.
+    // 100ms is a good value - it feels real-time but prevents overwhelming the browser.
+    updateTimer.current = setTimeout(() => {
+      setResults(prevResults => {
+        // Create a new array with the previous results and everything in the buffer.
+        const newBatch = [...prevResults, ...resultsBuffer.current];
+        // Clear the buffer for the next batch.
+        resultsBuffer.current = [];
+        return newBatch;
+      });
+      // Clear the timer ID
+      updateTimer.current = null;
+    }, 100);
+
   }, []);
 
   const clearResults = useCallback(() => {
     setResults([]);
     setIsComplete(false);
+    // Also clear any pending updates in the buffer
+    if (updateTimer.current) {
+      clearTimeout(updateTimer.current);
+    }
+    resultsBuffer.current = [];
   }, []);
 
   const markComplete = useCallback(() => {
+    // When the batch is complete, make sure any remaining items in the buffer are flushed.
+    if (updateTimer.current) {
+      clearTimeout(updateTimer.current);
+    }
+    setResults(prevResults => [...prevResults, ...resultsBuffer.current]);
+    resultsBuffer.current = [];
+    
     setIsComplete(true);
   }, []);
-  
+
+  useEffect(() => {
+    return () => {
+      if (updateTimer.current) {
+        clearTimeout(updateTimer.current);
+      }
+    };
+  }, []);
+
+
   const value = {
     results,
     isComplete,
