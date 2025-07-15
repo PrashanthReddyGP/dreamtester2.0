@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -9,6 +9,13 @@ import {
   useTheme,
   IconButton,
   Typography,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  Checkbox,
+  Alert
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import ReactECharts from 'echarts-for-react';
@@ -27,6 +34,8 @@ const CHART_COLORS = [
   '#73C0DE', '#3BA272', '#FC8452', '#9A60B4', '#EA7CCC'
 ];
 
+const MAX_COMPARISON_COUNT = 10;
+
 export const ComparisonModal: React.FC<ComparisonModalProps> = ({
   open,
   onClose,
@@ -35,9 +44,17 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
 }) => {
   const theme = useTheme();
 
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (open) {
+      setSelectedIds([]);
+    }
+  }, [open]);
+
   const chartOption = useMemo(() => {
     const strategiesToCompare = results.filter(
-      (r) => r.strategy_name !== 'Portfolio'
+      (r) => selectedIds.includes(r.strategy_name)
     );
 
     const seriesData = strategiesToCompare.map((strategy, index) => ({
@@ -133,21 +150,73 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
       backgroundColor: 'transparent',
       textStyle: { color: theme.palette.text.secondary },
     };
-  }, [results, initialCapital, theme]);
+  }, [selectedIds, results, initialCapital, theme]);
 
-  const canCompare = results.filter(r => r.strategy_name !== 'Portfolio').length > 1;
+  const handleToggle = (value: string) => () => {
+    const currentIndex = selectedIds.indexOf(value);
+    const newChecked = [...selectedIds];
+
+    if (currentIndex === -1) {
+      // Add to the list if not already there, respecting the max limit
+      if (selectedIds.length < MAX_COMPARISON_COUNT) {
+        newChecked.push(value);
+      }
+    } else {
+      // Remove from the list if already checked
+      newChecked.splice(currentIndex, 1);
+    }
+
+    setSelectedIds(newChecked);
+  };
+
+  const availableChoices = results.filter(r => r.strategy_name !== 'Portfolio');
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="xl" PaperProps={{ sx: { height: '90vh' } }}>
       <DialogTitle sx={{ m: 0, p: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        Strategy Equity Comparison
-        <IconButton aria-label="close" onClick={onClose}>
-          <CloseIcon />
-        </IconButton>
+        Select Strategies to Compare
+        <IconButton aria-label="close" onClick={onClose}><CloseIcon /></IconButton>
       </DialogTitle>
-      <DialogContent dividers sx={{ p: 1, overflow: 'hidden' }}>
-        <Box sx={{ height: '100%', width: '100%' }}>
-          {canCompare ? (
+      <DialogContent dividers sx={{ p: 0, display: 'flex', overflow: 'hidden' }}>
+        
+        {/* --- LEFT PANEL: SELECTION LIST --- */}
+        <Box sx={{ width: '300px', borderRight: 1, borderColor: 'divider', overflowY: 'auto' }}>
+            <Box sx={{p: 2}}>
+                <Typography variant="h6">Available Results</Typography>
+                <Typography variant="caption" color="text.secondary">
+                    Select up to {MAX_COMPARISON_COUNT} to compare.
+                </Typography>
+            </Box>
+            <List dense>
+              {availableChoices.map((result) => {
+                const labelId = `checkbox-list-label-${result.strategy_name}`;
+                const isSelected = selectedIds.indexOf(result.strategy_name) !== -1;
+                const isDisabled = !isSelected && selectedIds.length >= MAX_COMPARISON_COUNT;
+
+                return (
+                  <ListItem key={result.strategy_name} disablePadding>
+                    <ListItemButton role={undefined} onClick={handleToggle(result.strategy_name)} dense disabled={isDisabled}>
+                      <ListItemIcon>
+                        <Checkbox
+                          edge="start"
+                          checked={isSelected}
+                          tabIndex={-1}
+                          disableRipple
+                          inputProps={{ 'aria-labelledby': labelId }}
+                          disabled={isDisabled}
+                        />
+                      </ListItemIcon>
+                      <ListItemText id={labelId} primary={result.strategy_name} primaryTypographyProps={{sx: {textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap'}}}/>
+                    </ListItemButton>
+                  </ListItem>
+                );
+              })}
+            </List>
+        </Box>
+
+        {/* --- RIGHT PANEL: THE CHART --- */}
+        <Box sx={{ flexGrow: 1, height: '100%', width: 'calc(100% - 300px)' }}>
+          {selectedIds.length > 0 ? (
             <ReactECharts
               option={chartOption}
               style={{ width: '100%', height: '100%' }}
@@ -156,7 +225,7 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
             />
           ) : (
              <Box sx={{display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%'}}>
-                <Typography>At least two strategies are needed for a comparison.</Typography>
+                <Alert severity="info">Select one or more strategies from the left panel to display their equity curves.</Alert>
              </Box>
           )}
         </Box>

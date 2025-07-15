@@ -14,66 +14,66 @@ interface AnalysisContextType {
 const AnalysisContext = createContext<AnalysisContextType | undefined>(undefined);
 
 export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+
   const [results, setResults] = useState<StrategyResult[]>([]);
   const [isComplete, setIsComplete] = useState(false);
   const resultsBuffer = useRef<StrategyResult[]>([]);
-  const updateTimer = useRef<NodeJS.Timeout | null>(null);
+  const animationFrameId = useRef<number | null>(null);
 
-  const addResult = useCallback((newResult: StrategyResult) => {
-    // Instead of calling setResults directly, add the new result to our buffer.
-    resultsBuffer.current.push(newResult);
-
-    // If a timer is already set, clear it. We'll set a new one.
-    // This is "debouncing" - we only update after a period of inactivity.
-    if (updateTimer.current) {
-      clearTimeout(updateTimer.current);
+  // This is the core function to flush the buffer to the React state
+  const flushBuffer = useCallback(() => {
+    if (resultsBuffer.current.length > 0) {
+      setResults(prevResults => [...prevResults, ...resultsBuffer.current]);
+      resultsBuffer.current = []; // Clear the buffer after flushing
     }
-
-    // Set a timer to update the actual React state in a batch.
-    // 100ms is a good value - it feels real-time but prevents overwhelming the browser.
-    updateTimer.current = setTimeout(() => {
-      setResults(prevResults => {
-        // Create a new array with the previous results and everything in the buffer.
-        const newBatch = [...prevResults, ...resultsBuffer.current];
-        // Clear the buffer for the next batch.
-        resultsBuffer.current = [];
-        return newBatch;
-      });
-      // Clear the timer ID
-      updateTimer.current = null;
-    }, 100);
-
+    // Mark the update as complete by nullifying the ID
+    animationFrameId.current = null;
   }, []);
 
+  // addResult now uses throttling with requestAnimationFrame
+  const addResult = useCallback((newResult: StrategyResult) => {
+    resultsBuffer.current.push(newResult);
+
+    // If an update is not already scheduled for the next frame, schedule one.
+    if (animationFrameId.current === null) {
+      animationFrameId.current = requestAnimationFrame(flushBuffer);
+    }
+  }, [flushBuffer]);
+
   const clearResults = useCallback(() => {
+    // If an update is scheduled, cancel it to prevent a flush of old data
+    if (animationFrameId.current !== null) {
+      cancelAnimationFrame(animationFrameId.current);
+      animationFrameId.current = null;
+    }
+    
+    // Clear the buffer and the main state
+    resultsBuffer.current = [];
     setResults([]);
     setIsComplete(false);
-    // Also clear any pending updates in the buffer
-    if (updateTimer.current) {
-      clearTimeout(updateTimer.current);
-    }
-    resultsBuffer.current = [];
   }, []);
 
   const markComplete = useCallback(() => {
-    // When the batch is complete, make sure any remaining items in the buffer are flushed.
-    if (updateTimer.current) {
-      clearTimeout(updateTimer.current);
+    // If an update is scheduled, cancel it because we are about to do a final, immediate flush.
+    if (animationFrameId.current !== null) {
+      cancelAnimationFrame(animationFrameId.current);
+      animationFrameId.current = null;
     }
-    setResults(prevResults => [...prevResults, ...resultsBuffer.current]);
-    resultsBuffer.current = [];
     
+    // Immediately flush any remaining items in the buffer
+    flushBuffer();
+    
+    // Then mark the process as complete
     setIsComplete(true);
-  }, []);
+  }, [flushBuffer]);
 
   useEffect(() => {
     return () => {
-      if (updateTimer.current) {
-        clearTimeout(updateTimer.current);
+      if (animationFrameId.current !== null) {
+        cancelAnimationFrame(animationFrameId.current);
       }
     };
   }, []);
-
 
   const value = {
     results,

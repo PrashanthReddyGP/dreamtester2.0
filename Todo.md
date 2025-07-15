@@ -24,6 +24,7 @@ FUNCTIONALITY:
 [-] Logging Terminal in App
 [-] Solo-backtest Option
 [-] Equity Comparison
+[] Limit the terminal lines for performance
 
 [-] Portfolio backtesting
 

@@ -22,22 +22,22 @@ const listeners: Listener[] = [];
 const connect = (batchId: string): void => {
   // If there's an existing connection, close it.
   if (socket) {
+    console.log("WebSocket Service: Closing existing socket before reconnecting.");
     socket.close();
   }
 
-  // Create a new WebSocket connection
-  socket = new WebSocket(`${WS_URL}${batchId}`);
+  const url = `${WS_URL}${batchId}`;
+  console.log(`%cWebSocket Service: Attempting to connect to ${url}`, 'color: blue; font-weight: bold;');
+  socket = new WebSocket(url);
 
-  socket.onopen = () => {
-    console.log(`WebSocket Service: Connection established for batch ${batchId}.`);
-    // Notify all listeners that a connection is open
+  socket.onopen = (event) => {
+    console.log(`%cWebSocket Service: ONOPEN - Connection established.`, 'color: green; font-weight: bold;');
     broadcast({ type: 'system', payload: { event: 'open' } });
   };
 
   socket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-      // Broadcast the parsed message to all active listeners
       broadcast(data);
     } catch (error) {
       console.error('WebSocket Service: Error parsing message', error);
@@ -46,14 +46,17 @@ const connect = (batchId: string): void => {
   };
 
   socket.onerror = (event) => {
-    console.error('WebSocket Service: Error', event);
+    console.error(`%cWebSocket Service: ONERROR - An error occurred.`, 'color: red; font-weight: bold;', event);
     broadcast({ type: 'system', payload: { event: 'error', message: 'WebSocket connection error' } });
   };
 
-  socket.onclose = () => {
-    console.log('WebSocket Service: Connection closed.');
+  socket.onclose = (event) => {
+    console.error(`%cWebSocket Service: ONCLOSE - Connection closed.`, 'color: red; font-weight: bold;');
+    console.log(`- Was clean: ${event.wasClean}`);
+    console.log(`- Code: ${event.code}`);
+    console.log(`- Reason: "${event.reason}"`);
     broadcast({ type: 'system', payload: { event: 'close' } });
-    socket = null; // Clear the socket
+    socket = null;
   };
 };
 

@@ -21,6 +21,7 @@ interface TerminalContextType {
 }
 
 const TerminalContext = createContext<TerminalContextType | undefined>(undefined);
+const MAX_LOG_LINES = 50;
 
 export const TerminalContextProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -31,8 +32,22 @@ export const TerminalContextProvider: React.FC<{ children: React.ReactNode }> = 
     const timestamp = new Date().toLocaleTimeString('en-US', {
         hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
     });
-    setLogs(prevLogs => [...prevLogs, { timestamp, level, message }]);
-  }, []);
+
+    const newLog: LogEntry = { timestamp, level, message };
+
+    setLogs(prevLogs => {
+      
+      const updatedLogs = [...prevLogs, newLog];
+      
+      if (updatedLogs.length > MAX_LOG_LINES) {
+        return updatedLogs.slice(-MAX_LOG_LINES);
+      }
+
+      return updatedLogs;
+
+    });
+
+    }, []);
 
   const clearLogs = useCallback(() => {
     setLogs([]);

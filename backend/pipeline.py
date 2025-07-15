@@ -701,14 +701,16 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
 
     print(f"Pruned {pruned_count} invalid combinations. Total valid runs: {total_runs}")
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Generated {total_runs} valid tests (pruned {pruned_count} combinations)."}})
-    if total_runs == 0: fail_job(batch_id, "No valid test combinations to run after pruning."); return
+    
+    if total_runs == 0: 
+        fail_job(batch_id, "No valid test combinations to run after pruning."); 
+        return
     
     # --- Step 7: The Nested Loop Logic for Job Submission ---
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
         for symbol in symbols_to_screen:
             code_with_symbol = re.sub(r"self\.symbol\s*=\s*['\"].*?['\"]", f"self.symbol = '{symbol}'", original_code)
             
-            # --- FIX: Iterate over the `valid_combinations` list ---
             for combo in valid_combinations:
                 modifications_for_run = []
                 param_strings = []
