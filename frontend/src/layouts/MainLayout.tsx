@@ -114,7 +114,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
           
             <PanelGroup direction="vertical">
           
-              <Panel style={{display:'flex'}}>
+              <Panel id='main-content' order={1} style={{display:'flex'}}>
                 <Outlet />
               </Panel>
 
@@ -122,7 +122,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
               {isTerminalOpen && (
                 <>
                   <VerticalResizeHandle />
-                  <Panel defaultSize={25} minSize={15} maxSize={50}>
+                  <Panel id='terminal' order={2} defaultSize={25} minSize={15} maxSize={50}>
                     <TerminalPanel onClose={() => toggleTerminal(false)} />
                   </Panel>
                 </>

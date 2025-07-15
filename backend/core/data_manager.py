@@ -104,6 +104,10 @@ def get_ohlcv(client, symbol: str, timeframe: str, start_dt: datetime, end_dt: d
     if not df.empty:
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         
+    # df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('America/Vancouver').dt.tz_localize(None)
+    
+    # print(df.tail(3))
+    
     return df
 
 def fetch_ohlcv_paginated(client, symbol, timeframe, fetch_start, fetch_end, limit=1000):

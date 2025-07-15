@@ -3,6 +3,7 @@ import type { FC } from 'react';
 import { Box, List, ListItemButton, ListItemIcon, ListItemText, Paper, Button, Tooltip } from '@mui/material';
 import AssessmentIcon from '@mui/icons-material/Assessment'; 
 import { RefreshCcw } from 'lucide-react';
+import { AreaChart } from 'lucide-react';
 
 // Define the shape of our strategy/backtest data
 export interface BacktestResult {
@@ -14,13 +15,12 @@ interface StrategyListPanelProps {
   results: BacktestResult[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onCompareClick: () => void;
 }
 
-export const StrategyListPanel: FC<StrategyListPanelProps> = ({ results, selectedId, onSelect }) => {
 
-  const onReload = () => {
-    console.log("Reload Placeholder")
-  }
+
+export const StrategyListPanel: FC<StrategyListPanelProps> = ({ results, selectedId, onSelect, onCompareClick }) => {
 
   return (
     <Paper 
@@ -40,9 +40,9 @@ export const StrategyListPanel: FC<StrategyListPanelProps> = ({ results, selecte
         alignItems: 'center',
         mb: 2 
       }}>
-        <Tooltip title="Refresh Results">
-          <Button variant="contained" color="primary" startIcon={<RefreshCcw />} sx={{ mb: 2, width:'100%' }} onClick={onReload}>
-            Reload Analytics
+        <Tooltip title="Compare equity curves of all strategies">
+          <Button variant="contained" color="primary" startIcon={<RefreshCcw />} sx={{ mb: 2, width:'100%' }} onClick={onCompareClick}>
+            Compare Strategies
           </Button>
         </Tooltip>
       </Box>

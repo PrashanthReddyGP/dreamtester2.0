@@ -1,7 +1,6 @@
 import React, {useState} from 'react';
 import type { FC } from 'react';
 import { Box, Paper, Typography, Tabs, Tab, Grow } from '@mui/material';
-import type { BacktestResult } from './StrategyListPanel'; // Import the type
 
 // Import your existing tab components
 import { EquityTab } from './EquityTab';
