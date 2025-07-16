@@ -1,8 +1,12 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useState } from 'react';
 import { Box, IconButton, Typography, Tooltip, useTheme } from '@mui/material';
 import ReactECharts from 'echarts-for-react';
 import type { EquityCurvePoint } from '../../services/api';
 import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap';
+import DownloadIcon from '@mui/icons-material/Download'; // A nice icon for the button
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'; // The icon for copy
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'; // A success feedback icon
+
 
 const calculateDrawdown = (equityCurve: number[][]) => {
   let peak = -Infinity;
@@ -21,8 +25,12 @@ export const EquityTab: React.FC<{
   equity: EquityCurvePoint[];
   initialCapital: number;
   isPortfolio: boolean; 
-}> = ({ equity, initialCapital, isPortfolio }) => {
+  strategy_name: string;
+}> = ({ equity, initialCapital, isPortfolio, strategy_name }) => {
+  
   const theme = useTheme();
+  const echartsRef = useRef<ReactECharts>(null);
+  const [isCopied, setIsCopied] = useState(false);
 
   // The prop `equityCurve` directly replaces `generateMockEquityData()`
   let equityDataForChart = equity.map(point => [
@@ -45,8 +53,6 @@ export const EquityTab: React.FC<{
       minEquityPnl = equityData[i];
     }
   }
-
-  const echartsRef = useRef<ReactECharts>(null);
 
   useEffect(() => {
     // This is a trick to ensure the resize happens after the DOM has settled.
@@ -219,6 +225,82 @@ export const EquityTab: React.FC<{
       });
     }
   };
+  const handleDownloadChart = () => {
+    const chartInstance = echartsRef.current?.getEchartsInstance();
+    if (chartInstance) {
+      // Get the chart data as a high-resolution base64 encoded PNG
+      const dataUrl = chartInstance.getDataURL({
+        type: 'png',
+        pixelRatio: 2, // Export at 2x resolution for crispness
+        backgroundColor: theme.palette.background.default, // Use the theme's background color
+        excludeComponents: ['dataZoom']
+      });
+
+      // Create a temporary link element to trigger the download
+      const link = document.createElement('a');
+
+      const baseName = strategy_name;
+      const nameWithoutExtension = baseName.replace(/\.py$/i, '');
+      const sanitizedName = nameWithoutExtension.replace(/[^a-z0-9_.-]/gi, '_').substring(0, 50);
+      const fileName = `${sanitizedName}.png`;
+      
+      link.download = fileName;
+      link.href = dataUrl;
+      
+      // Append, click, and remove the link to trigger the download
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      console.error("ECharts instance not available for download.");
+      alert("Could not download chart. Please try again.");
+    }
+  };
+
+    const handleCopyChart = async () => {
+    const chartInstance = echartsRef.current?.getEchartsInstance();
+    if (!chartInstance) {
+      console.error("ECharts instance not available to copy.");
+      alert("Error: Could not copy chart.");
+      return;
+    }
+    
+    // Check for clipboard API availability
+    if (!navigator.clipboard?.write) {
+        alert("Your browser does not support copying images to the clipboard.");
+        return;
+    }
+
+    try {
+      // 1. Get the chart data as a base64 string
+      const dataUrl = chartInstance.getDataURL({
+        type: 'png',
+        pixelRatio: 2,
+        backgroundColor: '#131313ff', // Use a white background for better pasting into docs
+        excludeComponents: ['dataZoom']
+      });
+
+      // 2. Convert the base64 data URL to a Blob
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+
+      // 3. Use the Clipboard API to write the blob
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          [blob.type]: blob,
+        }),
+      ]);
+      
+      // 4. Provide user feedback
+      setIsCopied(true);
+      // Reset the icon after 2 seconds
+      setTimeout(() => setIsCopied(false), 2000);
+
+    } catch (error) {
+      console.error('Failed to copy image to clipboard:', error);
+      alert('Failed to copy image. Please try downloading instead.');
+    }
+  };
 
   return (
     <Box sx={{ width:'100%', height:'100%', display: 'flex', flexDirection: 'column' }}>
@@ -227,13 +309,23 @@ export const EquityTab: React.FC<{
         <Typography variant="h2" gutterBottom>
           Equity Curve
         </Typography>
-
-        <Tooltip title="Reset Zoom">
-          <IconButton onClick={handleResetZoom} size="small">
-            <ZoomOutMapIcon />
-          </IconButton>
-        </Tooltip>
-        
+        <Box>
+          <Tooltip title="Copy Image to Clipboard">
+            <IconButton onClick={handleCopyChart} size="small" disabled={isCopied}>
+              {isCopied ? <CheckCircleIcon color="success" /> : <ContentCopyIcon />}
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Download Chart Snapshot">
+            <IconButton onClick={handleDownloadChart} size="small">
+              <DownloadIcon />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Reset Zoom">
+            <IconButton onClick={handleResetZoom} size="small">
+              <ZoomOutMapIcon />
+            </IconButton>
+          </Tooltip>
+        </Box>
       </Box>
 
       <Box sx={{ flexGrow: 1, width:'100%' }}>

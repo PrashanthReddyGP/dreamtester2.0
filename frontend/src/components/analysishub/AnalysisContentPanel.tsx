@@ -50,6 +50,7 @@ export const AnalysisContentPanel: FC<{
             equity={result.equity_curve}
             initialCapital={initialCapital}
             isPortfolio={isPortfolioView} 
+            strategy_name={result.strategy_name}
           />}
         {currentTab === 1 && 
           <TradeLogTab 
