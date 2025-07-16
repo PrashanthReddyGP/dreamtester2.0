@@ -2,6 +2,7 @@
 import os
 import re
 import ast
+import math
 import uuid
 import asyncio
 import itertools
@@ -344,7 +345,12 @@ def convert_to_json_serializable(obj):
         return float(obj)
     elif isinstance(obj, np.ndarray):
         return obj.tolist()
-        
+    elif isinstance(obj, (float, np.floating, np.float64)):
+        # Check for NaN, Infinity, or -Infinity
+        if math.isnan(obj) or math.isinf(obj):
+            return None # Convert to null in the final JSON
+        return float(obj) # Otherwise, convert to a standard Python float
+
     else:
         return obj
     
@@ -716,9 +722,10 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
                 param_strings = []
 
                 for j, param_config in enumerate(params_to_optimize):
-                    current_value = round(combo[j], 4)
+                    current_value = combo[j]
                     modifications_for_run.append({**param_config, 'value': current_value})
-                    param_strings.append(f"{param_config['name']}={current_value}")
+                    formatted_value = f"{current_value:g}" 
+                    param_strings.append(f"{param_config['name']}={formatted_value}")
                 
                 final_modified_code = modify_strategy_code(code_with_symbol, modifications_for_run)
                 param_part = ", ".join(param_strings)

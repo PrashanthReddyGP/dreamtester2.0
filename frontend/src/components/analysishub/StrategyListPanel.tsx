@@ -3,7 +3,6 @@ import type { FC } from 'react';
 import { Box, List, ListItemButton, ListItemIcon, ListItemText, Paper, Button, Tooltip } from '@mui/material';
 import AssessmentIcon from '@mui/icons-material/Assessment'; 
 import { RefreshCcw } from 'lucide-react';
-import { AreaChart } from 'lucide-react';
 
 // Define the shape of our strategy/backtest data
 export interface BacktestResult {

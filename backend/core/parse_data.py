@@ -21,7 +21,7 @@ def parse_file(job_id, file_name, strategy_code):
     """
 
     temp_filepath = None
-    strategy_name = os.path.splitext(file_name)[0]
+
     # unique_module_name = f"{strategy_name}_{job_id.replace('-', '_')}"
     
     # Use a try...finally block to GUARANTEE cleanup happens
@@ -69,7 +69,7 @@ def parse_file(job_id, file_name, strategy_code):
             
         # --- 5. Instantiate and return ---
         strategy_instance = StrategyClass()
-        return strategy_instance, strategy_name
+        return strategy_instance, file_name
         
     finally:
         # --- 6. Cleanup the temporary files ---

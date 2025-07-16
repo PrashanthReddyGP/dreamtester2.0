@@ -129,7 +129,7 @@ def calculate_indicators(strategy_instance, df):
                 deviation = int(params[1])
                 
                 if timeframe == '1m':
-                    df = idk.calculate_bollinger_bands(df, timeframe, length, deviation)
+                    df = idk.calculate_bollinger_bands(df, length, deviation)
                 # elif timeframe == '3m':
                 #     df_3m = idk.calculate_bollinger_bands(df_3m, timeframe, length, deviation)
                 #     df = df.merge(df_3m[['timestamp', f'{timeframe}_SMA_{length}']], how='left', on='timestamp')

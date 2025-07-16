@@ -181,6 +181,7 @@ class Indicators(object):
         # Calculate Upper and Lower Bands
         df['upper_bollinger_band'] = temp_df[f'sma_{length}'] + (deviation * temp_df['std'])
         df['lower_bollinger_band'] = temp_df[f'sma_{length}'] - (deviation * temp_df['std'])
+        df['middle_bollinger_band'] = temp_df[f'sma_{length}']
         
         df['bb_width'] = (df['upper_bollinger_band'] - df['lower_bollinger_band']) / temp_df[f'sma_{length}']
         
