@@ -28,6 +28,12 @@ const formatTimestamp = (timestampInSeconds: number): string => {
   });
 };
 
+const formatPrice = (price: any): string => {
+  const numericPrice = parseFloat(price);
+  if (isNaN(numericPrice)) return 'N/A';
+  return numericPrice.toPrecision(4);
+};
+
 export const TradeLogTab: FC<{ trades: Trades }> = ({ trades }) => {
   
   const theme = useTheme();
@@ -47,10 +53,6 @@ export const TradeLogTab: FC<{ trades: Trades }> = ({ trades }) => {
             field: 'timestamp', 
             headerName: 'Timestamp', 
             width: 200, 
-            
-            // --- THE FIX ---
-            // The `value` is passed as the first argument to the formatter function.
-            // Or, more robustly, we can destructure the `params` object.
             valueFormatter: (value) => {
                 // The `value` here is the raw data for the cell (e.g., 1594755000)
                 return formatTimestamp(value as number);
@@ -58,16 +60,13 @@ export const TradeLogTab: FC<{ trades: Trades }> = ({ trades }) => {
         },
         { field: 'Symbol', headerName: 'Symbol', width: 120 },
         { field: 'Timeframe', headerName: 'Timeframe', width: 80 },
-        {field: 'Entry', headerName: 'Entry', width: 100, type: 'number'},
-        {field: 'Take Profit', headerName: 'Take Profit', width: 100, type:'number' },
-        {field: 'Stop Loss', headerName: 'Stop Loss', width: 100, type:'number' },
+        {field: 'entry', headerName: 'Entry', width: 100, type: 'number', valueFormatter: (value) => {return formatPrice(value as number)}},
+        {field: 'take_profit', headerName: 'Take Profit', width: 100, type:'number', valueFormatter: (value) => {return formatPrice(value as number)} },
+        {field: 'stop_loss', headerName: 'Stop Loss', width: 100, type:'number', valueFormatter: (value) => {return formatPrice(value as number)} },
         { 
             field: 'Exit_Time', 
             headerName: 'Exit Time', 
             width: 200, 
-            // --- THE FIX ---
-            // The `value` is passed as the first argument to the formatter function.
-            // Or, more robustly, we can destructure the `params` object.
             valueFormatter: (value) => {
                 // The `value` here is the raw data for the cell (e.g., 1594755000)
                 return formatTimestamp(value as number);

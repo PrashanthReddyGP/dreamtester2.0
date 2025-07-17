@@ -367,11 +367,12 @@ def prepare_strategy_payload(strategy_data, metrics, monthly_returns, is_portfol
     equity_curve = list(zip(timestamps_ms[:min_len], equity_values[:min_len]))
     
     signals_df = strategy_data.get('signals')
-    
+        
     trades_json = []
     
     if signals_df is not None and not signals_df.empty:
         formatted_trades_df = format_datetime_columns_for_json(signals_df)
+        
         trades_json = formatted_trades_df.to_dict(orient='records')
         
     return {
@@ -392,45 +393,14 @@ def format_datetime_columns_for_json(df: pd.DataFrame) -> pd.DataFrame:
 
     formatted_df['timestamp'] = formatted_df['timestamp'].astype(np.int64) // 10**9
     formatted_df['Exit_Time'] = formatted_df['Exit_Time'].astype(np.int64) // 10**9
-
-    # for col_name in formatted_df.columns:
-    #     # Heuristic: check if column name suggests it's a timestamp.
-    #     is_time_column_name = 'time' in col_name.lower() or 'date' in col_name.lower()
-        
-    #     if not is_time_column_name:
-    #         continue
-
-    #     # Check if the data is numeric, which indicates a Unix timestamp
-    #     if pd.api.types.is_numeric_dtype(formatted_df[col_name]):
-    #         print(f"  --> Formatting numeric time column: '{col_name}'")
-            
-    #         # Use the median for a robust check against outliers/zeros
-    #         sample_values = formatted_df[col_name][formatted_df[col_name] > 0]
-    #         if sample_values.empty:
-    #             formatted_df[col_name] = None # Or '' if you prefer
-    #             continue
-            
-    #         median_value = sample_values.median()
-            
-    #         # If the number is smaller than a 12-digit number, it's likely seconds. Otherwise, milliseconds.
-    #         unit_to_use = 's' if median_value < 10**12 else 'ms'
-            
-    #         # Convert to datetime objects
-    #         dt_series = pd.to_datetime(
-    #             formatted_df[col_name], 
-    #             unit=unit_to_use,
-    #             errors='coerce'
-    #         )
-            
-    #         # Format to a string and replace NaT with None
-    #         str_series = dt_series.dt.strftime('%Y-%m-%d %H:%M:%S')
-    #         formatted_df[col_name] = str_series.replace({pd.NaT: None})
-        
-    #     # Also handle columns that might already be datetime objects
-    #     elif pd.api.types.is_datetime64_any_dtype(formatted_df[col_name]):
-    #          print(f"  --> Formatting datetime object column: '{col_name}'")
-    #          str_series = formatted_df[col_name].dt.strftime('%Y-%m-%d %H:%M:%S')
-    #          formatted_df[col_name] = str_series.replace({pd.NaT: None})
+    
+    rename_map = {
+        'Entry': 'entry',
+        'Take Profit': 'take_profit',
+        'Stop Loss': 'stop_loss',
+    }
+    
+    formatted_df.rename(columns=rename_map, inplace=True, errors='ignore')
 
     return formatted_df
 

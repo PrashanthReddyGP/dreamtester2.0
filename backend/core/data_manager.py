@@ -103,9 +103,7 @@ def get_ohlcv(client, symbol: str, timeframe: str, start_dt: datetime, end_dt: d
     # Convert timestamp back to datetime for use in pandas
     if not df.empty:
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        
-    # df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('America/Vancouver').dt.tz_localize(None)
-    
+            
     # print(df.tail(3))
     
     return df

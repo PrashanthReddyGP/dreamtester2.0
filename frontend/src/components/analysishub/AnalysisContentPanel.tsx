@@ -9,10 +9,6 @@ import { AdvancedMetricsTab } from './AdvancedMetricsTab';
 import { MetricsOverviewTab } from './MetricsOverviewTab';
 import type { StrategyResult } from '../../services/api'; 
 
-// interface AnalysisContentPanelProps {
-//   result: BacktestResult; // Expects the full result object
-// }
-
 export const AnalysisContentPanel: FC<{
     results: StrategyResult[],
     result: StrategyResult,

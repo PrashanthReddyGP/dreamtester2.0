@@ -383,7 +383,7 @@ export const ExplorerPanel: React.FC<{
       <Box 
         ref={setRootDroppableRef}
         onContextMenu={handleContainerContextMenu} 
-        sx={{ flexGrow: 1 }}
+        sx={{ flexGrow: 1, overflowY: 'auto' }}
       >
         <List component="nav" dense>
             {fileSystem.map(item => (
