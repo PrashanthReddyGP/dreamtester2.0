@@ -7,7 +7,7 @@ try:
     import uuid
     import uvicorn
     import asyncio
-    from typing import List
+    from typing import List, Literal, Union, Annotated
     from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, Response
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel, Field
@@ -28,10 +28,11 @@ try:
         clear_all_strategies,
         create_multiple_strategy_items,
         create_backtest_job,
-        get_backtest_job 
+        get_backtest_job,
+        clear_ohlcv_tables,
     )
 
-    from pipeline import run_unified_test_manager, run_optimization_manager, run_asset_screening_manager, run_batch_manager
+    from pipeline import run_unified_test_manager, run_optimization_manager, run_asset_screening_manager, run_batch_manager, run_local_backtest_manager
     from core.connect_to_brokerage import get_client
 
     ##########################################
@@ -79,7 +80,12 @@ try:
         newParentId: Optional[str] = None
 
     #######################
+    class LocalBacktestConfig(BaseModel):
+        strategy_code: str
+        strategy_name: str
+        csv_data: str
 
+    ########################
     class OptimizationParam(BaseModel):
         indicatorIndex: int
         paramIndex: int
@@ -121,6 +127,41 @@ try:
     class AssetScreeningBody(BaseModel):
         strategy_code: str
         symbols_to_screen: List[str]
+
+    # The base model with all common fields
+    class BaseDurabilityConfig(BaseModel):
+        strategy_code: str
+        parameters_to_optimize: List[OptimizableParameterModel]
+        symbols_to_screen: List[str]
+        combination_rules: List[CombinationRuleModel]
+
+    # The specific model for Data Segmentation tests
+    class DataSegmentationConfig(BaseDurabilityConfig):
+        # This is the "discriminator" field. It MUST be a Literal.
+        test_type: Literal['data_segmentation']
+        
+        # Fields specific to this test type
+        training_pct: int
+        validation_pct: int
+        testing_pct: int
+        optimization_metric: str
+        top_n_sets: int
+
+    # You can add other test configurations here as you build them
+    # class MonteCarloConfig(BaseDurabilityConfig):
+    #     test_type: Literal['monte_carlo']
+    #     num_runs: int
+    #     # ... other MC specific fields
+
+    # The Union type that combines all possible configurations.
+    # Pydantic will use the `test_type` field to figure out which model to use.
+    DurabilitySubmissionConfig = Annotated[
+        Union[
+            DataSegmentationConfig,
+            # MonteCarloConfig, # Add other configs here later
+        ],
+        Field(discriminator="test_type"),
+    ]
 
     class ConnectionManager:
         def __init__(self):
@@ -188,13 +229,14 @@ try:
 
     @app.on_event("startup")
     async def startup_event():
-        # Create the queue here. It will be passed to tasks as needed.
+        # This dictionary will map batch_id -> asyncio.Event
+        app.state.connection_events = {}
+        # Make sure you also have your websocket_queue defined
         app.state.websocket_queue = asyncio.Queue()
-        # Start the websocket_sender task and give it the queue
+        # Start your websocket sender task
         asyncio.create_task(websocket_sender(app.state.websocket_queue, manager))
-        # --- NEW: Start the heartbeat task ---
+        # Start the heartbeat task
         asyncio.create_task(heartbeat_sender(manager))
-
 
     async def heartbeat_sender(manager: ConnectionManager):
         """
@@ -299,6 +341,19 @@ try:
         if result is None:
             raise HTTPException(status_code=500, detail="An error occurred during bulk import.")
         return result
+    
+    # Using the DELETE HTTP method is semantically correct for a deletion action.
+    @app.delete("/api/data/cache")
+    async def clear_data_cache_endpoint():
+        """
+        Clears all cached OHLCV data from the database.
+        """
+        try:
+            result = clear_ohlcv_tables()
+            return result
+        except Exception as e:
+            print(f"ERROR clearing OHLCV cache: {e}")
+            raise HTTPException(status_code=500, detail="An error occurred while clearing the data cache.")
 
     #########################################################################################
 
@@ -452,7 +507,23 @@ try:
             print(f"ERROR: Could not fetch symbols for {exchange_name}: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to fetch symbols for {exchange_name}.")
 
-
+    @app.post("/api/backtest/local-submit")
+    async def submit_local_backtest(body: LocalBacktestConfig, request: Request):
+        batch_id = str(uuid.uuid4())
+        create_backtest_job(batch_id)
+        
+        config_dict = body.model_dump()
+        queue = request.app.state.websocket_queue
+        loop = asyncio.get_running_loop()
+        
+        # We run this in an executor because CSV parsing can be slow
+        loop.run_in_executor(
+            None, # Use the default thread pool
+            run_local_backtest_manager,
+            batch_id, config_dict, manager, queue, loop
+        )
+        
+        return {"message": "Local backtest job accepted.", "batch_id": batch_id}
 
     ###########################################################################################
 
@@ -485,6 +556,9 @@ try:
         # Immediately create the job record in the database so the frontend can query its status
         create_backtest_job(batch_id)
         
+        connection_event = asyncio.Event()
+        request.app.state.connection_events[batch_id] = connection_event
+        
         files_data = [file.model_dump() for file in files]
         
         # Get the queue and pass it
@@ -497,7 +571,8 @@ try:
             files_data=files_data, 
             manager=manager,
             queue=queue,
-            loop=main_loop
+            loop=main_loop,
+            connection_event=connection_event
         )
         
         return {"message": "Batch processing started.", "batch_id": batch_id}
@@ -522,6 +597,8 @@ try:
         # Get the queue from the app state and pass it to the background task
         queue = request.app.state.websocket_queue
         main_loop = asyncio.get_running_loop()
+        connection_event = asyncio.Event()
+        request.app.state.connection_events[batch_id] = connection_event
 
         background_tasks.add_task(
             run_unified_test_manager,
@@ -529,9 +606,40 @@ try:
             config=config_dict,
             manager=manager,
             queue=queue,
-            loop=main_loop
+            loop=main_loop,
+            connection_event=connection_event
         )
         return {"message": "Optimization job started.", "batch_id": batch_id}
+
+    @app.post("/api/durability/submit")
+    async def submit_durability_test(
+        body: DurabilitySubmissionConfig,
+        background_tasks: BackgroundTasks, 
+        request: Request
+    ):
+        batch_id = str(uuid.uuid4())
+        create_backtest_job(batch_id)
+        
+        # Create a new event for this batch_id
+        connection_event = asyncio.Event()
+        # Store it in our global dictionary
+        request.app.state.connection_events[batch_id] = connection_event
+
+        config_dict = body.model_dump()
+        queue = request.app.state.websocket_queue
+        main_loop = asyncio.get_running_loop()
+
+        background_tasks.add_task(
+            run_unified_test_manager,
+            batch_id=batch_id,
+            config=config_dict,
+            manager=manager,
+            queue=queue,
+            loop=main_loop,
+            # Pass the event object to the background task
+            connection_event=connection_event 
+        )
+        return {"message": "Durability test job started.", "batch_id": batch_id}
 
     ####################################
 
@@ -548,11 +656,22 @@ try:
         
         # If the origin is valid, proceed as before
         await manager.connect(websocket, batch_id)
+        
+        # When a client connects, find the corresponding event and set it.
+        connection_event = app.state.connection_events.get(batch_id)
+        if connection_event:
+            print(f"Client connected for batch {batch_id}. Setting connection event.")
+            connection_event.set()
+
         try:
             while True:
-                await websocket.receive_text() 
+                await websocket.receive_text()
         except WebSocketDisconnect:
             manager.disconnect(websocket, batch_id)
+            # Clean up the event from the dictionary to save memory
+            if batch_id in app.state.connection_events:
+                del app.state.connection_events[batch_id]
+            print(f"Client disconnected from batch {batch_id}")
 
     if __name__ == "__main__":
         # Make sure to pass the 'app' object you created earlier

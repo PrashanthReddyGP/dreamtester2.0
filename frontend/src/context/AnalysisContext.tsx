@@ -6,9 +6,16 @@ import type { StrategyResult } from '../services/api';
 interface AnalysisContextType {
   results: StrategyResult[];
   isComplete: boolean;
+  batchConfig: BatchConfig | null;
   addResult: (result: StrategyResult) => void;
   clearResults: () => void;
   markComplete: () => void;
+  setBatchConfig: (config: BatchConfig) => void; 
+}
+
+export interface BatchConfig {
+  test_type: string;
+  [key: string]: any; 
 }
 
 const AnalysisContext = createContext<AnalysisContextType | undefined>(undefined);
@@ -19,6 +26,7 @@ export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ chi
   const [isComplete, setIsComplete] = useState(false);
   const resultsBuffer = useRef<StrategyResult[]>([]);
   const animationFrameId = useRef<number | null>(null);
+  const [batchConfig, setBatchConfigState] = useState<BatchConfig | null>(null);
 
   // This is the core function to flush the buffer to the React state
   const flushBuffer = useCallback(() => {
@@ -41,16 +49,15 @@ export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ chi
   }, [flushBuffer]);
 
   const clearResults = useCallback(() => {
-    // If an update is scheduled, cancel it to prevent a flush of old data
     if (animationFrameId.current !== null) {
       cancelAnimationFrame(animationFrameId.current);
       animationFrameId.current = null;
     }
     
-    // Clear the buffer and the main state
     resultsBuffer.current = [];
     setResults([]);
     setIsComplete(false);
+    setBatchConfigState(null);
   }, []);
 
   const markComplete = useCallback(() => {
@@ -67,6 +74,10 @@ export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ chi
     setIsComplete(true);
   }, [flushBuffer]);
 
+  const setBatchConfig = useCallback((config: BatchConfig) => {
+    setBatchConfigState(config);
+  }, []);
+
   useEffect(() => {
     return () => {
       if (animationFrameId.current !== null) {
@@ -78,9 +89,11 @@ export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ chi
   const value = {
     results,
     isComplete,
+    batchConfig,
     addResult,
     clearResults,
     markComplete,
+    setBatchConfig,
   };
 
   return <AnalysisContext.Provider value={value}>{children}</AnalysisContext.Provider>;

@@ -285,32 +285,6 @@ export const OptimizeModal: React.FC<OptimizeModalProps> = ({ open, onClose, onS
                         ))}
                     </Box>
                 </Box>
-{/* 
-              <Box>
-                <Typography variant="h6" gutterBottom>3. Define Combination Rules (Optional)</Typography>
-                <Typography variant="body2" color="text.secondary" sx={{mb: 2}}>
-                  Prevent illogical tests. For example, ensure a "Fast" SMA period is always less than a "Slow" SMA period.
-                </Typography>
-                
-                {rules.map((rule, index) => (
-                    <CombinationRuleRow 
-                        key={rule.id} 
-                        rule={rule} 
-                        availableParams={enabledParamsForRules}
-                        onUpdate={updateRule}
-                        onRemove={removeRule}
-                    />
-                ))}
-
-                <Button
-                  startIcon={<AddCircleOutlineIcon />}
-                  onClick={addRule}
-                  disabled={enabledParamsForRules.length < 2}
-                  sx={{mt: 1}}
-                >
-                  Add Rule
-                </Button>
-              </Box> */}
 
             </Box>
         )}

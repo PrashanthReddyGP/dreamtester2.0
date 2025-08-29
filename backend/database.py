@@ -1,7 +1,7 @@
 import os
 import time
 from datetime import datetime
-from sqlalchemy import REAL, create_engine, Column, Integer, String, Text, ForeignKey, asc, JSON
+from sqlalchemy import REAL, create_engine, Column, Integer, String, Text, ForeignKey, asc, JSON, text
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
 # --- This part remains the same ---
@@ -293,3 +293,34 @@ def get_backtest_job(batch_id: str):
         return None
     finally:
         db.close()
+        
+def clear_ohlcv_tables():
+    """
+    Finds and drops all tables in the database whose names start with 'data_'.
+    This is used to safely clear the OHLCV cache without touching other tables.
+    """
+    with engine.connect() as conn:
+        # Start a transaction. If any part fails, it will all be rolled back.
+        with conn.begin():
+            # Query the master table to find all OHLCV data tables
+            find_tables_sql = text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'data_%'")
+            
+            # The result will be a list of tuples, e.g., [('data_BTCUSDT_15m',), ('data_ETHUSDT_1h',)]
+            tables_to_drop = conn.execute(find_tables_sql).fetchall()
+            
+            if not tables_to_drop:
+                return {"status": "success", "message": "No OHLCV data tables found to clear."}
+
+            # Loop through the list and execute a DROP TABLE command for each one
+            for table_row in tables_to_drop:
+                table_name = table_row[0]
+                print(f"Dropping table: {table_name}")
+                # IMPORTANT: Table names cannot be parameterized in SQL statements.
+                # This is safe ONLY because we are getting the names directly from
+                # the database's own schema table.
+                conn.execute(text(f'DROP TABLE "{table_name}"'))
+        
+        # The transaction is automatically committed here if everything succeeded
+        
+    count = len(tables_to_drop)
+    return {"status": "success", "message": f"Successfully cleared {count} OHLCV data table(s)."}

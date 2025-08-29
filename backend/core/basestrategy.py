@@ -167,7 +167,15 @@ class BaseStrategy:
         df['RR'] = self.rr
         df['Returns'] = self.returns
         df['Commissioned Returns'] = self.commissioned_returns
-        df['Reduction'] = round(abs((df['Returns'] - df['Commissioned Returns']) * 100 / df['Returns']), 2)
+        # If 'Returns' is 0, the reduction is not mathematically defined. We can set it to 0 or 100.
+        # Setting to 0 is safer to prevent errors, as it implies no reduction from a non-existent profit.
+        df['Reduction'] = np.where(
+            df['Returns'] == 0,
+            0, # Value to use if Returns is 0
+            round(abs((df['Returns'] - df['Commissioned Returns']) * 100 / df['Returns']), 2) # Original calculation
+        )
+        # Make sure to handle potential new NaNs if Commissioned Returns can be NaN when Returns is 0
+        df['Reduction'] = df['Reduction'].fillna(0)
         
         df['Max Drawdown(%)'] = self.max_drawdown
         

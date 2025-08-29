@@ -6,8 +6,6 @@ from sqlalchemy import text
 
 from database import engine, SessionLocal 
 
-DATABASE_PATH = 'path/to/your/database.db'
-
 # All threads will have to wait to acquire this lock before fetching.
 exchange_api_lock = threading.Lock()
 db_write_lock = threading.Lock()
@@ -39,8 +37,8 @@ def get_ohlcv(client, symbol: str, timeframe: str, start_dt: datetime, end_dt: d
             conn.commit() # Make sure the table is definitely created
 
             # Check existing data range
-            select_range_sql = text(f"SELECT MIN(timestamp), MAX(timestamp) FROM {table_name}")
-            res = conn.execute(select_range_sql).fetchone()
+            res = conn.execute(text(f"SELECT MIN(timestamp), MAX(timestamp) FROM {table_name}")).fetchone()
+            
             min_ts, max_ts = res if res and res[0] is not None else (None, None)
 
             start_ts_ms = int(start_dt.timestamp() * 1000)
@@ -62,7 +60,7 @@ def get_ohlcv(client, symbol: str, timeframe: str, start_dt: datetime, end_dt: d
                 if start_ts_ms < min_ts:
                     # We need data from the user's start date up to the beginning of our cache.
                     # The `-1` prevents fetching the first candle we already have.
-                    print(f"Fetching older data from {datetime.fromtimestamp(start_ts_ms/1000)} to {datetime.fromtimestamp((min_ts-1)/1000)}...")
+                    print(f"Fetching older data up to {datetime.fromtimestamp(min_ts / 1000)}...")
                     data_before = fetch_ohlcv_paginated(client, symbol, timeframe, start_ts_ms, min_ts - 1)
                     all_new_data.extend(data_before)
 
@@ -70,9 +68,25 @@ def get_ohlcv(client, symbol: str, timeframe: str, start_dt: datetime, end_dt: d
                 if end_ts_ms > max_ts:
                     # We need data from the end of our cache up to the user's end date.
                     # The `+1` prevents fetching the last candle we already have.
-                    print(f"Fetching recent data from {datetime.fromtimestamp((max_ts+1)/1000)} to {datetime.fromtimestamp(end_ts_ms/1000)}...")
-                    data_after = fetch_ohlcv_paginated(client, symbol, timeframe, max_ts + 1, end_ts_ms)
-                    all_new_data.extend(data_after)
+                    fetch_since = max_ts
+                    
+                    print(f"Fetching recent data since {datetime.fromtimestamp(fetch_since / 1000)}...")
+                    
+                    data_after = fetch_ohlcv_paginated(client, symbol, timeframe, fetch_since, end_ts_ms)
+                    
+                    # When we save, we will use INSERT OR REPLACE to update the last candle
+                    # and insert the new ones.
+                    if data_after:
+                        print(f"Found {len(data_after)} new/updated candles to save.")
+                        # Use a different save method for recent data
+                        to_replace_dicts = [{'ts': r[0], 'o': r[1], 'h': r[2], 'l': r[3], 'c': r[4], 'v': r[5]} for r in data_after]
+                        replace_sql = text(f'''
+                            INSERT OR REPLACE INTO {table_name} (timestamp, open, high, low, close, volume) 
+                            VALUES (:ts, :o, :h, :l, :c, :v)
+                        ''')
+                        conn.execute(replace_sql, to_replace_dicts)
+                        conn.commit()
+                        print("Recent data successfully updated in the database.")
             
             # --- Now, save any new data we collected ---
             if all_new_data:

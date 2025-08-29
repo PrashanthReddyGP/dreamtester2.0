@@ -560,38 +560,45 @@ class Indicators(object):
         df['ma_acceleration_normalized'] = pd.to_numeric(df['ma_acceleration_normalized'].round(0).fillna(0), errors='coerce').astype(int)
 
         return df
-
+    
+    # DATETIME SPLIT
     def datetime_split(self, df):
+        ts = df['timestamp']
         
-        # Create a new DataFrame with the additional columns
+        # First day of each month
+        month_start = ts.dt.to_period('M').dt.start_time
+        
+        # Week of month (ISO style)
+        week_of_month_iso = ts.dt.isocalendar().week - month_start.dt.isocalendar().week + 1
+        
         new_columns = pd.DataFrame({
-            'year': df['timestamp'].dt.year,
-            'month': df['timestamp'].dt.month,
-            'day': df['timestamp'].dt.day,
-            'day_of_year': df['timestamp'].dt.dayofyear,
-            'day_of_week': df['timestamp'].dt.dayofweek,
-            'hour':df['timestamp'].dt.hour,
-            'minute': df['timestamp'].dt.minute,
-            'week_of_year': df['timestamp'].dt.isocalendar().week,
-            'days_in_month': df['timestamp'].dt.days_in_month,
-            'quarter': df['timestamp'].dt.quarter,
-            'is_month_start': df['timestamp'].dt.is_month_start,
-            'is_month_end': df['timestamp'].dt.is_month_end,
-            'is_quarter_start': df['timestamp'].dt.is_quarter_start,
-            'is_quarter_end': df['timestamp'].dt.is_quarter_end,
-            'is_year_start': df['timestamp'].dt.is_year_start,
-            'is_year_end': df['timestamp'].dt.is_year_end,
-            'is_leap_year': df['timestamp'].dt.is_leap_year
-        })
-
-        # Concatenate all the columns at once
+            'year': ts.dt.year,
+            'month': ts.dt.month,
+            'day': ts.dt.day,
+            'week_of_month_def': (ts.dt.day - 1) // 7 + 1,
+            'week_of_month_iso': week_of_month_iso,
+            'day_of_year': ts.dt.dayofyear,
+            'day_of_week': ts.dt.dayofweek,
+            'hour': ts.dt.hour,
+            'minute': ts.dt.minute,
+            'week_of_year': ts.dt.isocalendar().week,
+            'days_in_month': ts.dt.days_in_month,
+            'quarter': ts.dt.quarter,
+            'is_month_start': ts.dt.is_month_start,
+            'is_month_end': ts.dt.is_month_end,
+            'is_quarter_start': ts.dt.is_quarter_start,
+            'is_quarter_end': ts.dt.is_quarter_end,
+            'is_year_start': ts.dt.is_year_start,
+            'is_year_end': ts.dt.is_year_end,
+            'is_leap_year': ts.dt.is_leap_year
+        }, index=df.index)
+        
         df = pd.concat([df, new_columns], axis=1)
         
         df['is_weekend'] = df['day_of_week'].isin([5, 6])
         df['is_weekday'] = df['day_of_week'].isin([0, 1, 2, 3, 4])
-        
-        df['is_week_start'] = df['day_of_week'].isin([0])
-        df['is_week_end'] = df['day_of_week'].isin([6])
+        df['is_week_start'] = df['day_of_week'] == 0
+        df['is_week_end'] = df['day_of_week'] == 6
         
         return df
     
@@ -813,10 +820,10 @@ class Indicators(object):
                                   ((df['high'] - df['open']) + (df['close'] - df['low'])) / total_range * 100)
         
         prev_close = df['close'].shift(1)
+        
         # Compute the absolute percentage gap relative to the previous close.
         df['gap'] = np.where(prev_close != 0,
-                     ((df['open'] - prev_close) / prev_close).abs() * 100,
-                     0)
+                    ((df['open'] - prev_close) / prev_close).abs() * 100,0)
         
         prev_candle = df['candle'].shift(1)
         df['candle_size_change_pct'] = (df['candle'] / prev_candle * 100).fillna(0)
@@ -888,5 +895,311 @@ class Indicators(object):
             series_df.set_index('timestamp', inplace=True)
             
             df = pd.merge_asof(df, series_df, on='timestamp', direction='backward')
+        
+        return df
+    
+    # REGIME FILTERS
+    # def calculate_regime_filters(self, df):
+        
+        # TREND FILTER (Using MA, MA SLOPE, SUPERTREND, PSAR, PIVOT POINTS, MACD, ADX)
+        # LOOKBACK FILTER (Using HH, LL, HC, LC, Percentage change, Candle Lengths)
+        # VOLATILITY FILTER (Using ATR, Bollinger Bands, Keltner Channels)
+        # VOLUME FILTER (Using OBV, CMF, MFI, VOLUME)
+        # MOMENTUM FILTER (Using RSI, STOCH, CCI, WILLIAMS %R)
+        # STRENGTH FILTER (Using VIX, VIX FIX, VIX EMA, MAJORITY OF INDICATORS)
+        # CORRELATION FILTER (Using BTC, ETH)
+        # CYCLE FILTER (Using Bitcoin Halving, 4 Year Cycle)
+        # TIME OF DAY FILTER (Using Hour, Day of Week, Month)
+        
+        # """
+        # Calculates a comprehensive set of regime filters based on various technical indicators.
+
+        # This function enriches the DataFrame with detailed columns for different market regimes,
+        # including Trend, Volatility, Momentum, and Volume. For each indicator used, it provides
+        # both a qualitative state (e.g., 'BULLISH', 'LOW') and a quantitative measure of
+        # confidence or strength (e.g., a percentage or normalized score).
+
+        # Args:
+        #     df (pd.DataFrame): The input DataFrame with at least 'open', 'high', 'low', 'close', 'volume' columns.
+
+        # Returns:
+        #     pd.DataFrame: The DataFrame with added regime filter columns.
+        # """
+        # # --- 1. Pre-calculation of all necessary base indicators ---
+        # # This ensures all required columns are available before calculating filters.
+        # df = self.calculate_sma(df, length=200)
+        # df = self.calculate_sma_slope(df, length=200, smoothbars=3, hlineheight=10)
+        # df = self.supertrend(df, period=10, multiplier=3.0)
+        # df = self.calculate_psar(df)
+        # df = self.calculate_macd(df)
+        # df = self.calculate_adx(df, length=14)
+        # df = self.calculate_atr(df, length=14, smoothing='sma')
+        # df = self.calculate_bollinger_bands(df, length=20)
+        # df = self.calculate_rsi(df, length=14)
+        # df = self.calculate_stocastic(df, k_length=14, d_length=3)
+        # df = self.calculate_cci(df, length=20)
+        # df = self.williams_range(df, period=14)
+        # df = self.calculate_obv(df)
+        
+        # # --- 2. TREND FILTERS ---
+        
+        # # SMA Trend
+        # df['sma_trend_direction'] = np.where(df['close'] > df['sma_200'], 'BULLISH', 'BEARISH')
+        # df['sma_trend_strength'] = abs(df['close'] - df['sma_200']) / df['sma_200'] * 100
+        
+        # # MA Slope Trend
+        # slope_conditions = [df['ma_trend'] == 1, df['ma_trend'] == -1]
+        # slope_choices = ['BULLISH', 'BEARISH']
+        # df['slope_trend_direction'] = np.select(slope_conditions, slope_choices, default='SIDEWAYS')
+        # df['slope_trend_strength'] = abs(df['ma_slope'])
+
+        # # Supertrend
+        # st_conditions = [df['supertrend'] == 1, df['supertrend'] == -1]
+        # st_choices = ['BULLISH', 'BEARISH']
+        # df['supertrend_direction'] = np.select(st_conditions, st_choices, default='SIDEWAYS')
+        # st_distance = np.where(df['supertrend_direction'] == 'BULLISH', 
+        #                         df['close'] - df['supertrend_lowerband'], 
+        #                         df['supertrend_upperband'] - df['close'])
+        # df['supertrend_strength'] = (st_distance / df['atr']).clip(0, 10) * 10 # Scaled strength
+
+        # # PSAR Trend
+        # df['psar_trend_direction'] = np.where(df['close'] > df['psar'], 'BULLISH', 'BEARISH')
+        # psar_distance = abs(df['close'] - df['psar'])
+        # df['psar_trend_strength'] = (psar_distance / df['atr']).clip(0, 10) * 10 # Scaled strength
+
+        # # MACD Trend
+        # df['macd_trend_direction'] = np.where(df['macd_histogram'] > 0, 'BULLISH', 'BEARISH')
+        # # Normalize histogram by its rolling max absolute value over 100 periods for a confidence score
+        # rolling_max_hist = df['macd_histogram'].abs().rolling(window=100, min_periods=1).max()
+        # df['macd_trend_confidence'] = (df['macd_histogram'].abs() / rolling_max_hist * 100).fillna(0)
+        
+        # # ADX Trend Strength (ADX is non-directional, it measures strength)
+        # adx_conditions = [df['adx'] > 25, df['adx'] < 20]
+        # adx_choices = ['TRENDING', 'WEAK/RANGING']
+        # df['adx_trend_status'] = np.select(adx_conditions, adx_choices, default='DEVELOPING')
+        # df['adx_trend_strength'] = df['adx']
+        
+        # # --- 3. VOLATILITY FILTERS ---
+        
+        # # ATR Volatility
+        # atr_q75 = df['atr_pct'].rolling(window=200).quantile(0.75)
+        # atr_q25 = df['atr_pct'].rolling(window=200).quantile(0.25)
+        # atr_conditions = [df['atr_pct'] > atr_q75, df['atr_pct'] < atr_q25]
+        # atr_choices = ['HIGH', 'LOW']
+        # df['atr_volatility_level'] = np.select(atr_conditions, atr_choices, default='MODERATE')
+        # df['atr_volatility_value'] = df['atr_pct'] # ATR as a percentage of price
+        
+        # # Bollinger Bands Volatility (Squeeze/Expansion)
+        # bb_width_q75 = df['bb_width'].rolling(window=200).quantile(0.75)
+        # bb_width_q25 = df['bb_width'].rolling(window=200).quantile(0.25)
+        # bb_conditions = [df['bb_width'] > bb_width_q75, df['bb_width'] < bb_width_q25]
+        # bb_choices = ['EXPANSION', 'SQUEEZE'] # High width = Expansion, Low width = Squeeze
+        # df['bb_volatility_level'] = np.select(bb_conditions, bb_choices, default='NORMAL')
+        # df['bb_volatility_value'] = df['bb_width'] * 100 # BB width as percentage
+
+        # # --- 4. MOMENTUM FILTERS ---
+        
+        # # RSI Momentum
+        # rsi_conditions = [df['rsi'] > 70, df['rsi'] < 30]
+        # rsi_choices = ['OVERBOUGHT', 'OVERSOLD']
+        # df['rsi_momentum_level'] = np.select(rsi_conditions, rsi_choices, default='NEUTRAL')
+        # df['rsi_momentum_value'] = df['rsi']
+        
+        # # Stochastic Momentum
+        # stoch_conditions = [df['stocastic_%k'] > 80, df['stocastic_%k'] < 20]
+        # stoch_choices = ['OVERBOUGHT', 'OVERSOLD']
+        # df['stoch_momentum_level'] = np.select(stoch_conditions, stoch_choices, default='NEUTRAL')
+        # df['stoch_momentum_value'] = df['stocastic_%k']
+
+        # # CCI Momentum
+        # cci_conditions = [df['cci'] > 100, df['cci'] < -100]
+        # cci_choices = ['OVERBOUGHT', 'OVERSOLD']
+        # df['cci_momentum_level'] = np.select(cci_conditions, cci_choices, default='NEUTRAL')
+        # df['cci_momentum_value'] = df['cci']
+
+        # # Williams %R Momentum
+        # wr_conditions = [df['williams_range'] > -20, df['williams_range'] < -80]
+        # wr_choices = ['OVERBOUGHT', 'OVERSOLD']
+        # df['wr_momentum_level'] = np.select(wr_conditions, wr_choices, default='NEUTRAL')
+        # df['wr_momentum_value'] = df['williams_range']
+
+        # # --- 5. VOLUME FILTERS ---
+
+        # # Volume Spike/Lull
+        # vol_sma_50 = df['volume'].rolling(window=50, min_periods=1).mean()
+        # vol_conditions = [df['volume'] > (vol_sma_50 * 2), df['volume'] < (vol_sma_50 * 0.5)]
+        # vol_choices = ['HIGH', 'LOW']
+        # df['volume_level'] = np.select(vol_conditions, vol_choices, default='NORMAL')
+        # df['volume_ratio_to_avg'] = (df['volume'] / vol_sma_50).fillna(1.0) # Ratio to 50-period average
+
+        # # On-Balance Volume (OBV)
+        # obv_sma_20 = df['obv'].rolling(window=20, min_periods=1).mean()
+        # df['obv_direction'] = np.where(df['obv'] > obv_sma_20, 'BULLISH', 'BEARISH')
+        # # Use slope of OBV as a measure of strength/confidence
+        # obv_slope = df['obv'].diff()
+        # rolling_std_obv = obv_slope.abs().rolling(window=50, min_periods=1).mean()
+        # df['obv_strength'] = (obv_slope / rolling_std_obv * 50).clip(-100, 100).fillna(0)
+
+
+        # return df
+    
+    # REGIME FILTERS
+    def _normalize_min_max(self, series, window):
+        """Helper to normalize a series to 0-100 using rolling min-max."""
+        roll_min = series.rolling(window=window, min_periods=1).min()
+        roll_max = series.rolling(window=window, min_periods=1).max()
+        # Avoid division by zero
+        denominator = roll_max - roll_min
+        normalized = (series - roll_min) / denominator.replace(0, np.nan) * 100
+        return normalized.fillna(50) # Fill NaNs with a neutral 50
+
+    def _normalize_quantile(self, series, window):
+        """Helper to normalize a series to 0-100 using rolling quantile rank."""
+        return series.rolling(window=window, min_periods=1).rank(pct=True) * 100
+
+    def calculate_regime_filters(self, df):
+        """
+        Calculates a comprehensive set of regime filters with normalized scores (0-100).
+
+        This function enriches the DataFrame with detailed columns for different market regimes,
+        including Trend, Volatility, Momentum, and Volume. For each indicator, it provides:
+        1. A qualitative state (e.g., 'BULLISH', 'HIGH').
+        2. A quantitative, normalized score from 0-100 for easy interpretation and comparison.
+
+        Args:
+            df (pd.DataFrame): The input DataFrame with at least 'open', 'high', 'low', 'close', 'volume' columns.
+
+        Returns:
+            pd.DataFrame: The DataFrame with added regime filter columns.
+        """
+        norm_window = 200 # Lookback period for normalization
+
+        # --- 1. Pre-calculation of all necessary base indicators ---
+        df = self.calculate_sma(df, length=200)
+        df = self.calculate_sma_slope(df, length=200, smoothbars=3, hlineheight=10)
+        df = self.supertrend(df, period=10, multiplier=3.0)
+        df = self.calculate_psar(df)
+        df = self.calculate_macd(df)
+        df = self.calculate_adx(df, length=14)
+        df = self.calculate_atr(df, length=14, smoothing='sma')
+        df = self.calculate_bollinger_bands(df, length=20)
+        df = self.calculate_rsi(df, length=14)
+        df = self.calculate_stocastic(df, k_length=14, d_length=3)
+        df = self.calculate_cci(df, length=20)
+        df = self.williams_range(df, period=14)
+        df = self.calculate_obv(df)
+
+        # --- 2. TREND FILTERS ---
+
+        # SMA Trend
+        df['sma_trend_direction'] = np.where(df['close'] > df['sma_200'], 'BULLISH', 'BEARISH')
+        # Prevent division by zero if sma_200 is 0
+        sma_200_safe = df['sma_200'].replace(0, np.nan)
+        sma_distance = abs(df['close'] - sma_200_safe) / sma_200_safe * 100
+        df['sma_trend_score'] = self._normalize_quantile(sma_distance, norm_window)
+
+        # MA Slope Trend
+        slope_conditions = [df['ma_trend'] == 1, df['ma_trend'] == -1]
+        slope_choices = ['BULLISH', 'BEARISH']
+        df['slope_trend_direction'] = np.select(slope_conditions, slope_choices, default='SIDEWAYS')
+        df['slope_trend_score'] = self._normalize_min_max(abs(df['ma_slope']), norm_window)
+
+        # Supertrend
+        st_conditions = [df['supertrend'] == 1, df['supertrend'] == -1]
+        st_choices = ['BULLISH', 'BEARISH']
+        df['supertrend_direction'] = np.select(st_conditions, st_choices, default='SIDEWAYS')
+        st_distance_np = np.where(df['supertrend_direction'] == 'BULLISH',
+                                df['close'] - df['supertrend_lowerband'],
+                                df['supertrend_upperband'] - df['close'])
+        st_distance = pd.Series(st_distance_np, index=df.index)
+        df['supertrend_score'] = self._normalize_min_max(st_distance, norm_window)
+
+        # PSAR Trend
+        df['psar_trend_direction'] = np.where(df['close'] > df['psar'], 'BULLISH', 'BEARISH')
+        psar_distance = abs(df['close'] - df['psar'])
+        df['psar_trend_score'] = self._normalize_min_max(psar_distance, norm_window)
+
+        # MACD Trend
+        df['macd_trend_direction'] = np.where(df['macd_histogram'] > 0, 'BULLISH', 'BEARISH')
+        df['macd_trend_score'] = self._normalize_min_max(abs(df['macd_histogram']), norm_window)
+
+        # ADX Trend Strength
+        adx_conditions = [df['adx'] > 25, df['adx'] < 20]
+        adx_choices = ['TRENDING', 'WEAK/RANGING']
+        df['adx_trend_status'] = np.select(adx_conditions, adx_choices, default='DEVELOPING')
+        df['adx_trend_score'] = df['adx']
+
+        # --- 3. VOLATILITY FILTERS ---
+
+        # ATR Volatility
+        atr_q75 = df['atr_pct'].rolling(window=norm_window).quantile(0.75)
+        atr_q25 = df['atr_pct'].rolling(window=norm_window).quantile(0.25)
+        atr_conditions = [df['atr_pct'] > atr_q75, df['atr_pct'] < atr_q25]
+        atr_choices = ['HIGH', 'LOW']
+        df['atr_volatility_level'] = np.select(atr_conditions, atr_choices, default='MODERATE')
+        df['atr_volatility_score'] = self._normalize_quantile(df['atr_pct'], norm_window)
+
+        # Bollinger Bands Volatility
+        bb_width_q75 = df['bb_width'].rolling(window=norm_window).quantile(0.75)
+        bb_width_q25 = df['bb_width'].rolling(window=norm_window).quantile(0.25)
+        bb_conditions = [df['bb_width'] > bb_width_q75, df['bb_width'] < bb_width_q25]
+        bb_choices = ['EXPANSION', 'SQUEEZE']
+        df['bb_volatility_level'] = np.select(bb_conditions, bb_choices, default='NORMAL')
+        df['bb_volatility_score'] = self._normalize_quantile(df['bb_width'], norm_window)
+
+        # --- 4. MOMENTUM FILTERS ---
+
+        # RSI Momentum
+        rsi_conditions = [df['rsi'] > 70, df['rsi'] < 30]
+        rsi_choices = ['OVERBOUGHT', 'OVERSOLD']
+        df['rsi_momentum_level'] = np.select(rsi_conditions, rsi_choices, default='NEUTRAL')
+        df['rsi_momentum_score'] = df['rsi']
+
+        # Stochastic Momentum
+        stoch_conditions = [df['stocastic_%k'] > 80, df['stocastic_%k'] < 20]
+        stoch_choices = ['OVERBOUGHT', 'OVERSOLD']
+        df['stoch_momentum_level'] = np.select(stoch_conditions, stoch_choices, default='NEUTRAL')
+        df['stoch_momentum_score'] = df['stocastic_%k']
+
+        # CCI Momentum
+        cci_conditions = [df['cci'] > 100, df['cci'] < -100]
+        cci_choices = ['OVERBOUGHT', 'OVERSOLD']
+        df['cci_momentum_level'] = np.select(cci_conditions, cci_choices, default='NEUTRAL')
+        df['cci_momentum_score'] = self._normalize_min_max(abs(df['cci']), norm_window)
+
+        # Williams %R Momentum
+        wr_conditions = [df['williams_range'] > -20, df['williams_range'] < -80]
+        wr_choices = ['OVERBOUGHT', 'OVERSOLD']
+        df['wr_momentum_level'] = np.select(wr_conditions, wr_choices, default='NEUTRAL')
+        df['wr_momentum_score'] = abs(df['williams_range'])
+
+        # --- 5. VOLUME FILTERS ---
+
+        # Volume Spike/Lull
+        vol_sma_50 = df['volume'].rolling(window=50, min_periods=1).mean()
+        vol_conditions = [df['volume'] > (vol_sma_50 * 2), df['volume'] < (vol_sma_50 * 0.5)]
+        vol_choices = ['HIGH', 'LOW']
+        df['volume_level'] = np.select(vol_conditions, vol_choices, default='NORMAL')
+        df['volume_score'] = self._normalize_quantile(df['volume'], norm_window)
+
+        # On-Balance Volume (OBV)
+        obv_sma_20 = df['obv'].rolling(window=20, min_periods=1).mean()
+        df['obv_direction'] = np.where(df['obv'] > obv_sma_20, 'BULLISH', 'BEARISH')
+        obv_slope = df['obv'].diff().fillna(0)
+        df['obv_score'] = self._normalize_min_max(abs(obv_slope), norm_window)
+        
+        # --- FIX: Final robust cleanup before casting to integer ---
+        score_cols = [col for col in df.columns if col.endswith('_score')]
+        
+        # Step 1: Replace infinite values with NaN
+        df[score_cols] = df[score_cols].replace([np.inf, -np.inf], np.nan)
+        
+        # Step 2: Fill any and all remaining NaNs with a neutral value (50)
+        df[score_cols] = df[score_cols].fillna(50)
+        
+        # Step 3: Now it's safe to round and cast to integer
+        df[score_cols] = df[score_cols].round(0).astype(int)
+        
+        df['Composite_Regime_Score'] = df["sma_trend_score"] + df["macd_trend_score"] + df["rsi_momentum_score"] + df["volume_score"]
         
         return df

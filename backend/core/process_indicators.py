@@ -11,7 +11,7 @@ def calculate_indicators(strategy_instance, df):
     for indicator in indicators:
         
         name, timeframe, params = indicator
-                    
+        
         if name == 'EMA':
             
             # Ensure you have only 1 value
@@ -119,7 +119,7 @@ def calculate_indicators(strategy_instance, df):
                 
                 print(f"MACD takes 3 Input params, But {len(params)} were given...")
                 
-        if name == 'BOLLINDER BANDS':
+        if name == 'BOLLINGER BANDS':
             
             # Ensure you have only 1 value
             if len(params) == 2:
@@ -280,6 +280,10 @@ def calculate_indicators(strategy_instance, df):
         if name == 'PRICE MOVEMENT':
             
             df = idk.price_movement(df)
+        
+        if name == 'REGIME FILTERS':
+            
+            df = idk.calculate_regime_filters(df)
     
     print("Indicators processed successfully")
     

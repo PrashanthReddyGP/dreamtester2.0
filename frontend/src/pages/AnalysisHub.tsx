@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Box, Typography, CircularProgress } from '@mui/material';
 import { Panel, PanelGroup } from 'react-resizable-panels';
 
@@ -12,9 +12,10 @@ import { ComparisonModal } from '../components/analysishub/ComparisonModal';
 
 export const AnalysisHub: React.FC = () => {
   
-  const { results, isComplete } = useAnalysis();
+  const { results, isComplete, batchConfig } = useAnalysis();
   const [selectedStrategy, setSelectedStrategy] = useState<StrategyResult | null>(null);
   const [isCompareModalOpen, setCompareModalOpen] = useState(false);
+  const [isDataSegmentationMode, setIsDataSegmentationMode] = useState(false); 
 
   useEffect(() => {
     if (results.length > 0) {
@@ -41,6 +42,16 @@ export const AnalysisHub: React.FC = () => {
 
   const handleOpenCompareModal = () => setCompareModalOpen(true);
   const handleCloseCompareModal = () => setCompareModalOpen(false);
+
+  // When you receive the batch data or first result, check for a tell-tale sign.
+  // For example, if the batch job details from your DB include the `test_type`.
+  useEffect(() => {
+    if (batchConfig && batchConfig.test_type === 'data_segmentation') {
+      setIsDataSegmentationMode(true);
+    } else {
+      setIsDataSegmentationMode(false);
+    }
+  }, [batchConfig]); // Dependency is now batchConfig
 
   // Condition 1: The process has started but no results have arrived yet.
   if (results.length === 0 && !isComplete) {
@@ -79,6 +90,7 @@ export const AnalysisHub: React.FC = () => {
               selectedId={selectedStrategy?.strategy_name || ''}
               onSelect={handleSelectStrategy}
               onCompareClick={handleOpenCompareModal}
+              isDataSegmentationMode={isDataSegmentationMode}
             />
           </Panel>
 

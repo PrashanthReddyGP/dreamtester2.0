@@ -1,8 +1,9 @@
 import React, {useMemo} from 'react';
 import type { FC } from 'react';
-import { Box, useTheme } from '@mui/material';
+import { Box, useTheme, Button } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid/DataGrid';
-import type { GridColDef } from '@mui/x-data-grid';
+import { GridFooterContainer, GridPagination } from '@mui/x-data-grid';
+import type { GridColDef  } from '@mui/x-data-grid';
 
 import type {Trades} from '../../services/api'
 
@@ -33,6 +34,60 @@ const formatPrice = (price: any): string => {
   if (isNaN(numericPrice)) return 'N/A';
   return numericPrice.toPrecision(4);
 };
+
+function exportToCsv(rows: any[], columns: GridColDef[], filename = 'trades.csv') {
+  if (!rows || rows.length === 0) return;
+
+  const headers = columns.map((col) => col.headerName || col.field);
+
+  const csvRows = [
+    headers.join(','),
+    ...rows.map((row) =>
+      columns
+        .map((col) => {
+          let value = row[col.field];
+
+          // Handle special fields
+          if (col.field.toLowerCase().includes('time') && typeof value === 'number') {
+            // safer timestamp conversion
+            value = value ? new Date(value * 1000).toISOString() : '';
+          }
+          if (typeof value === 'number' && isNaN(value)) {
+            value = '';
+          }
+
+          return `"${value ?? ''}"`;
+        })
+        .join(',')
+    ),
+  ];
+
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+
+// --- Custom Footer with pagination + button ---
+function CustomFooter({ rows, columns }: { rows: any[]; columns: GridColDef[] }) {
+  return (
+    <GridFooterContainer sx={{ display: 'flex', justifyContent: 'space-between' }}>
+      <Button
+        variant="contained"
+        size="small"
+        sx={{ mr: 2, ml: 2 }}
+        onClick={() => exportToCsv(rows, columns)}
+      >
+        Export CSV
+      </Button>
+      <GridPagination />
+    </GridFooterContainer>
+  );
+}
 
 export const TradeLogTab: FC<{ trades: Trades }> = ({ trades }) => {
   
@@ -87,10 +142,16 @@ export const TradeLogTab: FC<{ trades: Trades }> = ({ trades }) => {
             width: 150,
             type: typeof firstRow[key] === 'number' ? 'number' : 'string',
           };
+          
+          // You could also apply the formatter to dynamic columns if they match
+          if (typeof firstRow[key] === 'number') {
+              colDef.valueFormatter = (value) => {
+                return formatPrice(value as number);
+              };
+          };
 
           // You could also apply the formatter to dynamic columns if they match
           if (key.toLowerCase().includes('time')) {
-              // --- THE FIX (also applied here) ---
               colDef.valueFormatter = (value) => {
                 return formatTimestamp(value as number);
               };
@@ -130,6 +191,9 @@ export const TradeLogTab: FC<{ trades: Trades }> = ({ trades }) => {
         }}
         pageSizeOptions={[5, 10, 20]}
         checkboxSelection
+        slots={{
+          footer: () => <CustomFooter rows={sortedTrades} columns={columns} />,
+        }}
         sx={{
           // --- 1. Set the background for the BODY (rows) ---
           // This will be the default background for the whole component.

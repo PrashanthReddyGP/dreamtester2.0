@@ -21,8 +21,12 @@ import type { StrategyFilePayload, BatchSubmitResponse } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useTerminal } from '../context/TerminalContext';
 import { useAnalysis } from '../context/AnalysisContext';
+
 import { OptimizeModal } from '../components/strategylab/OptimizeModal';
 import type { OptimizationConfig, TestSubmissionConfig, SuperOptimizationConfig } from '../components/strategylab/OptimizeModal';
+
+import { DurabilityModal } from '../components/strategylab/DurabilityModal';
+import type { DurabilitySubmissionConfig } from '../components/strategylab/DurabilityModal';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -113,6 +117,73 @@ export const StrategyLab: React.FC = () => {
 
     const handleOpenClearConfirm = () => setIsClearConfirmOpen(true);
     const handleCloseClearConfirm = () => setIsClearConfirmOpen(false);
+
+    const [localCsvFile, setLocalCsvFile] = useState<File | null>(null);
+    const [localCsvData, setLocalCsvData] = useState<string | null>(null);
+
+    const handleClearCsv = () => {
+        setLocalCsvFile(null);
+        setLocalCsvData(null);
+    };
+
+    const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (file) {
+            setLocalCsvFile(file);
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const text = e.target?.result;
+                setLocalCsvData(text as string);
+            };
+            reader.readAsText(file);
+        }
+        // Reset the input value to allow selecting the same file again
+        event.target.value = '';
+    };
+
+    const handleRunBacktestWithCsv = async () => {
+        if (!selectedFileId || !localCsvData) {
+            alert("Please select a strategy file and a CSV data file.");
+            return;
+        }
+        
+        setIsBacktestRunning(true);
+        toggleTerminal(true);
+
+        try {
+            clearResults();
+            await handleSaveContent(); // Save any pending changes first
+
+            const payload = {
+                strategy_code: currentEditorCode,
+                strategy_name: findFileById(fileSystem, selectedFileId)?.name || 'local_run',
+                csv_data: localCsvData,
+            };
+
+            // This will be a new API call
+            const response = await fetch(`${API_URL}/api/backtest/local-submit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to submit local backtest.');
+            }
+            
+            const result = await response.json();
+            if (result.batch_id) {
+                connectToBatch(result.batch_id);
+                navigate('/analysis');
+            }
+        } catch (error) {
+            console.error("Failed to run backtest with CSV:", error);
+            alert(`Error: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
+        } finally {
+            setIsBacktestRunning(false);
+        }
+    };
 
     const [deleteConfirmState, setDeleteConfirmState] = useState<{ open: boolean; itemId: string | null }>({
         open: false,
@@ -576,6 +647,8 @@ export const StrategyLab: React.FC = () => {
     const [isOptimizeModalOpen, setIsOptimizeModalOpen] = useState(false);
     const [isOptimizing, setIsOptimizing] = useState(false);
 
+    const [isDurabilityModalOpen, setIsDurabilityModalOpen] = useState(false);
+
     const handleOpenOptimizeModal = () => {
         if (!selectedFileId) {
             alert("Please select a strategy file to optimize.");
@@ -584,64 +657,76 @@ export const StrategyLab: React.FC = () => {
         setIsOptimizeModalOpen(true);
     };
 
+    const handlOpenDurabilityModal = () => {
+        if (!selectedFileId) {
+            alert("Please select a strategy file to optimize.");
+            return;
+        }
+        setIsDurabilityModalOpen(true);
+    };
+
     const handleCloseOptimizeModal = () => {
         setIsOptimizeModalOpen(false);
     };
     
-    const handleRunOptimization = async (config: OptimizationConfig) => {
-        // 1. Set initial loading states and provide feedback
-        console.log("Submitting optimization with config:", config);
-        setIsOptimizing(true);
-
-        try {
-            // 2. Prepare the application state for a new run
-            clearResults(); // Clear any previous results in the Analysis Hub
-
-            await handleSaveContent(); // Best practice: ensure the latest code is saved on the server
-
-            // 3. Make the actual API call to the backend
-            const response = await fetch(`${API_URL}/api/optimize/submit`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(config),
-            });
-
-            // 4. Handle non-successful HTTP responses (e.g., 400, 500 errors)
-            if (!response.ok) {
-                // Try to get a detailed error message from the backend's JSON response
-                const errorData = await response.json().catch(() => ({ detail: 'An unknown server error occurred.' }));
-                // Throw an error to be caught by the catch block
-                throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
-            }
-
-            // 5. Handle the successful response
-            const result = await response.json();
-
-            // 6. Connect to the WebSocket stream and navigate to the results page
-            if (result.batch_id) {
-                connectToBatch(result.batch_id); // This function is from your useTerminal context
-                navigate('/analysis'); // Redirect the user to see the results stream in
-                toggleTerminal(true); // Open the terminal to show live logs from the backend
-            } else {
-                // This is an important edge case to handle
-                throw new Error("Submission was successful, but no batch ID was returned from the server.");
-            }
-
-        } catch (error) {
-            // 7. Catch any errors (from the network, API, or thrown manually) and display them
-            console.error("Failed to run optimization:", error);
-            // Use a user-friendly alert to show the error
-            alert(`Error submitting optimization: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
-        } finally {
-            // 8. This block ALWAYS runs, ensuring the UI is cleaned up correctly
-            setIsOptimizing(false);       // Reset the loading state on the button
-            handleCloseOptimizeModal(); // Close the modal, whether the submission succeeded or failed
-        }
+    const handleCloseDurabilityModal = () => {
+        setIsDurabilityModalOpen(false);
     };
 
-    const handleRunAdvancedTest = async (config: SuperOptimizationConfig) => {
+    // const handleRunOptimization = async (config: OptimizationConfig) => {
+    //     // 1. Set initial loading states and provide feedback
+    //     console.log("Submitting optimization with config:", config);
+    //     setIsOptimizing(true);
+
+    //     try {
+    //         // 2. Prepare the application state for a new run
+    //         clearResults(); // Clear any previous results in the Analysis Hub
+
+    //         await handleSaveContent(); // Best practice: ensure the latest code is saved on the server
+
+    //         // 3. Make the actual API call to the backend
+    //         const response = await fetch(`${API_URL}/api/optimize/submit`, {
+    //             method: 'POST',
+    //             headers: {
+    //                 'Content-Type': 'application/json',
+    //             },
+    //             body: JSON.stringify(config),
+    //         });
+
+    //         // 4. Handle non-successful HTTP responses (e.g., 400, 500 errors)
+    //         if (!response.ok) {
+    //             // Try to get a detailed error message from the backend's JSON response
+    //             const errorData = await response.json().catch(() => ({ detail: 'An unknown server error occurred.' }));
+    //             // Throw an error to be caught by the catch block
+    //             throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
+    //         }
+
+    //         // 5. Handle the successful response
+    //         const result = await response.json();
+
+    //         // 6. Connect to the WebSocket stream and navigate to the results page
+    //         if (result.batch_id) {
+    //             connectToBatch(result.batch_id); // This function is from your useTerminal context
+    //             navigate('/analysis'); // Redirect the user to see the results stream in
+    //             toggleTerminal(true); // Open the terminal to show live logs from the backend
+    //         } else {
+    //             // This is an important edge case to handle
+    //             throw new Error("Submission was successful, but no batch ID was returned from the server.");
+    //         }
+
+    //     } catch (error) {
+    //         // 7. Catch any errors (from the network, API, or thrown manually) and display them
+    //         console.error("Failed to run optimization:", error);
+    //         // Use a user-friendly alert to show the error
+    //         alert(`Error submitting optimization: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
+    //     } finally {
+    //         // 8. This block ALWAYS runs, ensuring the UI is cleaned up correctly
+    //         setIsOptimizing(false);       // Reset the loading state on the button
+    //         handleCloseOptimizeModal(); // Close the modal, whether the submission succeeded or failed
+    //     }
+    // };
+
+    const handleRunOptimization = async (config: SuperOptimizationConfig) => {
         setIsOptimizing(true);
         console.log("Submitting optimization with config:", config);
 
@@ -688,6 +773,48 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
+    const handleRunDurabilityTest = async (config: DurabilitySubmissionConfig) => {
+        setIsOptimizing(true);
+        console.log("Submitting Durability Test with config:", config);
+
+        try {
+            clearResults();
+            await handleSaveContent();
+
+            // IMPORTANT: This will likely be a new endpoint on your backend
+            // to handle these more complex test types.
+            const response = await fetch(`${API_URL}/api/durability/submit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config),
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ detail: 'An unknown server error occurred.' }));
+                throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
+            }
+
+            const result = await response.json();
+
+            if (result.batch_id) {
+                connectToBatch(result.batch_id);
+                navigate('/analysis');
+                toggleTerminal(true);
+            } else {
+                throw new Error("Submission was successful, but no batch ID was returned from the server.");
+            }
+
+        } catch (error) {
+            console.error("Failed to run durability test:", error);
+            alert(`Error submitting test: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
+        } finally {
+            setIsOptimizing(false);
+            // Make sure to close the correct modal
+            handleCloseDurabilityModal();
+        }
+    };
+
+
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <Box sx={{ height: '100%', width: '100vw' }}>
@@ -716,13 +843,18 @@ export const StrategyLab: React.FC = () => {
                 </Panel>
                 <ResizeHandle />
                 <Panel defaultSize={16} minSize={16}>
-                  <SettingsPanel 
-                    onSave={handleSaveContent}
-                    isSaveDisabled={!selectedFileId}
-                    onRunBacktest={handleRunBacktest}
-                    onOptimizeStrategy={handleOpenOptimizeModal}
-                    isBacktestRunning={isBacktestRunning}
-                  />
+                    <SettingsPanel 
+                        onSave={handleSaveContent}
+                        isSaveDisabled={!selectedFileId}
+                        onRunBacktest={handleRunBacktest}
+                        onRunBacktestWithCsv={handleRunBacktestWithCsv}
+                        onOptimizeStrategy={handleOpenOptimizeModal}
+                        onDurabilityTests={handlOpenDurabilityModal}
+                        isBacktestRunning={isBacktestRunning}
+                        onFileChange={handleFileChange}
+                        onClearCsv={handleClearCsv}
+                        selectedCsvFile={localCsvFile}
+                    />
                 </Panel>
             </PanelGroup>
 
@@ -764,7 +896,15 @@ export const StrategyLab: React.FC = () => {
             <OptimizeModal
                 open={isOptimizeModalOpen}
                 onClose={handleCloseOptimizeModal}
-                onSubmit={handleRunAdvancedTest}
+                onSubmit={handleRunOptimization}
+                strategyCode={currentEditorCode}
+                isSubmitting={isOptimizing}
+            />
+
+            <DurabilityModal
+                open={isDurabilityModalOpen}
+                onClose={handleCloseDurabilityModal}
+                onSubmit={handleRunDurabilityTest}
                 strategyCode={currentEditorCode}
                 isSubmitting={isOptimizing}
             />

@@ -1,18 +1,30 @@
-import React, {useState} from 'react';
-import { Box, Typography, Button, MenuItem, FormControl, InputLabel, Select } from '@mui/material';
+import React, {useRef} from 'react';
+import { Box, Typography, Button, MenuItem, FormControl, InputLabel, Select, Divider, IconButton } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { DatePicker, LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
-import { Save, ArrowDown01 } from 'lucide-react';
+import { Save, ArrowDown01, TestTube } from 'lucide-react';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
+import ClearIcon from '@mui/icons-material/Clear';
 
 export const SettingsPanel: React.FC<{
   onSave: () => Promise<void>;
   isSaveDisabled: boolean;
   onRunBacktest: () => void;
   onOptimizeStrategy: () => void;
+  onDurabilityTests: () => void;
+  onRunBacktestWithCsv: () => void;
   isBacktestRunning: boolean;
-}> = ({ onSave, isSaveDisabled, onRunBacktest, onOptimizeStrategy, isBacktestRunning }) => {
+  onFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onClearCsv: () => void;
+  selectedCsvFile: File | null;
+}> = ({ onSave, isSaveDisabled, onRunBacktest, onRunBacktestWithCsv, onOptimizeStrategy, onDurabilityTests, isBacktestRunning, onFileChange, onClearCsv, selectedCsvFile }) => {
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
@@ -24,7 +36,7 @@ export const SettingsPanel: React.FC<{
           flexDirection: 'column',
       }}>
         <Typography variant="h2" sx={{ mb: 3 }}>Configuration</Typography>
-        
+
         <FormControl fullWidth margin="normal" variant="filled">
           <InputLabel>Asset</InputLabel>
           <Select defaultValue={'BTC/USDT'}><MenuItem value={'BTC/USDT'}>BTC/USDT</MenuItem></Select>
@@ -39,18 +51,78 @@ export const SettingsPanel: React.FC<{
 
         <Box sx={{ flexGrow: 1 }} /> 
 
+        <Divider sx={{ mt: 2, mb: 2 }}/>
+
+        <Box>
+          <Button variant="contained" size="large" startIcon={<TestTube />} fullWidth onClick={onDurabilityTests}>
+            Durability Tests
+          </Button>
+        </Box>
+
+        <Divider sx={{ mt: 2, mb: 2 }}/>
+
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={onFileChange}
+              style={{ display: 'none' }}
+              accept=".csv"
+            />
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Button
+              variant="outlined"
+              size='large'
+              startIcon={<UploadFileIcon />}
+              fullWidth
+              onClick={handleUploadClick}
+              sx={{
+                justifyContent: 'center',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                textAlign: 'center',
+              }}
+            >
+              {selectedCsvFile ? selectedCsvFile.name : 'Select CSV File'}
+            </Button>
+            {selectedCsvFile && (
+              <IconButton onClick={(e) => {
+              e.stopPropagation(); // Prevent file dialog from opening
+              onClearCsv();
+              }} size="small">
+              <ClearIcon fontSize="small" />
+              </IconButton>
+            )}
+          </Box>
+
+          <Button 
+            variant="contained" 
+            color="secondary" 
+            size="large" 
+            startIcon={<PlayArrowIcon />} 
+            fullWidth
+            onClick={onRunBacktestWithCsv}
+            disabled={isBacktestRunning || isSaveDisabled || !selectedCsvFile}
+            sx={{ mb: 1 }}
+          >
+            {isBacktestRunning ? 'Running...' : 'Run with CSV'}
+          </Button>
           
+          <Divider sx={{ mb: 1 }}/>
+
           <Button variant="contained" size="large" startIcon={<PlayArrowIcon />} fullWidth onClick={onRunBacktest} disabled={isBacktestRunning || isSaveDisabled}>
             {isBacktestRunning ? 'Running...' : 'Run Backtest'}
           </Button>
 
-          <Button variant="contained" size="large" startIcon={<ArrowDown01 />} fullWidth onClick={onOptimizeStrategy} disabled={isBacktestRunning || isSaveDisabled}>
+          <Button variant="outlined" size="large" startIcon={<ArrowDown01 />} fullWidth onClick={onOptimizeStrategy} disabled={isBacktestRunning || isSaveDisabled}>
             {isBacktestRunning ? 'Fetching Data...' : 'Optimize Strategy'}
           </Button>
 
           <Button 
-            variant="outlined" 
+            variant="contained" 
             size="large" 
             startIcon={<Save />} 
             fullWidth

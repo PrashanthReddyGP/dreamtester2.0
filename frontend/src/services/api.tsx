@@ -179,6 +179,21 @@ export const fetchAvailableSymbols = async (exchange: string): Promise<string[]>
     }
 };
 
+
+export const clearOhlcvCache = async (): Promise<{ status: string; message: string }> => {
+  const response = await fetch(`${API_URL}/api/data/cache`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || 'Failed to clear cache on the server.');
+  }
+
+  return response.json();
+};
+
+
 // /**
 //  * Fetches the most recently completed backtest result.
 //  */

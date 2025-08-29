@@ -1,4 +1,5 @@
 # backend/pipeline.py
+import io
 import os
 import re
 import ast
@@ -7,9 +8,11 @@ import uuid
 import asyncio
 import itertools
 import traceback
+from enum import Enum
 import numpy as np
 import pandas as pd
 import operator as op
+from typing import Optional
 from datetime import time, timedelta 
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,6 +24,7 @@ from core.process_indicators import calculate_indicators
 from core.run_backtest import run_backtest_loop
 from core.metrics import calculate_metrics
 from core.connect_to_brokerage import get_client
+from core.basestrategy import BaseStrategy
 
 # --- Map string operators from frontend to actual Python functions ---
 OPERATOR_MAP = {
@@ -59,12 +63,20 @@ def send_update_to_queue(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, 
 
 
 
-# --- NEW: The Batch Manager Function ---
-def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop): 
+# --- The Batch Manager Function ---
+def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, connection_event: asyncio.Event): 
     """
     Orchestrates the batch in parallel. It now primarily collects raw data
     for the final portfolio calculation, as workers send their own UI updates.
     """
+    async def wait_for_connection():
+        print(f"[{batch_id}] Batch manager started, waiting for client to connect...")
+        await connection_event.wait()
+        print(f"[{batch_id}] Client connected! Proceeding with batch...")
+
+    future = asyncio.run_coroutine_threadsafe(wait_for_connection(), loop)
+    future.result() # This blocks until the client connects
+    
     print(f"--- BATCH MANAGER ({batch_id}): Starting PARALLEL batch processing ---")
     
     # --- 2. SEND INITIAL STATUS UPDATE ---
@@ -288,7 +300,7 @@ def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: st
         return None
 
 # This is a placeholder for your actual backtest engine
-def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str, strategy_code: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str, strategy_code: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, ohlcv_df: Optional[pd.DataFrame] = None):
     
     print(f"--- Running core backtest for {file_name} ---")
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Running core backtest for {file_name}"}})
@@ -296,23 +308,51 @@ def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str,
     # 1. Parse the code of config
     strategy_instance, strategy_name = parse_file(job_id, file_name, strategy_code)
     
+    # 2. Get OHLCV data (either from CSV or from exchange)
+    if ohlcv_df is not None:
+        print(f"--- Using pre-loaded OHLCV data for {file_name} ---")
+        ohlcv = ohlcv_df
+        asset = strategy_instance.symbol
+    else:
+        print(f"--- Fetching OHLCV data from exchange for {file_name} ---")
+        client = get_client('binance')
+        asset, ohlcv = fetch_candlestick_data(client, strategy_instance)
+    
     # 2. Fetch data
-    asset, ohlcv = fetch_candlestick_data(client, strategy_instance)
+    # asset, ohlcv = fetch_candlestick_data(client, strategy_instance)
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Ohlcv Fetch Successful"}})
 
     # 3. Calculate indicators
     ohlcv_idk = calculate_indicators(strategy_instance, ohlcv)
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Indicators Calculation Successful"}})
+    pd.set_option('display.max_columns', None)
+    
+    # # 4. Clean the data before backtesting
+    # # Numba cannot handle NaN values. We must remove any rows that have
+    # # incomplete data, which typically occurs at the beginning of the
+    # # DataFrame where long-period indicators haven't "warmed up" yet.
+    # original_rows = len(ohlcv_idk)
+    # ohlcv_cleaned = ohlcv_idk.dropna()
+    # cleaned_rows = len(ohlcv_cleaned)
+    
+    # if original_rows > cleaned_rows:
+    #     print(f"--- Data Cleaning: Dropped {original_rows - cleaned_rows} rows with NaN values. ---")
+    
+    # # Check if any data remains after cleaning
+    # if ohlcv_cleaned.empty:
+    #     raise ValueError("No data remained after cleaning NaN values. Your date range might be too short for the indicators used (e.g., SMA 200).")
+
 
     # 4. Run simulation
     strategy_data, commission, no_fee_equity = run_backtest_loop(strategy_name, strategy_instance, ohlcv_idk, initialCapital)
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Backtestloop Successful"}})
-
+    
     # 5. Calculate metrics (simulated)
     strategy_metrics, monthly_returns = calculate_metrics(strategy_data, initialCapital, commission)
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Metrics Calculation Successful"}})
-
+    
     print(f"--- Core backtest for {asset} finished ---")
+    # print(f"  -> Strategy Metrics: {strategy_metrics}")
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Core backtest for {file_name} finished"}})
 
     # In a real app, this would return the full results object
@@ -328,7 +368,9 @@ def convert_to_json_serializable(obj):
         return {k: convert_to_json_serializable(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [convert_to_json_serializable(elem) for elem in obj]
-    
+    elif isinstance(obj, BaseStrategy):
+        # Convert the strategy object to its class name (e.g., "EURUSD_Short")
+        return obj.__class__.__name__
     # --- Date and Time type conversions ---
     elif isinstance(obj, pd.Timestamp):
         return obj.isoformat()
@@ -350,7 +392,8 @@ def convert_to_json_serializable(obj):
         if math.isnan(obj) or math.isinf(obj):
             return None # Convert to null in the final JSON
         return float(obj) # Otherwise, convert to a standard Python float
-
+    elif isinstance(obj, Enum):
+        return obj.name
     else:
         return obj
     
@@ -487,7 +530,16 @@ def process_optimization_job(batch_id: str, manager: any, job_id: str, run_num: 
         send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": f"Run '{strategy_display_name}' failed."}})
 
 
-def run_optimization_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+def run_optimization_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, connection_event: asyncio.Event):
+    
+    async def wait_for_connection():
+        print(f"[{batch_id}] Batch manager started, waiting for client to connect...")
+        await connection_event.wait()
+        print(f"[{batch_id}] Client connected! Proceeding with batch...")
+
+    future = asyncio.run_coroutine_threadsafe(wait_for_connection(), loop)
+    future.result() # This blocks until the client connects
+    
     params_to_optimize = config['parameters_to_optimize']
     original_code = config['strategy_code']
 
@@ -609,12 +661,33 @@ def run_asset_screening_manager(batch_id: str, config: dict, manager: any, queue
     print(f"--- ASSET SCREENER ({batch_id}): All screening jobs submitted. ---")
     
     
-def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, connection_event: asyncio.Event):
     """
     A single, powerful manager that handles asset screening, parameter optimization,
     or both combined, with intelligent pruning of invalid combinations.
     """
-    print(f"--- UNIFIED TEST MANAGER ({batch_id}): Starting job ---")
+    async def wait_for_connection():
+        print(f"[{batch_id}] Batch manager started, waiting for client to connect...")
+        await connection_event.wait()
+        print(f"[{batch_id}] Client connected! Proceeding with batch...")
+
+    future = asyncio.run_coroutine_threadsafe(wait_for_connection(), loop)
+    future.result() # This blocks until the client connects
+    
+    test_type = config.get("test_type")
+    
+    send_update_to_queue(loop, queue, batch_id, {
+        "type": "batch_info",
+        # Add a default test_type if it doesn't exist for standard optimizations
+        "payload": { "config": {**config, "test_type": test_type or "standard_optimization"} }
+    })
+    
+    if test_type == "data_segmentation":
+        # Call the new, dedicated manager for this test type
+        run_data_segmentation_manager(batch_id, config, manager, queue, loop)
+        return # Important: exit after calling the specific manager
+
+    print(f"[{batch_id}] Starting standard optimization/screening test...")
     
     # --- Step 1: Get all configuration from the payload ---
     original_code = config['strategy_code']
@@ -721,3 +794,290 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
     update_job_status(batch_id, "completed", "All tests submitted.")
     send_update_to_queue(loop, queue, batch_id, {"type": "batch_complete", "payload": {"message": "All tests submitted."}})
     print(f"--- UNIFIED MANAGER ({batch_id}): All {total_runs} jobs submitted. ---")
+    
+    
+def run_local_backtest_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+    try:
+        strategy_name = config['strategy_name']
+        strategy_code = config['strategy_code']
+        csv_data = config['csv_data']
+
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Starting backtest for {strategy_name} with local CSV data..."}})
+        
+        # --- Parse and Validate CSV Data ---
+        # Use io.StringIO to treat the string data as a file
+        csv_file = io.StringIO(csv_data)
+        ohlcv_df = pd.read_csv(csv_file)
+
+        required_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+                
+        if not all(col in ohlcv_df.columns for col in required_columns):
+            raise ValueError(f"CSV is missing one of the required columns: {required_columns}")
+
+        # Convert timestamp to a consistent format (datetime objects)
+        # This is very robust and handles Unix seconds, milliseconds, or ISO strings.
+        ohlcv_df['timestamp'] = pd.to_datetime(ohlcv_df['timestamp'], unit='s', errors='coerce').fillna(
+                                pd.to_datetime(ohlcv_df['timestamp'], unit='ms', errors='coerce')).fillna(
+                                pd.to_datetime(ohlcv_df['timestamp'], errors='coerce'))
+        
+        # Ensure timezone is consistent (UTC is best practice)
+        if ohlcv_df['timestamp'].dt.tz is None:
+            ohlcv_df['timestamp'] = ohlcv_df['timestamp'].dt.tz_localize('UTC')
+        else:
+            ohlcv_df['timestamp'] = ohlcv_df['timestamp'].dt.tz_convert('UTC')
+
+        # Ensure OHLCV columns are numeric
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            ohlcv_df[col] = pd.to_numeric(ohlcv_df[col], errors='coerce')
+        
+        ohlcv_df.dropna(inplace=True)
+        ohlcv_df.sort_values(by='timestamp', inplace=True)
+
+        # Now, call the universal worker, passing the pre-loaded DataFrame
+        universal_backtest_worker(
+            batch_id, manager, config['strategy_name'], config['strategy_code'], 1000, client=get_client('binance'),
+            queue=queue, loop=loop, ohlcv_df=ohlcv_df
+        )
+                
+        update_job_status(batch_id, "completed", "Local backtest complete.")
+        send_update_to_queue(loop, queue, batch_id, {"type": "batch_complete", "payload": {"message": "Local backtest complete."}})
+
+    except Exception as e:
+        error_msg = f"Failed to process local backtest: {traceback.format_exc()}"
+        print(error_msg)
+        fail_job(batch_id, error_msg)
+        send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": str(e)}})
+
+def universal_backtest_worker(
+    batch_id: str, 
+    manager: any,
+    display_name: str, 
+    code_str: str, 
+    capital: int,
+    client, 
+    queue: asyncio.Queue, 
+    loop: asyncio.AbstractEventLoop, 
+    ohlcv_df: Optional[pd.DataFrame] = None
+):
+    """
+    This worker runs one backtest and sends the result. It can be called by any manager.
+    It returns the raw data for potential portfolio calculation.
+    """
+    job_id = str(uuid.uuid4())
+    try:
+        # We reuse the core backtest engine, passing the optional DataFrame
+        strategy_data, strategy_instance, metrics, monthly_returns, no_fee_equity = run_single_backtest(
+            batch_id, manager, job_id, display_name, code_str, capital, client, queue, loop, ohlcv_df=ohlcv_df
+        )
+        
+        full_payload = prepare_strategy_payload(strategy_data, metrics, monthly_returns)
+        full_payload['strategy_name'] = display_name 
+
+        send_update_to_queue(loop, queue, batch_id, {
+            "type": "strategy_result",
+            "payload": convert_to_json_serializable(full_payload)
+        })
+                
+        # Return raw data for portfolio manager if needed
+        return strategy_data, strategy_instance, metrics, monthly_returns, no_fee_equity
+
+    except Exception as e:
+        error_msg = f"ERROR in run '{display_name}': {traceback.format_exc()}"
+        print(error_msg)
+        fail_job(batch_id, error_msg)
+        send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": f"Run '{display_name}' failed."}})
+        return None
+
+
+def run_data_segmentation_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+    """
+    Manages a Data Segmentation test.
+    1. Fetches full data for the primary symbol.
+    2. Splits data into Training, Validation, and Testing sets.
+    3. Runs a parameter optimization on the Training set.
+    4. Takes the top N results and runs them on Validation and Testing sets.
+    """
+    try:
+        send_update_to_queue(loop, queue, batch_id, {
+            "type": "batch_info", 
+            "payload": { "config": config }
+        })
+        
+        print(f"--- DATA SEGMENTATION ({batch_id}): Starting job ---")
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Starting Data Segmentation Test..."}})
+        
+        original_code = config['strategy_code']
+        primary_symbol = config.get('symbols_to_screen', [])[0]
+        optimization_metric = config['optimization_metric']
+        top_n_sets = config['top_n_sets']
+        
+        temp_code = re.sub(r"self\.symbol\s*=\s*['\"].*?['\"]", f"self.symbol = '{primary_symbol}'", original_code)
+        strategy_instance, _ = parse_file(str(uuid.uuid4()), "temp", temp_code)
+        client = get_client('binance')
+        _, full_ohlcv_df = fetch_candlestick_data(client, strategy_instance)
+
+        total_rows = len(full_ohlcv_df)
+        train_end_idx = int(total_rows * (config['training_pct'] / 100))
+        validation_end_idx = train_end_idx + int(total_rows * (config['validation_pct'] / 100))
+
+        train_df = full_ohlcv_df.iloc[:train_end_idx].reset_index(drop=True)
+        validation_df = full_ohlcv_df.iloc[train_end_idx:validation_end_idx].reset_index(drop=True)
+        test_df = full_ohlcv_df.iloc[validation_end_idx:].reset_index(drop=True)
+
+        log_msg = (f"Data split: Training ({len(train_df)}), Validation ({len(validation_df)}), Testing ({len(test_df)})")
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": log_msg}})
+        
+        # --- 4. Run Optimization on Training Data (Unchanged) ---
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Phase 1: Optimizing on Training data..."}})
+        training_results = []
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+            param_combos = generate_and_prune_combinations(config)
+            if not param_combos: raise ValueError("No valid parameter combinations.")
+            
+            futures = {executor.submit(universal_backtest_worker, batch_id, manager, build_modifications_and_name(c, config['parameters_to_optimize'], primary_symbol)[1], modify_strategy_code(temp_code, build_modifications_and_name(c, config['parameters_to_optimize'],"")[0]), 1000, client, queue, loop, train_df.copy()): c for c in param_combos}
+            for future in as_completed(futures):
+                result = future.result()
+                if result: training_results.append((result, futures[future]))
+        
+        if not training_results: raise ValueError("Optimization on training data yielded no runs.")
+
+        # --- 5. Rank Results and Select Top N (Unchanged) ---
+        is_reverse_sort = optimization_metric != 'Max Drawdown [%]'
+        training_results.sort(key=lambda x: x[0][2].get(optimization_metric, -9999), reverse=is_reverse_sort)
+        top_n_from_training = training_results[:top_n_sets]
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 1 Complete. Selected top {len(top_n_from_training)} parameter sets for validation."}})
+
+        # --- MODIFIED: Split Step 6 into three parts ---
+
+        # --- 6. Run Top N on Validation Data ONLY ---
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Phase 2: Verifying top sets on Validation data..."}})
+        
+        validation_results = []
+        
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+            futures = {}
+            for _, combo in top_n_from_training:
+                modifications, display_name = build_modifications_and_name(combo, config['parameters_to_optimize'], primary_symbol)
+                modified_code = modify_strategy_code(temp_code, modifications)
+                future = executor.submit(universal_backtest_worker, batch_id, manager, f"{display_name} [Validation]", modified_code, 1000, client, queue, loop, validation_df.copy())
+                futures[future] = combo # Store the combo to link it to the result
+            
+            for future in as_completed(futures):
+                result = future.result()
+                if result: validation_results.append((result, futures[future]))
+
+        # --- 7. Filter validation results to find qualified sets ---
+        qualified_for_testing = []
+        for result_tuple, combo in validation_results:
+            # The qualification criteria: must be profitable in the validation period.
+            # You can make this criteria stricter (e.g., Sharpe > 0.5)
+            
+            # Get the metrics dictionary for the validation run
+            validation_metrics = result_tuple[2]
+            
+            # Define our qualification criteria
+            is_profitable = validation_metrics.get('Net_Profit', 0) > 0
+            has_acceptable_drawdown = validation_metrics.get('Max_Drawdown', 100) < 30 # Max DD must be less than 30%
+            is_consistent = validation_metrics.get('Profit_Factor', 0) > 1.1 # Must be better than a coin flip
+            traded_enough = validation_metrics.get('Closed_Trades', 0) >= 5 # Must have at least 5 trades
+            
+            # The strategy only qualifies if ALL criteria are met
+            if is_profitable and has_acceptable_drawdown and is_consistent and traded_enough:
+                qualified_for_testing.append(combo)
+        
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 2 Complete. {len(qualified_for_testing)} sets qualified for final testing."}})
+
+        if not qualified_for_testing:
+            print(f"[{batch_id}] No parameter sets passed the validation criteria.")
+        else:
+            # --- 8. Run qualified sets on Testing Data ---
+            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Phase 3: Running qualified sets on Testing (Out-of-Sample) data..."}})
+            with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+                for combo in qualified_for_testing:
+                    modifications, display_name = build_modifications_and_name(combo, config['parameters_to_optimize'], primary_symbol)
+                    modified_code = modify_strategy_code(temp_code, modifications)
+                    executor.submit(universal_backtest_worker, batch_id, manager, f"{display_name} [Testing]", modified_code, 1000, client, queue, loop, test_df.copy())
+
+    except Exception as e:
+        error_msg = f"Data Segmentation test failed: {traceback.format_exc()}"
+        print(error_msg)
+        fail_job(batch_id, error_msg)
+        send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": str(e)}})
+    finally:
+        update_job_status(batch_id, "completed", "Data Segmentation test finished.")
+        send_update_to_queue(loop, queue, batch_id, {"type": "batch_complete", "payload": {"message": "Data Segmentation test complete."}})
+        print(f"--- DATA SEGMENTATION ({batch_id}): Job finished. ---")
+
+# --- 2. Helper Functions for the New Manager ---
+# We need to extract the combination generation logic from `run_unified_test_manager`
+# so we can reuse it.
+
+def generate_and_prune_combinations(config: dict) -> list:
+    """
+    Generates and prunes parameter combinations based on the config.
+    Extracted from run_unified_test_manager for reusability.
+    """
+    params_to_optimize = config.get('parameters_to_optimize', [])
+    combination_rules = config.get('combination_rules', [])
+    
+    param_value_lists = []
+    if params_to_optimize:
+        for p in params_to_optimize:
+            if p.get('mode') == 'list':
+                try:
+                    values = [float(val.strip()) for val in p.get('list_values', '').split(',') if val.strip()]
+                    if values: param_value_lists.append(values)
+                except ValueError:
+                    raise ValueError(f"Invalid number in list for '{p['name']}'.")
+            else: # 'range' mode
+                param_value_lists.append(np.arange(p['start'], p['end'] + p['step'], p['step']))
+    
+    all_combinations = list(itertools.product(*param_value_lists))
+    if not params_to_optimize: # Handle case with no params (itertools gives [()])
+        return [()] 
+
+    # Prune invalid combinations
+    valid_combinations = []
+    param_id_to_index = {p['id']: i for i, p in enumerate(params_to_optimize)}
+
+    for combo in all_combinations:
+        is_combo_valid = True
+        for rule in combination_rules:
+            idx1 = param_id_to_index.get(rule['param1'])
+            idx2 = param_id_to_index.get(rule['param2'])
+            if idx1 is not None and idx2 is not None:
+                val1, val2 = combo[idx1], combo[idx2]
+                operator_func = OPERATOR_MAP.get(rule['operator'])
+                if operator_func and not operator_func(val1, val2):
+                    is_combo_valid = False
+                    break
+        if is_combo_valid:
+            valid_combinations.append(combo)
+            
+    return valid_combinations
+
+def build_modifications_and_name(combo: tuple, params_config: list, symbol: str) -> tuple[list, str]:
+    """Builds modification list and display name from a parameter combo."""
+    modifications = []
+    param_strings = []
+    for i, param_conf in enumerate(params_config):
+        current_value = combo[i]
+        modifications.append({**param_conf, 'value': current_value})
+        formatted_value = f"{current_value:g}"
+        param_strings.append(f"{param_conf['name']}={formatted_value}")
+    
+    param_part = ", ".join(param_strings)
+    display_name = f"{symbol}" + (f" | {param_part}" if param_part else "")
+    return modifications, display_name
+
+def build_modifications_and_name_from_str(combo_str: str, params_config: list, symbol: str) -> tuple[list, str]:
+    """Reverse engineers the modifications list from the display name string."""
+    modifications = []
+    param_values = {kv.split('=')[0]: float(kv.split('=')[1]) for kv in combo_str.split(', ')}
+    
+    for conf in params_config:
+        if conf['name'] in param_values:
+            modifications.append({**conf, 'value': param_values[conf['name']]})
+            
+    display_name = f"{symbol}" + (f" | {combo_str}" if combo_str else "")
+    return modifications, display_name
