@@ -124,7 +124,7 @@ export const DurabilityModal: React.FC<DurabilityModalProps> = ({ open, onClose,
     const [validationPct, setValidationPct] = useState(20);
     const [testingPct, setTestingPct] = useState(20);
 
-    const [optimizationMetric, setOptimizationMetric] = useState('max_drawdown');
+    const [optimizationMetric, setOptimizationMetric] = useState('Equity_Efficiency_Rate');
     const [topParamSets, setTopParamSets] = useState(10);
 
     const hasFetchedData = React.useRef(false);
@@ -501,10 +501,17 @@ return (
                                     variant="outlined"
                                     sx={{mt: 2}}
                                 >
-                                    <MenuItem value="net_profit">Total Net Profit</MenuItem>
-                                    <MenuItem value="sharpe">Sharpe Ratio</MenuItem>
-                                    <MenuItem value="profit_factor">Profit Factor</MenuItem>
-                                    <MenuItem value="max_drawdown">Max Drawdown</MenuItem>
+                                    <MenuItem value="Net_Profit">Net Profit</MenuItem>
+                                    <MenuItem value="Avg_Monthly_Return">Avg Monthly Returns</MenuItem>
+                                    <MenuItem value="Total_Trades">Total Trades</MenuItem>
+                                    <MenuItem value="Max_Drawdown">Max Drawdown</MenuItem>
+                                    <MenuItem value="Max_Drawdown_Duration">Max Drawdown Duration</MenuItem>
+                                    <MenuItem value="Sharpe_Ratio">Sharpe Ratio</MenuItem>
+                                    <MenuItem value="Profit_Factor">Profit Factor</MenuItem>
+                                    <MenuItem value="Calmar_Ratio">Calmar Ratio</MenuItem>
+                                    <MenuItem value="Equity_Efficiency_Rate">Equity Efficiency Rate</MenuItem>
+                                    <MenuItem value="Strategy_Quality">Strategy Quality</MenuItem>
+                                    <MenuItem value="Winrate">Win Rate</MenuItem>
                                 </TextField>
                             </Box>
 
@@ -514,7 +521,7 @@ return (
                                     type="number"
                                     label="Number of Top Parameter Sets to pick for Validation & Testing"
                                     value={topParamSets} // <-- Set value
-                                    onChange={e => setTopParamSets(parseInt(e.target.value, 10) || 0)} // <-- Add onChange
+                                    onChange={e => setTopParamSets(parseInt(e.target.value, 20) || 0)} // <-- Add onChange
                                     variant="outlined"
                                     InputProps={{ inputProps: { min: 1, max: 1000 } }}
                                 />

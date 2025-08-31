@@ -32,7 +32,7 @@ try:
         clear_ohlcv_tables,
     )
 
-    from pipeline import run_unified_test_manager, run_optimization_manager, run_asset_screening_manager, run_batch_manager, run_local_backtest_manager
+    from pipeline import run_unified_test_manager, run_optimization_manager, run_asset_screening_manager, run_batch_manager, run_local_backtest_manager, run_hedge_optimization_manager
     from core.connect_to_brokerage import get_client
 
     ##########################################
@@ -127,6 +127,49 @@ try:
     class AssetScreeningBody(BaseModel):
         strategy_code: str
         symbols_to_screen: List[str]
+
+
+    # --- Pydantic models for the final analysis settings ---
+    class FinalAnalysisNoneModel(BaseModel):
+        """Represents the case where no final analysis is selected."""
+        type: Literal['none']
+
+    class FinalDataSegmentationModel(BaseModel):
+        type: Literal['data_segmentation']
+        training_pct: int
+        validation_pct: int
+
+    class FinalWalkForwardModel(BaseModel):
+        type: Literal['walk_forward']
+        training_period_length: int
+        training_period_unit: str
+        testing_period_length: int
+        testing_period_unit: str
+        step_forward_size_pct: int
+        # You might want to add is_anchored here too for walk-forward
+
+    class SingleStrategyHedgeModel(BaseModel):
+        strategy_code: str
+        parameters_to_optimize: List[OptimizableParameterModel]
+        combination_rules: List[CombinationRuleModel]
+
+    class HedgeOptimizationConfigModel(BaseModel):
+        test_type: Literal['hedge_optimization']
+        strategy_a: SingleStrategyHedgeModel
+        strategy_b: SingleStrategyHedgeModel
+        symbols_to_screen: List[str]
+        top_n_candidates: int
+        portfolio_metric: str
+        num_results_to_return: int
+        final_analysis: Annotated[
+            Union[
+                FinalAnalysisNoneModel,
+                FinalDataSegmentationModel,
+                FinalWalkForwardModel
+            ],
+            Field(discriminator='type')
+        ]
+
 
     # The base model with all common fields
     class BaseDurabilityConfig(BaseModel):
@@ -640,6 +683,34 @@ try:
             connection_event=connection_event 
         )
         return {"message": "Durability test job started.", "batch_id": batch_id}
+
+
+    @app.post("/api/optimize/hedge")
+    async def submit_hedge_optimization(
+        body: HedgeOptimizationConfigModel,
+        background_tasks: BackgroundTasks,
+        request: Request
+    ):
+        batch_id = str(uuid.uuid4())
+        create_backtest_job(batch_id)
+        connection_event = asyncio.Event()
+        request.app.state.connection_events[batch_id] = connection_event
+        
+        config_dict = body.model_dump()
+        queue = request.app.state.websocket_queue
+        main_loop = asyncio.get_running_loop()
+
+        background_tasks.add_task(
+            run_hedge_optimization_manager,
+            batch_id=batch_id,
+            config=config_dict,
+            manager=manager,
+            queue=queue,
+            loop=main_loop,
+            connection_event=connection_event
+        )
+        return {"message": "Hedge optimization job started.", "batch_id": batch_id}
+
 
     ####################################
 

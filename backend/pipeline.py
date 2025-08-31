@@ -99,7 +99,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
         
         # Create a dictionary to map a "future" object back to its file_name
         future_to_file = {
-            executor.submit(process_backtest_job, batch_id, manager, str(uuid.uuid4()), file['name'], file['content'], initialCapital, client, queue, loop): file
+            executor.submit(process_backtest_job, batch_id, manager, str(uuid.uuid4()), file['name'], file['content'], initialCapital, client, queue, loop, send_ui_update = True): file
             for file in files_data
         }
         
@@ -144,7 +144,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
     
     for res_tuple  in raw_results_for_portfolio:
         
-        strategy_data, _, metrics, monthly_returns, _ = res_tuple
+        strategy_data, _, metrics, monthly_returns, _, trade_events_df = res_tuple
                 
         # Use helper to prepare the serializable dict for this strategy
         all_processed_results_for_db.append(
@@ -186,50 +186,72 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
         send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "INFO", "message": "Calculating portfolio performance..."}})
 
         try:
-            combined_df, combined_dfSignals = pd.DataFrame(), pd.DataFrame()
+            all_trade_events = []
+            base_ohlcv_df = None
+            all_no_fee_equity_gain = 0.0
             
-            all_no_fee_equity = 0
-
             for res_tuple in raw_results_for_portfolio:
-                result, _, _, _, no_fee_equity = res_tuple
                 
-                all_no_fee_equity += no_fee_equity
+                # Unpack the new 6-item tuple
+                strategy_data, _, _, _, no_fee_equity_array, trade_events = res_tuple
                 
-                df, df_signals = result.get('ohlcv'), result.get('signals')
+                # Store the first ohlcv_df's timestamp column as our master timeline
+                if base_ohlcv_df is None and not strategy_data['ohlcv'].empty:
+                    base_ohlcv_df = strategy_data['ohlcv'][['timestamp']].copy()
                 
-                if df is not None: 
-                    combined_df = pd.concat([combined_df, df], ignore_index=True)
-                    
-                if df_signals is not None: 
-                    combined_dfSignals = pd.concat([combined_dfSignals, df_signals], ignore_index=True)
+                all_trade_events.append(trade_events)
+                
+                if len(no_fee_equity_array) > 1:
+                    all_no_fee_equity_gain += no_fee_equity_array[-1] - no_fee_equity_array[0]
             
-            combined_df.drop_duplicates(subset=['timestamp'], inplace=True)
+            if base_ohlcv_df is None:
+                raise ValueError("Could not establish a base timeline for portfolio calculation.")
             
-            combined_dfSignals = combined_dfSignals.sort_values(by='timestamp').reset_index(drop=True)
-            combined_df = combined_df.sort_values(by='timestamp').reset_index(drop=True)
+            if not all_trade_events:
+                combined_events_df = pd.DataFrame()
+            else:
+                combined_events_df = pd.concat(all_trade_events, ignore_index=True)
             
-            combined_dfSignals['timestamp'] = pd.to_datetime(combined_dfSignals['timestamp'])
-            combined_df['timestamp'] = pd.to_datetime(combined_df['timestamp'])
+            # 1. Create a temporary DataFrame for the merge, using Exit_Time as the key
+            #    We select only the columns needed for the Numba portfolio function.
+            merge_df = pd.DataFrame()
+            merge_df['timestamp'] = combined_events_df['Exit_Time']
+            merge_df['Result'] = combined_events_df['Result']
+            merge_df['RR'] = combined_events_df['RR']
+            merge_df['Commissioned Returns'] = combined_events_df['Commissioned Returns']
+            merge_df['Reduction'] = combined_events_df['Reduction']
             
-            complete_df = pd.merge(combined_df, combined_dfSignals, on='timestamp', how='outer').sort_values(by='timestamp')
+            # 2. Merge these correctly-timed events onto the master timeline
+            complete_df = pd.merge(base_ohlcv_df, merge_df, on='timestamp', how='left')
             
             sample_instance = raw_results_for_portfolio[0][1] # Get a sample instance
             
             portfolio_equity = sample_instance.portfolio(
                 (complete_df['timestamp'].astype(np.int64) // 10**9).values,
-                complete_df['Result'].values, complete_df['RR'].values,
-                complete_df['Reduction'].values, complete_df['Commissioned Returns'].values
+                complete_df['Result'].fillna(0).values, 
+                complete_df['RR'].fillna(0).values,
+                complete_df['Reduction'].fillna(0).values, 
+                complete_df['Commissioned Returns'].fillna(0).values
             )
             
-            len_diff = len(complete_df) - len(portfolio_equity)
-            aligned_equity = pd.Series([initialCapital] * len_diff + portfolio_equity, index=complete_df.index)
+            aligned_equity = pd.Series(portfolio_equity, index=complete_df.index)
             
-            portfolio_strategy_data = {'strategy_name': 'Portfolio', 'equity': aligned_equity, 'ohlcv': complete_df, 'signals': combined_dfSignals[combined_dfSignals['Signal'] != 0]}
-
-            commission = round((((all_no_fee_equity - (portfolio_equity[-1] - portfolio_equity[0])) * 100 )/ all_no_fee_equity), 2)
+            portfolio_strategy_data = {
+                'strategy_name': 'Portfolio', 
+                'equity': aligned_equity, 
+                'ohlcv': complete_df, 
+                'signals': combined_events_df
+            }
+            
+            portfolio_net_profit = aligned_equity.iloc[-1] - aligned_equity.iloc[0]
+            
+            if all_no_fee_equity_gain > 0:
+                commission = round(((all_no_fee_equity_gain - portfolio_net_profit) * 100) / all_no_fee_equity_gain, 2)
+            else:
+                commission = 0.0
             
             portfolio_metrics, portfolio_returns = calculate_metrics(portfolio_strategy_data, initialCapital, commission)
-
+            
             # Prepare payload for both WebSocket and final DB save
             portfolio_payload = prepare_strategy_payload(portfolio_strategy_data, portfolio_metrics, portfolio_returns)
             
@@ -264,7 +286,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
         
 
 # process_backtest_job should now RETURN the results instead of just printing
-def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: str, file_content: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: str, file_content: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, send_ui_update: bool = True):
     """
     Processes a SINGLE backtest job, sends live updates, and returns its results.
     """
@@ -274,23 +296,24 @@ def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: st
         update_job_status(batch_id, "running", log_msg)
         
         # This pure function does all the heavy lifting
-        strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity = run_single_backtest(batch_id, manager, job_id, file_name, file_content, initialCapital, client, queue, loop)
+        strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity, trade_events_df = run_single_backtest(batch_id, manager, job_id, file_name, file_content, initialCapital, client, queue, loop)
         
-        # Prepare the payload for the UI
-        single_result_payload = prepare_strategy_payload(strategy_data, strategy_metrics, monthly_returns)
-        
-        # Send the result for this single strategy IMMEDIATELY to the UI
-        send_update_to_queue(loop, queue, batch_id, {
-            "type": "strategy_result",
-            "payload": convert_to_json_serializable(single_result_payload)
-        })
-        
+        if send_ui_update:
+            # Prepare the payload for the UI
+            single_result_payload = prepare_strategy_payload(strategy_data, strategy_metrics, monthly_returns)
+            
+            # Send the result for this single strategy IMMEDIATELY to the UI
+            send_update_to_queue(loop, queue, batch_id, {
+                "type": "strategy_result",
+                "payload": convert_to_json_serializable(single_result_payload)
+            })
+            
         log_msg_done = f"Finished processing: {file_name}"
         send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "SUCCESS", "message": log_msg_done}})
         print(f"WORKER: Job {job_id} for {file_name} completed and sent update.")
         
         # Return the raw data for the manager to use later for the portfolio
-        return strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity
+        return strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity, trade_events_df
         
     except Exception as e:
         error_msg = f"ERROR in {file_name}: {traceback.format_exc()}"
@@ -327,25 +350,48 @@ def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str,
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Indicators Calculation Successful"}})
     pd.set_option('display.max_columns', None)
     
-    # # 4. Clean the data before backtesting
-    # # Numba cannot handle NaN values. We must remove any rows that have
-    # # incomplete data, which typically occurs at the beginning of the
-    # # DataFrame where long-period indicators haven't "warmed up" yet.
-    # original_rows = len(ohlcv_idk)
-    # ohlcv_cleaned = ohlcv_idk.dropna()
-    # cleaned_rows = len(ohlcv_cleaned)
+    # --- Step 4: Run the backtest simulation loop ---
+    run_result = run_backtest_loop(strategy_name, strategy_instance, ohlcv_idk, initialCapital)
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Backtest loop finished."}})
     
-    # if original_rows > cleaned_rows:
-    #     print(f"--- Data Cleaning: Dropped {original_rows - cleaned_rows} rows with NaN values. ---")
+    # --- Step 5: Check for a complete failure from the backtest loop ---
+    if run_result is None:
+        print(f"--- Core backtest for {file_name} failed. Creating dummy result. ---")
+        # Create a dictionary for the UI payload
+        failed_strategy_data = {
+            'strategy_name': f"{file_name} [FAILED]",
+            'equity': np.array([initialCapital] * len(ohlcv_idk)),
+            'ohlcv': ohlcv_idk,
+            'signals': pd.DataFrame()
+        }
+        # We must still return a valid 6-item tuple to the calling manager
+        return (
+            failed_strategy_data, 
+            strategy_instance, 
+            {}, # Empty metrics
+            [], # Empty monthly returns
+            np.array([]), # Empty no-fee equity
+            pd.DataFrame() # Empty trade events
+        )
+
+    # --- Step 6: Unpack the successful result ---
+    (
+        corrected_equity, 
+        dfSignals, 
+        df_full, 
+        commission, 
+        corrected_no_fee_equity, 
+        trade_events_df
+    ) = run_result
     
-    # # Check if any data remains after cleaning
-    # if ohlcv_cleaned.empty:
-    #     raise ValueError("No data remained after cleaning NaN values. Your date range might be too short for the indicators used (e.g., SMA 200).")
-
-
-    # 4. Run simulation
-    strategy_data, commission, no_fee_equity = run_backtest_loop(strategy_name, strategy_instance, ohlcv_idk, initialCapital)
-    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Backtestloop Successful"}})
+    # --- Step 7: Assemble the `strategy_data` dictionary for metrics ---
+    # This dictionary is the primary data structure used by downstream functions.
+    strategy_data = {
+        'strategy_name': strategy_name,
+        'equity': corrected_equity,
+        'ohlcv': df_full,
+        'signals': dfSignals
+    }
     
     # 5. Calculate metrics (simulated)
     strategy_metrics, monthly_returns = calculate_metrics(strategy_data, initialCapital, commission)
@@ -356,7 +402,7 @@ def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str,
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Core backtest for {file_name} finished"}})
 
     # In a real app, this would return the full results object
-    return strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity
+    return strategy_data, strategy_instance, strategy_metrics, monthly_returns, corrected_no_fee_equity, trade_events_df
 
 # --- Helper function to make a dictionary JSON-serializable ---
 def convert_to_json_serializable(obj):
@@ -514,7 +560,7 @@ def process_optimization_job(batch_id: str, manager: any, job_id: str, run_num: 
         # The rest of the function is the same, it just uses the modified_code
         initialCapital = 1000
         client = get_client('binance')
-        strategy_data, _, metrics, monthly_returns, _ = run_single_backtest(
+        strategy_data, _, metrics, monthly_returns, _, trade_events_df = run_single_backtest(
             batch_id, manager, job_id, strategy_display_name, modified_code, initialCapital, client, queue, loop
         )
         
@@ -651,7 +697,8 @@ def run_asset_screening_manager(batch_id: str, config: dict, manager: any, queue
                 initialCapital=1000, # This could also be a config option
                 client=get_client('binance'),
                 queue=queue,
-                loop=loop
+                loop=loop,
+                send_ui_update=True # We want immediate updates for each asset
             )
             
     # The manager doesn't wait, it just submits all jobs. The completion message is sent
@@ -742,7 +789,7 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
         
         if is_combo_valid:
             valid_combinations.append(combo)
-            
+    
     # --- Step 6: Final setup and logging ---
     original_total = len(all_combinations)
     pruned_count = original_total - len(valid_combinations)
@@ -785,7 +832,8 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
                     initialCapital=1000,
                     client=get_client('binance'),
                     queue=queue,
-                    loop=loop
+                    loop=loop,
+                    send_ui_update=True # Immediate updates for each test
                 )
 
     # Note: A truly robust implementation would wait for all futures to complete
@@ -866,7 +914,7 @@ def universal_backtest_worker(
     job_id = str(uuid.uuid4())
     try:
         # We reuse the core backtest engine, passing the optional DataFrame
-        strategy_data, strategy_instance, metrics, monthly_returns, no_fee_equity = run_single_backtest(
+        strategy_data, strategy_instance, metrics, monthly_returns, no_fee_equity, trade_events_df = run_single_backtest(
             batch_id, manager, job_id, display_name, code_str, capital, client, queue, loop, ohlcv_df=ohlcv_df
         )
         
@@ -931,23 +979,41 @@ def run_data_segmentation_manager(batch_id: str, config: dict, manager: any, que
         send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Phase 1: Optimizing on Training data..."}})
         training_results = []
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+            
             param_combos = generate_and_prune_combinations(config)
+            
             if not param_combos: raise ValueError("No valid parameter combinations.")
             
-            futures = {executor.submit(universal_backtest_worker, batch_id, manager, build_modifications_and_name(c, config['parameters_to_optimize'], primary_symbol)[1], modify_strategy_code(temp_code, build_modifications_and_name(c, config['parameters_to_optimize'],"")[0]), 1000, client, queue, loop, train_df.copy()): c for c in param_combos}
+            futures = {}
+            for c in param_combos:
+                # Call the helper function ONCE to get both pieces of data
+                modifications, display_name = build_modifications_and_name(c, config['parameters_to_optimize'], primary_symbol)
+                modified_code = modify_strategy_code(temp_code, modifications)
+                
+                # Submit the job with the clean variables
+                future = executor.submit(
+                    universal_backtest_worker,
+                    batch_id, manager, display_name, modified_code, 1000,
+                    client, queue, loop, train_df.copy()
+                )
+                futures[future] = c
+            
             for future in as_completed(futures):
                 result = future.result()
                 if result: training_results.append((result, futures[future]))
         
         if not training_results: raise ValueError("Optimization on training data yielded no runs.")
-
-        # --- 5. Rank Results and Select Top N (Unchanged) ---
-        is_reverse_sort = optimization_metric != 'Max Drawdown [%]'
+        
+        # --- Create a dictionary for easy lookup of training metrics by combo ---
+        training_metrics_map = { combo: result[2] for result, combo in training_results }
+        
+        # --- 5. Rank Results and Select Top N ---
+        is_reverse_sort = optimization_metric != 'Max_Drawdown'
         training_results.sort(key=lambda x: x[0][2].get(optimization_metric, -9999), reverse=is_reverse_sort)
         top_n_from_training = training_results[:top_n_sets]
         send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 1 Complete. Selected top {len(top_n_from_training)} parameter sets for validation."}})
 
-        # --- MODIFIED: Split Step 6 into three parts ---
+        # --- Split Step 6 into three parts ---
 
         # --- 6. Run Top N on Validation Data ONLY ---
         send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Phase 2: Verifying top sets on Validation data..."}})
@@ -965,45 +1031,130 @@ def run_data_segmentation_manager(batch_id: str, config: dict, manager: any, que
             for future in as_completed(futures):
                 result = future.result()
                 if result: validation_results.append((result, futures[future]))
+                
+        # --- Create a dictionary for easy lookup of validation metrics by combo ---
+        validation_metrics_map = { combo: result[2] for result, combo in validation_results }
 
         # --- 7. Filter validation results to find qualified sets ---
         qualified_for_testing = []
+        
         for result_tuple, combo in validation_results:
             # The qualification criteria: must be profitable in the validation period.
             # You can make this criteria stricter (e.g., Sharpe > 0.5)
             
-            # Get the metrics dictionary for the validation run
+            # Get metrics from both periods
             validation_metrics = result_tuple[2]
-            
-            # Define our qualification criteria
-            is_profitable = validation_metrics.get('Net_Profit', 0) > 0
-            has_acceptable_drawdown = validation_metrics.get('Max_Drawdown', 100) < 30 # Max DD must be less than 30%
-            is_consistent = validation_metrics.get('Profit_Factor', 0) > 1.1 # Must be better than a coin flip
-            traded_enough = validation_metrics.get('Closed_Trades', 0) >= 5 # Must have at least 5 trades
-            
-            # The strategy only qualifies if ALL criteria are met
-            if is_profitable and has_acceptable_drawdown and is_consistent and traded_enough:
-                qualified_for_testing.append(combo)
-        
-        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 2 Complete. {len(qualified_for_testing)} sets qualified for final testing."}})
+            training_metrics = training_metrics_map.get(combo)
 
+            # --- Define acceptable degradation percentages ---
+            MAX_SHARPE_DEGRADATION_PCT = 40.0
+            MAX_PROFIT_FACTOR_DEGRADATION_PCT = 30.0
+            MAX_DRAWDOWN_INCREASE_PCT = 50.0 # Allow DD to increase by up to 50%
+
+            # --- Perform Checks ---
+            training_sharpe = training_metrics.get('Sharpe_Ratio', -100)
+            validation_sharpe = validation_metrics.get('Sharpe_Ratio', -100)
+
+            training_pf = training_metrics.get('Profit_Factor', 0)
+            validation_pf = validation_metrics.get('Profit_Factor', 0)
+
+            training_dd = training_metrics.get('Max_Drawdown', 0)
+            validation_dd = validation_metrics.get('Max_Drawdown', 0)
+
+
+            # Check 1: Sharpe Ratio Degradation
+            sharpe_degradation = ((training_sharpe - validation_sharpe) / (abs(training_sharpe) + 1e-9)) * 100
+            is_sharpe_ok = not (training_sharpe > 0.1 and sharpe_degradation > MAX_SHARPE_DEGRADATION_PCT)
+
+            # Check 2: Profit Factor Degradation
+            pf_degradation = ((training_pf - validation_pf) / (abs(training_pf) + 1e-9)) * 100
+            is_pf_ok = not (training_pf > 1 and pf_degradation > MAX_PROFIT_FACTOR_DEGRADATION_PCT)
+
+            # Check 3: Max Drawdown Increase
+            dd_increase = ((validation_dd - training_dd) / (abs(training_dd) + 1e-9)) * 100
+            is_dd_ok = dd_increase < MAX_DRAWDOWN_INCREASE_PCT
+
+            # Qualify only if all checks pass
+            if is_sharpe_ok and is_pf_ok and is_dd_ok:
+                qualified_for_testing.append(combo)
+            else:
+                # Use the correct helper function to build the name from the combo tuple
+                _, display_name = build_modifications_and_name(combo, config['parameters_to_optimize'], '')
+                param_set_str = display_name.strip(" | ")
+                
+                # Build a list of specific failure reasons
+                failure_reasons = []
+                if not is_sharpe_ok:
+                    failure_reasons.append(f"Sharpe degradation: {sharpe_degradation:.1f}%")
+                if not is_pf_ok:
+                    failure_reasons.append(f"PF degradation: {pf_degradation:.1f}%")
+                if not is_dd_ok:
+                    failure_reasons.append(f"DD increase: {dd_increase:.1f}%")
+                reasons_str = ", ".join(failure_reasons)
+
+                log_message = f"'{param_set_str}' DISQUALIFIED. Reason(s): {reasons_str}"
+                
+                print(f"[{batch_id}] {log_message}")
+                send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "INFO", "message": log_message}})
+
+        # --- 8. Run Qualified Sets on Testing Data ---
+        testing_results = [] # <- List to hold the final results
         if not qualified_for_testing:
-            print(f"[{batch_id}] No parameter sets passed the validation criteria.")
+            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "INFO", "message": "No parameter sets qualified for the final Testing phase."}})
         else:
-            # --- 8. Run qualified sets on Testing Data ---
-            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Phase 3: Running qualified sets on Testing (Out-of-Sample) data..."}})
+            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 3: Running {len(qualified_for_testing)} qualified set(s) on the final Testing data..."}})
             with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+                futures = {}
                 for combo in qualified_for_testing:
                     modifications, display_name = build_modifications_and_name(combo, config['parameters_to_optimize'], primary_symbol)
                     modified_code = modify_strategy_code(temp_code, modifications)
-                    executor.submit(universal_backtest_worker, batch_id, manager, f"{display_name} [Testing]", modified_code, 1000, client, queue, loop, test_df.copy())
+                    future = executor.submit(universal_backtest_worker, batch_id, manager, f"{display_name} [Testing]", modified_code, 1000, client, queue, loop, test_df.copy())
+                    futures[future] = combo # <-- Map the future back to its combo
+                
+                # --- Collect the testing results ---
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        testing_results.append((result, futures[future]))
+        
+        # --- Step 9 - Final Analysis and Reporting ---
+        if testing_results:
+            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "SUCCESS", "message": "--- Final Performance Analysis ---"}})
 
+            for testing_result_tuple, combo in testing_results:
+                testing_metrics = testing_result_tuple[2]
+                training_metrics = training_metrics_map.get(combo)
+                validation_metrics = validation_metrics_map.get(combo)
+
+                if not training_metrics or not validation_metrics: continue
+
+                # Get key metrics from all three stages
+                t_sharpe = training_metrics.get('Sharpe_Ratio', 0)
+                v_sharpe = validation_metrics.get('Sharpe_Ratio', 0)
+                f_sharpe = testing_metrics.get('Sharpe_Ratio', 0) # f for final/testing
+
+                t_dd = training_metrics.get('Max_Drawdown', 0)
+                v_dd = validation_metrics.get('Max_Drawdown', 0)
+                f_dd = testing_metrics.get('Max_Drawdown', 0)
+
+                # Build the display name
+                _, display_name = build_modifications_and_name(combo, config['parameters_to_optimize'], '')
+                param_set_str = display_name.strip(" | ")
+
+                # Send a series of clear, formatted log messages for each finalist
+                send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "SUCCESS", "message": f"Report for: '{param_set_str}'"}})
+                send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "INFO", "message": f"  Sharpe Path (Train -> Valid -> Test): {t_sharpe:.2f} -> {v_sharpe:.2f} -> {f_sharpe:.2f}"}})
+                send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "INFO", "message": f"  Max DD Path (Train -> Valid -> Test): {t_dd:.2f}% -> {v_dd:.2f}% -> {f_dd:.2f}%"}})
+    
     except Exception as e:
         error_msg = f"Data Segmentation test failed: {traceback.format_exc()}"
         print(error_msg)
         fail_job(batch_id, error_msg)
         send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": str(e)}})
     finally:
+        # NOTE: The job will now complete only AFTER the testing runs are submitted.
+        # For a truly complete picture, you would collect these futures as well before
+        # sending the batch_complete message, but this "fire-and-forget" is acceptable.
         update_job_status(batch_id, "completed", "Data Segmentation test finished.")
         send_update_to_queue(loop, queue, batch_id, {"type": "batch_complete", "payload": {"message": "Data Segmentation test complete."}})
         print(f"--- DATA SEGMENTATION ({batch_id}): Job finished. ---")
@@ -1033,13 +1184,14 @@ def generate_and_prune_combinations(config: dict) -> list:
                 param_value_lists.append(np.arange(p['start'], p['end'] + p['step'], p['step']))
     
     all_combinations = list(itertools.product(*param_value_lists))
+    
     if not params_to_optimize: # Handle case with no params (itertools gives [()])
         return [()] 
-
+    
     # Prune invalid combinations
     valid_combinations = []
     param_id_to_index = {p['id']: i for i, p in enumerate(params_to_optimize)}
-
+    
     for combo in all_combinations:
         is_combo_valid = True
         for rule in combination_rules:
@@ -1081,3 +1233,409 @@ def build_modifications_and_name_from_str(combo_str: str, params_config: list, s
             
     display_name = f"{symbol}" + (f" | {combo_str}" if combo_str else "")
     return modifications, display_name
+
+
+def run_hedge_optimization_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, connection_event: asyncio.Event):
+    try:
+        # Wait for client connection
+        async def wait_for_connection():
+            await connection_event.wait()
+        future = asyncio.run_coroutine_threadsafe(wait_for_connection(), loop)
+        future.result()
+        
+        send_update_to_queue(loop, queue, batch_id, { "type": "batch_info", "payload": { "config": config } })
+        
+        top_n = config['top_n_candidates']
+        portfolio_metric = config['portfolio_metric']
+        primary_symbol = config['symbols_to_screen'][0]
+        base_metric_name = portfolio_metric.replace('Portfolio ', '')
+
+        # --- PHASE 1: INDIVIDUAL OPTIMIZATION & PRE-FILTERING ---
+        # --- Pass the base metric name to the helper ---
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 1: Optimizing Strategy A (Top {top_n})..."}})
+        top_n_a, base_ohlcv = run_individual_optimization(batch_id, config['strategy_a'], primary_symbol, top_n, base_metric_name, manager, queue, loop)
+        
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 1: Optimizing Strategy B (Top {top_n})..."}})
+        top_n_b, _ = run_individual_optimization(batch_id, config['strategy_b'], primary_symbol, top_n, base_metric_name, manager, queue, loop)
+        
+        if not top_n_a or not top_n_b:
+            raise ValueError("Individual optimization for one or both strategies failed to produce results.")
+        
+        # --- PHASE 2: PAIRWISE COMBINATION & PORTFOLIO ANALYSIS ---
+        total_pairs = len(top_n_a) * len(top_n_b)
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 2: Analyzing {total_pairs} hedge combinations..."}})
+        
+        # This list will now store tuples of (payload, ohlcv_df)
+        portfolio_results_with_data = [] 
+        with ThreadPoolExecutor() as executor:
+            futures = {}
+            for res_a in top_n_a:
+                for res_b in top_n_b:
+                    # Pass the master ohlcv_df to the combination function
+                    future = executor.submit(combine_and_evaluate_pair, res_a, res_b, base_ohlcv)
+                    futures[future] = (res_a, res_b)
+            
+            for future in as_completed(futures):
+                # The result is now a tuple
+                portfolio_result_tuple = future.result()
+                if portfolio_result_tuple:
+                    portfolio_results_with_data.append(portfolio_result_tuple)
+
+        # --- PHASE 3: FINAL RANKING & DURABILITY TESTING ---
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Phase 3: Ranking portfolio results..."}})
+        
+        portfolio_metric = config['portfolio_metric']
+        is_reverse_sort = 'Max_Drawdown' not in portfolio_metric
+        
+        # Sort using the frontend payload (the first element of the tuple)
+        portfolio_results_with_data.sort(
+            key=lambda x: x[0]['metrics'].get(portfolio_metric.replace('Portfolio ', ''), -9999),
+            reverse=is_reverse_sort
+        )
+
+        # The single best hedge combination's data
+        best_hedge_payload, best_hedge_ohlcv = portfolio_results_with_data[0]
+        
+        # Send the best portfolio result's PAYLOAD to the UI
+        send_update_to_queue(loop, queue, batch_id, { "type": "strategy_result", "payload": convert_to_json_serializable(best_hedge_payload) })
+
+        final_analysis_config = config.get('final_analysis')
+        
+        if final_analysis_config and final_analysis_config['type'] != 'none':
+            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 4: Running {final_analysis_config['type']} on the best hedge portfolio..."}})
+            
+            # Create the equity_df using the payload and the SEPARATE ohlcv data
+            equity_df = pd.DataFrame({
+                'timestamp': best_hedge_ohlcv['timestamp'],
+                'equity': best_hedge_payload['equity_curve'] # This might need adjustment based on how equity is stored
+            })
+            # A more robust way if equity_curve is a list of [timestamp, value] pairs:
+            equity_curve_data = best_hedge_payload['equity_curve']
+            equity_df = pd.DataFrame(equity_curve_data, columns=['timestamp_ms', 'equity'])
+            equity_df['timestamp'] = pd.to_datetime(equity_df['timestamp_ms'], unit='ms')
+            equity_df = equity_df.set_index('timestamp').drop(columns=['timestamp_ms'])
+
+
+            if final_analysis_config['type'] == 'data_segmentation':
+                run_equity_curve_data_segmentation(batch_id, equity_df, final_analysis_config, queue, loop)
+            elif final_analysis_config['type'] == 'walk_forward':
+                run_equity_curve_walk_forward(batch_id, equity_df, final_analysis_config, queue, loop)
+        else:
+            # Get the number of results to return from the config
+            num_to_return = config.get('num_results_to_return', 50) # Default to 50 if not provided
+            
+            # If no final analysis, send the other top results for comparison
+            for payload, _ in portfolio_results_with_data[1:num_to_return]:
+                send_update_to_queue(loop, queue, batch_id, { "type": "strategy_result", "payload": convert_to_json_serializable(payload) })
+
+    except Exception as e:
+        print(f"ERROR in Hedge Optimization Manager: {traceback.format_exc()}")
+    finally:
+        update_job_status(batch_id, "completed", "Hedge optimization finished.")
+        send_update_to_queue(loop, queue, batch_id, {"type": "batch_complete", "payload": {"message": "Hedge optimization complete."}})
+
+
+def run_individual_optimization(batch_id, strategy_config, symbol, top_n, metric, manager, queue, loop):
+    """
+    Runs a full optimization for a single strategy by submitting jobs to the
+    standard backtest worker, but with UI updates disabled.
+    Returns the raw results of the top N best-performing parameter sets.
+    """
+    # 1. Generate parameter combinations (unchanged)
+    original_code = strategy_config['strategy_code']
+    params_to_optimize = strategy_config.get('parameters_to_optimize', [])
+    code_with_symbol = re.sub(r"self\.symbol\s*=\s*['\"].*?['\"]", f"self.symbol = '{symbol}'", original_code)
+    param_combos = generate_and_prune_combinations(strategy_config)
+    
+    if not param_combos:
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "WARNING", "message": "No valid parameter combinations found."}})
+        return []
+
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Generated {len(param_combos)} parameter sets to test..."}})
+    
+    # 2. Submit jobs to the standard worker and collect results (much cleaner)
+    lightweight_results = [] 
+    base_ohlcv_df = None # To store the OHLCV from the first run
+    
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+        futures = {}
+        for combo in param_combos:
+            modifications, display_name = build_modifications_and_name(combo, params_to_optimize, symbol)
+            modified_code = modify_strategy_code(code_with_symbol, modifications)
+            
+            future = executor.submit(
+                process_backtest_job,
+                batch_id, 
+                manager, 
+                str(uuid.uuid4()), 
+                display_name, 
+                modified_code,
+                1000, 
+                get_client('binance'), 
+                queue, 
+                loop,
+                send_ui_update=False
+            )
+            
+            futures[future] = display_name
+        
+        for future in as_completed(futures):
+            try:
+                result_tuple = future.result()
+                if result_tuple:
+                    strategy_data, instance, metrics, monthly, no_fee, trade_events_df = result_tuple
+                    
+                    # Keep the first ohlcv_df we get as our master time index
+                    if base_ohlcv_df is None and not strategy_data['ohlcv'].empty:
+                        base_ohlcv_df = strategy_data['ohlcv'][['timestamp']].copy()
+                    
+                    # The "lightweight" result now includes the full trade_events_df,
+                    # which is small but contains all necessary columns for portfolio calcs.
+                    lightweight_tuple = (
+                        strategy_data['strategy_name'], # Pass name as a simple string
+                        instance,
+                        metrics,
+                        monthly,
+                        no_fee,
+                        trade_events_df
+                    )
+                    lightweight_results.append(lightweight_tuple)
+            except Exception as e:
+                print(f"!!! Error in individual optimization sub-task for {futures[future]}: {e} !!!")
+
+    if not lightweight_results:
+        return [], None
+
+    # 3. Rank the results and return the top N (unchanged)
+    LOWER_IS_BETTER_METRICS = {'Max_Drawdown', 'Max_Drawdown_Duration_days'}
+    is_reverse_sort = metric not in LOWER_IS_BETTER_METRICS
+    
+    lightweight_results.sort(
+        key=lambda x: x[2].get(metric.replace('Portfolio ', ''), -9999 if is_reverse_sort else 9999),
+        reverse=is_reverse_sort
+    )
+    
+    # Return the top N lightweight results AND the single master OHLCV DataFrame
+    return lightweight_results[:top_n], base_ohlcv_df
+
+def combine_and_evaluate_pair(result_a, result_b, base_ohlcv_df):
+    """
+    Combines two LIGHTWEIGHT backtest results using a master OHLCV timeline.
+    """
+    # Define names here so they are available in the except block
+    name_a = "Strategy A"
+    name_b = "Strategy B"
+    try:
+        # 1. Get the lightweight data
+        name_a, instance_a, _, _, no_fee_equity_array_a, events_a = result_a
+        name_b, _, _, _, no_fee_equity_array_b, events_b = result_b
+        
+        # Calculate the scalar gain from the full arrays
+        no_fee_equity_gain_a = no_fee_equity_array_a[-1] - no_fee_equity_array_a[0] if len(no_fee_equity_array_a) > 1 else 0
+        no_fee_equity_gain_b = no_fee_equity_array_b[-1] - no_fee_equity_array_b[0] if len(no_fee_equity_array_b) > 1 else 0
+        
+        portfolio_initial_capital = 1000 # Fixed for portfolios
+        
+        # 2. Combine the trade events DataFrames
+        if events_a is None: events_a = pd.DataFrame()
+        if events_b is None: events_b = pd.DataFrame()
+        combined_events_df = pd.concat([events_a, events_b], ignore_index=True)
+        
+        # 3. Create the complete timeline for the portfolio calculation
+        # The merge key is 'timestamp', which in `combined_events_df` is the EXIT time.
+        complete_df = pd.merge(base_ohlcv_df, combined_events_df, on='timestamp', how='left')
+        
+        # 4. Recalculate the Portfolio Equity Curve from scratch
+        sample_instance = instance_a 
+        
+        timestamps_unix = (complete_df['timestamp'].astype(np.int64) // 10**9).values
+        results_col = complete_df['Result'].fillna(0).values
+        rr_col = complete_df['RR'].fillna(0).values
+        reduction_col = complete_df['Reduction'].fillna(0).values
+        commission_returns_col = complete_df['Commissioned Returns'].fillna(0).values
+        
+        portfolio_equity = sample_instance.portfolio(
+            timestamps_unix,
+            results_col,
+            rr_col,
+            reduction_col,
+            commission_returns_col
+        )
+        
+        aligned_equity = pd.Series(portfolio_equity, index=complete_df.index)
+        
+        # 4. Create the portfolio_data object for metrics calculation
+        portfolio_name = f"Hedge: ({name_a}) + ({name_b})"
+        portfolio_strategy_data = {
+            'strategy_name': portfolio_name,
+            'equity': aligned_equity,
+            'ohlcv': complete_df,
+            'signals': combined_events_df
+        }
+        
+        # 5. Recalculate portfolio-level commission
+        total_no_fee_equity_gain = no_fee_equity_gain_a + no_fee_equity_gain_b
+        portfolio_net_profit = aligned_equity.iloc[-1] - aligned_equity.iloc[0]
+        
+        # Handle the case where there are no gains to avoid division by zero
+        if total_no_fee_equity_gain > 0:
+            commission = round(((total_no_fee_equity_gain - portfolio_net_profit) * 100) / total_no_fee_equity_gain, 2)
+        else:
+            commission = 0.0
+        
+        # 6. Recalculate metrics for the new portfolio
+        portfolio_metrics, portfolio_returns = calculate_metrics(portfolio_strategy_data, portfolio_initial_capital, commission)
+        
+        # 7. Prepare the payload (without OHLCV) for the frontend
+        frontend_payload = prepare_strategy_payload(portfolio_strategy_data, portfolio_metrics, portfolio_returns)
+        
+        # # Send the portfolio result to the UI
+        # send_update_to_queue(loop, queue, batch_id, {
+        #     "type": "strategy_result", 
+        #     "payload": convert_to_json_serializable(frontend_payload)
+        # })
+        
+        # 8. Return both the payload and the base OHLCV for potential backend use
+        return frontend_payload, complete_df
+
+    except Exception as e:
+        # It's good practice to handle errors within the worker
+        print(f"!!! ERROR combining pair: {name_a} + {name_b} !!!")
+        print(traceback.format_exc())
+        return None, None # Return None to indicate failure
+
+# --- NEW HELPER FUNCTIONS FOR DURABILITY TESTING ON AN EQUITY CURVE ---
+
+def run_equity_curve_data_segmentation(batch_id, equity_df, config, queue, loop):
+    """Takes a combined equity curve and runs a simple Train/Test split on it."""
+    total_rows = len(equity_df)
+    train_end_idx = int(total_rows * (config['training_pct'] / 100))
+    
+    train_equity = equity_df.iloc[:train_end_idx]
+    test_equity = equity_df.iloc[train_end_idx:]
+    
+    initial_capital = equity_df['equity'].iloc[0]
+    
+    # Calculate and send metrics for each segment
+    train_metrics = calculate_metrics_from_equity(train_equity, 'Hedge Portfolio [Training]', initial_capital=initial_capital)
+    test_metrics = calculate_metrics_from_equity(test_equity, 'Hedge Portfolio [Testing]', initial_capital=initial_capital)
+    
+    send_update_to_queue(loop, queue, batch_id, { "type": "strategy_result", "payload": convert_to_json_serializable(train_metrics) })
+    send_update_to_queue(loop, queue, batch_id, { "type": "strategy_result", "payload": convert_to_json_serializable(test_metrics) })
+
+def run_equity_curve_walk_forward(batch_id, equity_df, config, queue, loop):
+    """
+    Takes a combined equity curve and runs a Walk-Forward analysis on it by
+    calculating metrics on rolling out-of-sample windows.
+    """
+    try:
+        # --- Config Extraction ---
+        train_delta = pd.Timedelta(**{config['training_period_unit']: config['training_period_length']})
+        test_delta = pd.Timedelta(**{config['testing_period_unit']: config['testing_period_length']})
+        step_delta = test_delta * (config['step_forward_size_pct'] / 100)
+        
+        initial_capital = equity_df['equity'].iloc[0]
+
+        # --- The Walk-Forward Loop ---
+        window_start_date = equity_df.index.min()
+        
+        iteration = 1
+        while True:
+            # Define current window boundaries
+            train_end = window_start_date + train_delta
+            test_start = train_end
+            test_end = test_start + test_delta
+
+            if test_end > equity_df.index.max():
+                break # Stop if the next test period goes beyond our data
+
+            # Slice the equity curve for the out-of-sample (testing) period
+            out_of_sample_equity_slice = equity_df[(equity_df.index >= test_start) & (equity_df.index < test_end)]
+
+            if out_of_sample_equity_slice.empty:
+                window_start_date += step_delta
+                iteration += 1
+                continue
+
+            # Calculate metrics for JUST this OOS slice
+            oos_period_name = f"WFA Period {iteration} (OOS)"
+            oos_metrics_payload = calculate_metrics_from_equity(out_of_sample_equity_slice, oos_period_name, initial_capital)
+
+            if oos_metrics_payload:
+                send_update_to_queue(loop, queue, batch_id, {
+                    "type": "strategy_result",
+                    "payload": convert_to_json_serializable(oos_metrics_payload)
+                })
+
+            # Advance the window for the next iteration
+            window_start_date += step_delta
+            iteration += 1
+
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Walk-Forward analysis on the best pair is complete."}})
+
+    except Exception as e:
+        error_msg = f"Equity Curve Walk-Forward failed: {traceback.format_exc()}"
+        print(error_msg)
+        send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": str(e)}})
+
+def calculate_metrics_from_equity(equity_df: pd.DataFrame, name: str, initial_capital: int):
+    """
+    Calculates performance metrics directly from a pandas Series of equity values
+    with a DatetimeIndex. Returns a dictionary in the same format as prepare_strategy_payload.
+    """
+    if equity_df.empty or len(equity_df) < 2:
+        return None
+
+    equity_array = equity_df['equity'].to_numpy()
+    
+    # --- Basic Metrics ---
+    net_profit = equity_array[-1] - equity_array[0]
+    profit_percentage = (net_profit / equity_array[0]) * 100 if equity_array[0] != 0 else 0
+
+    # --- Drawdown Calculation ---
+    peaks = np.maximum.accumulate(equity_array)
+    drawdowns = (equity_array - peaks) / peaks
+    max_drawdown = np.min(drawdowns) * 100 if np.all(peaks > 0) else 0
+
+    # --- Sharpe Ratio Calculation (Annualized from daily data) ---
+    daily_returns = equity_df['equity'].pct_change().dropna()
+    if not daily_returns.empty:
+        # Assuming 252 trading days in a year
+        sharpe_ratio = (daily_returns.mean() * 252) / (daily_returns.std() * np.sqrt(252))
+    else:
+        sharpe_ratio = 0.0
+
+    # --- Monthly Returns ---
+    # Resample equity to monthly, get the last day's value, then calculate percentage change
+    monthly_equity = equity_df['equity'].resample('M').last()
+    monthly_pct_returns = monthly_equity.pct_change().dropna()
+    
+    monthly_returns_data = []
+    for timestamp, pct_return in monthly_pct_returns.items():
+        month_name = timestamp.strftime('%b %Y')
+        monthly_returns_data.append({
+            "Month": month_name,
+            "Returns (%)": pct_return * 100,
+        })
+    
+    # --- Assemble the metrics dictionary (simplified version) ---
+    metrics = {
+        "Net_Profit": net_profit,
+        "Profit_Percentage": round(profit_percentage, 2),
+        "Max_Drawdown": round(abs(max_drawdown), 2),
+        "Sharpe_Ratio": round(sharpe_ratio, 2) if not np.isnan(sharpe_ratio) else 0.0,
+        # Add other relevant metrics here if needed (e.g., Calmar)
+    }
+
+    # --- Prepare the payload in the standard format for the frontend ---
+    timestamps_ms = (equity_df.index.astype(np.int64) // 10**6).tolist()
+    equity_values = equity_array.tolist()
+    
+    payload = {
+        "strategy_name": name,
+        "equity_curve": list(zip(timestamps_ms, equity_values)),
+        "metrics": metrics,
+        "trades": [], # No individual trades when analyzing a combined curve
+        "monthly_returns": monthly_returns_data
+    }
+    return payload

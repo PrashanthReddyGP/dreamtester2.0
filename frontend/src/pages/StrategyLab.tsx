@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { Box } from '@mui/material';
 import {
   Panel,
@@ -27,6 +27,9 @@ import type { OptimizationConfig, TestSubmissionConfig, SuperOptimizationConfig 
 
 import { DurabilityModal } from '../components/strategylab/DurabilityModal';
 import type { DurabilitySubmissionConfig } from '../components/strategylab/DurabilityModal';
+
+import { HedgeModal } from '../components/strategylab/HedgeModal';
+import type { HedgeOptimizationConfig } from '../components/strategylab/HedgeModal';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -102,6 +105,20 @@ const findFirstFile = (nodes: FileSystemItem[]): FileSystemItem | null => {
     return null; // No file found in this branch
 };
 
+// Helper to flatten the file tree (can be inside or outside the component)
+const getAllFiles = (nodes: FileSystemItem[]): FileSystemItem[] => {
+    let files: FileSystemItem[] = [];
+    for (const node of nodes) {
+        if (node.type === 'file') {
+            files.push(node);
+        }
+        if (node.children) {
+            files = files.concat(getAllFiles(node.children));
+        }
+    }
+    return files;
+};
+
 export const StrategyLab: React.FC = () => {
     const { connectToBatch, toggleTerminal } = useTerminal();
     const { clearResults } = useAnalysis();
@@ -112,6 +129,11 @@ export const StrategyLab: React.FC = () => {
     const [currentEditorCode, setCurrentEditorCode] = useState<string>('// Select a file to begin...');
     const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
     const [isBacktestRunning, setIsBacktestRunning] = useState(false);
+    const [isOptimizing, setIsOptimizing] = useState(false);
+    const [isOptimizeModalOpen, setIsOptimizeModalOpen] = useState(false);
+    const [isDurabilityModalOpen, setIsDurabilityModalOpen] = useState(false);
+
+    const [isHedgeModalOpen, setIsHedgeModalOpen] = useState(false);
 
     const navigate = useNavigate();
 
@@ -644,11 +666,6 @@ export const StrategyLab: React.FC = () => {
         return null;
     }
 
-    const [isOptimizeModalOpen, setIsOptimizeModalOpen] = useState(false);
-    const [isOptimizing, setIsOptimizing] = useState(false);
-
-    const [isDurabilityModalOpen, setIsDurabilityModalOpen] = useState(false);
-
     const handleOpenOptimizeModal = () => {
         if (!selectedFileId) {
             alert("Please select a strategy file to optimize.");
@@ -814,6 +831,61 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
+    // --- Add handlers for the new modal ---
+    const handleOpenHedgeModal = () => {
+        if (!selectedFileId) {
+            alert("Please select a primary strategy (Strategy A) from the explorer first.");
+            return;
+        }
+        setIsHedgeModalOpen(true);
+    };
+    
+    const handleCloseHedgeModal = () => setIsHedgeModalOpen(false);
+
+    // --- Add the new submission handler for hedge optimizations ---
+    const handleRunHedgeOptimization = async (config: HedgeOptimizationConfig) => {
+        setIsOptimizing(true);
+        toggleTerminal(true);
+        console.log("Submitting Hedge Optimization with config:", config);
+        
+        try {
+            clearResults();
+            await handleSaveContent(); // Save any open files
+
+            const response = await fetch(`${API_URL}/api/optimize/hedge`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || 'Failed to submit hedge optimization.');
+            }
+
+            const result = await response.json();
+            if (result.batch_id) {
+                connectToBatch(result.batch_id);
+                navigate('/analysis');
+            } else {
+                throw new Error("Submission successful, but no batch ID was returned.");
+            }
+
+        } catch (error) {
+            console.error("Failed to run hedge optimization:", error);
+            alert(`Error: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
+        } finally {
+            setIsOptimizing(false);
+            handleCloseHedgeModal();
+        }
+    };
+
+    // --- Prepare data for the HedgeModal props ---
+    const selectedFile = useMemo(() => {
+        return selectedFileId ? findFileById(fileSystem, selectedFileId) : null;
+    }, [selectedFileId, fileSystem]);
+
+    const allAvailableFiles = useMemo(() => getAllFiles(fileSystem), [fileSystem]);
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -850,6 +922,7 @@ export const StrategyLab: React.FC = () => {
                         onRunBacktestWithCsv={handleRunBacktestWithCsv}
                         onOptimizeStrategy={handleOpenOptimizeModal}
                         onDurabilityTests={handlOpenDurabilityModal}
+                        onHedgeOptimize={handleOpenHedgeModal}
                         isBacktestRunning={isBacktestRunning}
                         onFileChange={handleFileChange}
                         onClearCsv={handleClearCsv}
@@ -907,6 +980,15 @@ export const StrategyLab: React.FC = () => {
                 onSubmit={handleRunDurabilityTest}
                 strategyCode={currentEditorCode}
                 isSubmitting={isOptimizing}
+            />
+
+            <HedgeModal
+                open={isHedgeModalOpen}
+                onClose={handleCloseHedgeModal}
+                onSubmit={handleRunHedgeOptimization}
+                isSubmitting={isOptimizing}
+                initialStrategy={selectedFile}
+                availableStrategies={allAvailableFiles}
             />
 
         </Box>

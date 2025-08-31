@@ -11,7 +11,7 @@ os.makedirs(APP_DATA_DIR, exist_ok=True)
 
 DATABASE_URL = f"sqlite:///{os.path.join(APP_DATA_DIR, 'database.db')}"
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False, "timeout": 30})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -228,21 +228,25 @@ def update_job_status(batch_id: str, status: str, log_message: str = None):
     """
     Updates the status of a job and appends a new log message.
     """
-    db = SessionLocal()
-    try:
-        job = db.query(BacktestJob).filter(BacktestJob.id == batch_id).first()
-        if job:
-            job.status = status
-            if log_message:
-                # SQLAlchemy's JSON type tracks mutations, so we can append directly.
-                # It's safer to get the list, append, and then re-assign.
-                current_logs = job.logs or []
-                timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3] # HH:MM:SS.ms
-                current_logs.append(f"[{timestamp}] {log_message}")
-                job.logs = current_logs
-            db.commit()
-    finally:
-        db.close()
+    with SessionLocal() as db:
+        try:
+            job = db.query(BacktestJob).filter(BacktestJob.id == batch_id).first()
+            if job:
+                job.status = status
+                if log_message:
+                    # SQLAlchemy's JSON type tracks mutations, so we can append directly.
+                    # It's safer to get the list, append, and then re-assign.
+                    current_logs = job.logs or []
+                    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3] # HH:MM:SS.ms
+                    current_logs.append(f"[{timestamp}] {log_message}")
+                    job.logs = current_logs
+                db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"DB ERROR in update_job_status: {e}")
+            raise
+        finally:
+            db.close()
 
 def fail_job(batch_id: str, error: str):
     """

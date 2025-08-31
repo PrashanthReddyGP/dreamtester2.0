@@ -1,6 +1,7 @@
 import React, {useRef} from 'react';
 import { Box, Typography, Button, MenuItem, FormControl, InputLabel, Select, Divider, IconButton } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import { DatePicker, LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { Save, ArrowDown01, TestTube } from 'lucide-react';
@@ -13,12 +14,13 @@ export const SettingsPanel: React.FC<{
   onRunBacktest: () => void;
   onOptimizeStrategy: () => void;
   onDurabilityTests: () => void;
+  onHedgeOptimize: () => void;
   onRunBacktestWithCsv: () => void;
   isBacktestRunning: boolean;
   onFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onClearCsv: () => void;
   selectedCsvFile: File | null;
-}> = ({ onSave, isSaveDisabled, onRunBacktest, onRunBacktestWithCsv, onOptimizeStrategy, onDurabilityTests, isBacktestRunning, onFileChange, onClearCsv, selectedCsvFile }) => {
+}> = ({ onSave, isSaveDisabled, onRunBacktest, onRunBacktestWithCsv, onOptimizeStrategy, onDurabilityTests, onHedgeOptimize, isBacktestRunning, onFileChange, onClearCsv, selectedCsvFile }) => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -53,9 +55,19 @@ export const SettingsPanel: React.FC<{
 
         <Divider sx={{ mt: 2, mb: 2 }}/>
 
-        <Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           <Button variant="contained" size="large" startIcon={<TestTube />} fullWidth onClick={onDurabilityTests}>
             Durability Tests
+          </Button>
+          <Button 
+            variant="outlined" 
+            size="large" 
+            startIcon={<CompareArrowsIcon />} 
+            fullWidth 
+            onClick={onHedgeOptimize}
+            disabled={isBacktestRunning || isSaveDisabled}
+          >
+            Hedge Optimization
           </Button>
         </Box>
 

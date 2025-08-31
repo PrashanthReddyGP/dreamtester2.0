@@ -35,14 +35,14 @@ const formatRatio = (value: number | string) => {
 // --- The configuration array is now static, as dynamic properties will be handled in the cell renderer ---
 const metricsConfig = [
     { key: 'Net_Profit', label: 'Net Profit', tooltip: 'Total profit or loss after all trades.', format: formatCurrency },
-    { key: 'Profit_Percentage', label: 'Total Return', tooltip: 'Total return as a percentage of the initial capital.', format: formatPercent },
-    { key: 'Annual_Return', label: 'Annual Return', tooltip: 'The geometric average amount of money earned by an investment each year.', format: formatPercent },
     { key: 'Commission', label: 'Commissions', tooltip: 'The overall commissions deducted on this trade span.', format: formatPercent, color: 'error.main' }, 
     { key: 'Max_Drawdown_Duration_days', label: 'DD Duration', tooltip: 'The longest time it took to recover from a peak (days).', unit: ' days' },
     { key: 'Max_Drawdown', label: 'Max Drawdown', tooltip: 'The largest peak-to-trough decline in portfolio value.', format: formatPercent, color: 'error.main' },
-    { key: 'Winrate', label: 'Win Rate', tooltip: 'The percentage of trades that were profitable.', format: formatPercent },
-    { key: 'RR', label: 'Risk:Reward', tooltip: 'The average profit from winning trades divided by the average loss from losing trades.', format: formatRatio },
     { key: 'Total_Trades', label: 'Total Trades', tooltip: 'The total number of closed trades executed.' },
+    { key: 'Sharpe_Ratio', label: 'Sharpe Ratio', tooltip: 'Measures risk-adjusted return, considering volatility.', format: formatRatio },
+    { key: 'Profit_Factor', label: 'Profit Factor', tooltip: 'Gross profits divided by gross losses. Higher is better.', format: formatRatio },
+    { key: 'Calmar_Ratio', label: 'Calmar Ratio', tooltip: 'Measures return relative to the maximum drawdown.', format: formatRatio },
+    { key: 'Equity_Efficiency_Rate', label: 'EER', tooltip: 'A custom metric for strategy quality.', format: formatRatio },
 ];
 
 // --- The component now accepts an array of results ---
