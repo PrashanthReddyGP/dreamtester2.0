@@ -105,6 +105,9 @@ class BaseStrategy:
     def optimized_exit(self):
         pass
     
+    def optimized_hedge(self):
+        pass
+    
     def run(self):
         
         df = self.df
@@ -113,6 +116,8 @@ class BaseStrategy:
             self.optimized_run()
         elif self.exit_type == 'EXIT':
             self.optimized_exit()
+        elif self.exit_type == 'HEDGE':
+            self.optimized_hedge()
         
         # This "shuffles" the equity values to their correct exit timestamps.
         corrected_equity, corrected_no_fee_equity, commission = self.correct_equity_timelines()

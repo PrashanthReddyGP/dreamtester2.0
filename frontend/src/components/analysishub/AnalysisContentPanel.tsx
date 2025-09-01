@@ -1,6 +1,6 @@
 import React, {useState} from 'react';
 import type { FC } from 'react';
-import { Box, Paper, Typography, Tabs, Tab, Grow } from '@mui/material';
+import { Box, Paper, Typography, Tabs, Tab } from '@mui/material';
 
 // Import your existing tab components
 import { EquityTab } from './EquityTab';
@@ -8,6 +8,7 @@ import { TradeLogTab } from './TradeLogTab';
 import { AdvancedMetricsTab } from './AdvancedMetricsTab';
 import { MetricsOverviewTab } from './MetricsOverviewTab';
 import type { StrategyResult } from '../../services/api'; 
+import { CorrelationMatrixTab } from './CorrelationMatrixTab';
 
 export const AnalysisContentPanel: FC<{
     results: StrategyResult[],
@@ -30,6 +31,7 @@ export const AnalysisContentPanel: FC<{
             <Tab label="Equity" />
             <Tab label="Trade Log" />
             <Tab label="Metrics Overview" />
+            <Tab label="Correlation Matrix" /> 
             <Tab label="Advanced Metrics" />
             </Tabs>
         </>
@@ -56,7 +58,11 @@ export const AnalysisContentPanel: FC<{
           <MetricsOverviewTab
             results={results}
           />}
-        {currentTab === 3 && 
+        {currentTab === 3 &&
+          <CorrelationMatrixTab 
+            results={results}
+          />}
+        {currentTab === 4 && 
           <AdvancedMetricsTab 
             metrics={result.metrics}
             monthlyReturns={result.monthly_returns}
