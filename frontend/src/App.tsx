@@ -5,6 +5,7 @@ import { getAppTheme } from './theme/theme';
 import { MainLayout } from './layouts/MainLayout';
 import { StrategyLab } from './pages/StrategyLab';
 import { AnalysisHub } from './pages/AnalysisHub';
+import { MachineLearning } from './pages/MachineLearning';
 import { AnimatedPage } from './components/common/AnimatedPage';
 import { loader } from '@monaco-editor/react';
 
@@ -175,6 +176,7 @@ function App() {
                 <Route element={<MainLayout mode={mode} toggleTheme={toggleTheme} />}>
                   <Route path="/" element={<Navigate to="/lab" replace />} />
                   <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
+                  <Route path="/machinelearning" element={<AnimatedPage><MachineLearning /></AnimatedPage>} />
                   <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
                   <Route path="/automation" element={<div style={{display:'flex', justifyContent:'center', alignItems:'center', width:'100%'}}><AnimatedPage>Automation Page</AnimatedPage></div>} />
                 </Route>

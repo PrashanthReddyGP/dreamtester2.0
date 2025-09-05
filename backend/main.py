@@ -8,10 +8,10 @@ try:
     import uvicorn
     import asyncio
     from typing import List, Literal, Union, Annotated
-    from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, Response
+    from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, Response, Depends
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel, Field
-    from typing import Optional, List, Dict
+    from typing import Optional, List, Dict, Literal, Union
     from sqlalchemy.orm import Session
 
     # Import the new database functions
@@ -30,9 +30,15 @@ try:
         create_backtest_job,
         get_backtest_job,
         clear_ohlcv_tables,
+        get_all_labeling_templates,
+        save_labeling_template,
+        delete_labeling_template
     )
 
     from pipeline import run_unified_test_manager, run_optimization_manager, run_asset_screening_manager, run_batch_manager, run_local_backtest_manager, run_hedge_optimization_manager
+    from core.machinelearning import run_ml_pipeline_manager
+    
+    from core.indicator_registry import get_indicator_schema
     from core.connect_to_brokerage import get_client
 
     ##########################################
@@ -206,6 +212,54 @@ try:
         Field(discriminator="test_type"),
     ]
 
+
+    class IndicatorConfig(BaseModel):
+        id: str
+        name: str
+        params: Dict[str, Union[int, str]]
+
+    class ProblemDefinitionConfig(BaseModel):
+        type: Literal['template', 'custom']
+        # Use Field(alias=...) to map from frontend's camelCase to Python's snake_case
+        template_key: str = Field(alias='templateKey')
+        custom_code: str = Field(alias='customCode')
+
+    class DataSourceConfig(BaseModel):
+        symbol: str
+        timeframe: str
+
+    class ModelConfig(BaseModel):
+        name: str
+
+    class ValidationConfig(BaseModel):
+        method: Literal['train_test_split', 'walk_forward']
+        train_split: int = Field(alias='trainSplit')
+        walk_forward_train_window: int = Field(alias='walkForwardTrainWindow')
+        walk_forward_test_window: int = Field(alias='walkForwardTestWindow')
+
+    class PreprocessingConfig(BaseModel):
+        scaler: Literal['none', 'StandardScaler', 'MinMaxScaler']
+        remove_correlated: bool = Field(alias='removeCorrelated')
+        correlation_threshold: float = Field(alias='correlationThreshold')
+        use_pca: bool = Field(alias='usePCA')
+        pca_components: int = Field(alias='pcaComponents')
+
+    class MLPipelineConfig(BaseModel):
+        """The main model that captures the entire configuration from the frontend."""
+        problem_definition: ProblemDefinitionConfig = Field(alias='problemDefinition')
+        data_source: DataSourceConfig = Field(alias='dataSource')
+        features: List[IndicatorConfig]
+        model: ModelConfig
+        validation: ValidationConfig
+        preprocessing: PreprocessingConfig
+
+    class LabelingTemplateModel(BaseModel):
+        key: str
+        name: str
+        description: str
+        code: str
+
+
     class ConnectionManager:
         def __init__(self):
             # A dictionary to hold active connections for each batch_id
@@ -264,6 +318,16 @@ try:
         allow_methods=["*"], # Allows all methods (GET, POST, OPTIONS, etc.)
         allow_headers=["*"], # Allows all headers
     )
+
+    # It creates a new database session for each request that needs one,
+    # and ensures the session is closed afterward, even if an error occurs.
+    def get_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
 
     symbol_cache = {}
     CACHE_DURATION_SECONDS = 3600  # Cache for 1 hour
@@ -710,6 +774,89 @@ try:
             connection_event=connection_event
         )
         return {"message": "Hedge optimization job started.", "batch_id": batch_id}
+
+
+    @app.get("/api/ml/indicators")
+    def get_ml_indicators_schema():
+        """
+        Provides a schema of all available indicators and their parameters
+        for the frontend to dynamically build its UI.
+        """
+        try:
+            return get_indicator_schema()
+        except Exception as e:
+            print(f"Error generating indicator schema: {e}")
+            raise HTTPException(status_code=500, detail="Could not generate indicator schema.")
+
+    @app.post("/api/ml/run")
+    async def submit_ml_pipeline(
+        body: MLPipelineConfig,
+        background_tasks: BackgroundTasks,
+        request: Request
+    ):
+        """
+        Accepts an ML pipeline job, starts it as a background task,
+        and returns a batch_id for WebSocket connection.
+        """
+        batch_id = str(uuid.uuid4())
+        create_backtest_job(batch_id) # Log the job in the database
+
+        # Pydantic v2's model_dump converts the model back to a dict.
+        # by_alias=True ensures it uses the original camelCase keys if needed,
+        # but our runner will expect snake_case, so we can omit it.
+        config_dict = body.model_dump()
+        
+        queue = request.app.state.websocket_queue
+        main_loop = asyncio.get_running_loop()
+
+        # Add the long-running ML pipeline manager to the background tasks
+        background_tasks.add_task(
+            run_ml_pipeline_manager,
+            batch_id=batch_id,
+            config=config_dict,
+            manager=manager,
+            queue=queue,
+            loop=main_loop
+        )
+
+        return {"message": "Machine Learning pipeline job started.", "batch_id": batch_id}
+
+    @app.get("/api/ml/templates")
+    def get_labeling_templates_endpoint(db: Session = Depends(get_db)):
+        """Fetches all custom labeling templates stored in the database."""
+        try:
+            return get_all_labeling_templates(db)
+        except Exception as e:
+            print(f"Error fetching templates: {e}")
+            raise HTTPException(status_code=500, detail="Could not fetch labeling templates.")
+
+    @app.post("/api/ml/templates")
+    def save_labeling_template_endpoint(template: LabelingTemplateModel, db: Session = Depends(get_db)):
+        """Saves a new or updates an existing labeling template."""
+        try:
+            saved = save_labeling_template(
+                db=db,
+                key=template.key,
+                name=template.name,
+                description=template.description,
+                code=template.code
+            )
+            return {"status": "success", "template": saved}
+        except Exception as e:
+            print(f"Error saving template: {e}")
+            raise HTTPException(status_code=500, detail="Could not save labeling template.")
+
+    @app.delete("/api/ml/templates/{template_key}")
+    def delete_labeling_template_endpoint(template_key: str, db: Session = Depends(get_db)):
+        """Deletes a custom labeling template."""
+        try:
+            result = delete_labeling_template(db=db, key=template_key)
+            if result is None:
+                raise HTTPException(status_code=404, detail="Template not found.")
+            return result
+        except Exception as e:
+            print(f"Error deleting template: {e}")
+            raise HTTPException(status_code=500, detail="Could not delete labeling template.")
 
 
     ####################################

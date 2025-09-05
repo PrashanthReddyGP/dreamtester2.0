@@ -7,6 +7,7 @@ import BarChartIcon from '@mui/icons-material/BarChart';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
+import PrecisionManufacturingIcon from '@mui/icons-material/PrecisionManufacturing';
 import SettingsIcon from '@mui/icons-material/Settings';
 import { SettingsModal } from '../components/common/SettingsModal';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
@@ -21,6 +22,7 @@ interface MainLayoutProps {
 
 const navItems = [
   { text: 'Strategy Lab', icon: <ScienceIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/lab' },
+  { text: 'Machine Learning', icon: <PrecisionManufacturingIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/machinelearning' },
   { text: 'Analysis Hub', icon: <BarChartIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/analysis' },
   { text: 'Automation', icon: <AutoAwesomeIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/automation' },
 ];

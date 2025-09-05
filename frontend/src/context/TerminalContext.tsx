@@ -22,7 +22,7 @@ interface TerminalContextType {
 }
 
 const TerminalContext = createContext<TerminalContextType | undefined>(undefined);
-const MAX_LOG_LINES = 50;
+const MAX_LOG_LINES = 100;
 
 export const TerminalContextProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [logs, setLogs] = useState<LogEntry[]>([]);

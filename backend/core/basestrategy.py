@@ -211,46 +211,197 @@ class BaseStrategy:
 
         return corrected_equity_array, corrected_no_fee_equity_array, commission
     
-    def portfolio(self, timestamps, results, rrs, reductions, commissioned_returns_combined):
+    # def portfolio(self, timestamps, results, rrs, reductions, commissioned_returns_combined):
 
-        capital = self.initial_capital
-        cash = (capital * self.risk_percent) / 100
+    #     capital = self.initial_capital
+    #     cash = (capital * self.risk_percent) / 100
         
-        # Initialize the equity array with the starting capital.
-        # It must have the same length as the number of timestamps.
+    #     # Initialize the equity array with the starting capital.
+    #     # It must have the same length as the number of timestamps.
+    #     portfolio_equity = np.zeros(len(timestamps), dtype=np.float64)
+    #     portfolio_equity[0] = capital
+        
+    #     for i in range(1, len(timestamps)):
+            
+    #         result = results[i]
+    #         rr = rrs[i]
+    #         reduction = reductions[i] / 100
+            
+    #         # First, carry forward the previous capital value
+    #         capital = portfolio_equity[i-1]
+            
+    #         if result == 1:
+                
+    #             net_cash = cash * (1 - reduction)
+    #             capital  += (net_cash * rr)
+    #             cash = (capital * self.risk_percent) / 100
+            
+    #         elif result == -1:
+                
+    #             net_cash = cash * (1 - reduction)
+    #             capital  -= net_cash
+    #             cash = (capital * self.risk_percent) / 100
+            
+    #         # Store the new capital value for this timestamp
+    #         portfolio_equity[i] = capital
+            
+    #         # # If the current timestamp is different from the previous one, append the equity once
+    #         # if current_timestamp != previous_timestamp:
+    #         #     capital = temp_capital  # Update the main capital with temp changes
+    #         #     self.portfolio_equity.append(capital)
+        
+    #     # # The print statement is great for debugging, let's keep it but make it clearer
+    #     # print(f"DEBUG: Input timestamps length: {len(timestamps)}, Output portfolio_equity length: {len(portfolio_equity)}")
+        
+    #     return portfolio_equity
+    
+    # def portfolio(self,
+    #             timestamps,
+    #             entry_trade_ids_list, # Renamed to reflect it's a list of lists
+    #             entry_rrs_list,
+    #             entry_reductions_list,
+    #             exit_trade_ids_list,
+    #             exit_results_list):
+    #     """
+    #     A realistic, event-driven portfolio simulator that correctly models
+    #     shared capital dynamics, including multiple concurrent events at the same timestamp.
+    #     """
+    #     capital = self.initial_capital
+    #     portfolio_equity = np.zeros(len(timestamps), dtype=np.float64)
+    #     open_trade_count = np.zeros(len(timestamps), dtype=np.int32)
+        
+    #     if len(timestamps) > 0:
+    #         portfolio_equity[0] = capital
+        
+    #     open_trades = {}
+        
+    #     for i in range(1, len(timestamps)):
+            
+    #         capital = portfolio_equity[i-1]
+            
+    #         # --- Step 1: Process ALL NEW ENTRIES for this timestamp ---
+    #         # Check if the entry data is a list (not NaN)
+    #         if isinstance(entry_trade_ids_list[i], list):
+    #             # Loop through all entry events that happened at this exact time
+    #             for idx, entry_id in enumerate(entry_trade_ids_list[i]):
+    #                 cash_at_risk = capital * (self.risk_percent / 100)
+                    
+    #                 open_trades[int(entry_id)] = {
+    #                     'cash_at_risk': cash_at_risk,
+    #                     'rr': entry_rrs_list[i][idx],
+    #                     'reduction': entry_reductions_list[i][idx] / 100.0
+    #                 }
+            
+    #         # --- Step 2: Process ALL EXITS for this timestamp ---
+    #         # NOTE: Capital is NOT updated between exits on the same bar.
+    #         # All exits are settled against the capital from the START of the bar.
+    #         total_return_this_bar = 0.0
+            
+    #         if isinstance(exit_trade_ids_list[i], list):
+    #             for idx, exit_id in enumerate(exit_trade_ids_list[i]):
+    #                 if int(exit_id) in open_trades:
+    #                     trade = open_trades[int(exit_id)]
+    #                     result = exit_results_list[i][idx]
+                        
+    #                     trade_return = 0
+    #                     net_cash = trade['cash_at_risk'] * (1 - trade['reduction'])
+                        
+    #                     if result == 1: trade_return = net_cash * trade['rr']
+    #                     elif result == -1: trade_return = -net_cash
+                        
+    #                     # Accumulate the returns for this bar
+    #                     total_return_this_bar += trade_return
+                        
+    #                     # Remove the trade from open positions
+    #                     del open_trades[int(exit_id)]
+            
+    #         # --- Step 3: Apply net P/L and store final state ---
+    #         capital += total_return_this_bar
+    #         portfolio_equity[i] = capital
+    #         open_trade_count[i] = len(open_trades)
+        
+    #     return portfolio_equity, open_trade_count
+
+
+    def portfolio(self,
+                timestamps,
+                entry_trade_ids_list,
+                entry_directions_list,
+                entry_prices_list,
+                entry_sls_list,
+                entry_tps_list,
+                exit_trade_ids_list,
+                exit_results_list):
+        """
+        A realistic, event-driven portfolio simulator that now also returns a
+        log of closed trades with their final, accurate P/L.
+        """
+        capital = self.initial_capital
         portfolio_equity = np.zeros(len(timestamps), dtype=np.float64)
-        portfolio_equity[0] = capital
+        open_trade_count = np.zeros(len(timestamps), dtype=np.int32)
+        
+        risk_percent = 1
+        fee_rate = 0.001
+        
+        if len(timestamps) > 0:
+            portfolio_equity[0] = capital
+        
+        open_trades = {}
+        closed_trades_log = [] # <<< NEW: To store results
         
         for i in range(1, len(timestamps)):
-            
-            result = results[i]
-            rr = rrs[i]
-            reduction = reductions[i] / 100
-            
-            # First, carry forward the previous capital value
             capital = portfolio_equity[i-1]
             
-            if result == 1:
-                
-                net_cash = cash * (1 - reduction)
-                capital  += (net_cash * rr)
-                cash = (capital * self.risk_percent) / 100
+            # --- Step 1: Process Entries (No changes here) ---
+            if isinstance(entry_trade_ids_list[i], list):
+                for idx, entry_id in enumerate(entry_trade_ids_list[i]):
+                    entry_price = entry_prices_list[i][idx]
+                    stop_loss = entry_sls_list[i][idx]
+                    risk_per_unit = abs(entry_price - stop_loss)
+                    if risk_per_unit > 1e-9:
+                        cash_at_risk = capital * (risk_percent / 100)
+                        position_size = cash_at_risk / risk_per_unit
+                        open_trades[int(entry_id)] = {
+                            'direction': entry_directions_list[i][idx],
+                            'entry_price': entry_price,
+                            'stop_loss': stop_loss,
+                            'take_profit': entry_tps_list[i][idx],
+                            'position_size': position_size
+                        }
+
+            # --- Step 2: Process Exits ---
+            total_return_this_bar = 0.0
+            if isinstance(exit_trade_ids_list[i], list):
+                for idx, exit_id in enumerate(exit_trade_ids_list[i]):
+                    if int(exit_id) in open_trades:
+                        trade = open_trades[int(exit_id)]
+                        result = exit_results_list[i][idx]
+                        exit_price = trade['take_profit'] if result == 1 else trade['stop_loss']
+                        
+                        if trade['direction'] == 1: # Long
+                            gross_return = (exit_price - trade['entry_price']) * trade['position_size']
+                        else: # Short
+                            gross_return = (trade['entry_price'] - exit_price) * trade['position_size']
+                            
+                        entry_value = trade['entry_price'] * trade['position_size']
+                        exit_value = exit_price * trade['position_size']
+                        total_fee = (entry_value) * fee_rate
+                        net_return = gross_return - total_fee
+                        
+                        total_return_this_bar += net_return
+                        
+                        # <<< Log the closed trade details >>>
+                        closed_trades_log.append({
+                            'trade_id': int(exit_id),
+                            'final_gross_return': gross_return,
+                            'final_net_return': net_return
+                        })
+                        
+                        del open_trades[int(exit_id)]
             
-            elif result == -1:
-                
-                net_cash = cash * (1 - reduction)
-                capital  -= net_cash
-                cash = (capital * self.risk_percent) / 100
-            
-            # Store the new capital value for this timestamp
+            # --- Step 3: Apply net P/L and store state ---
+            capital += total_return_this_bar
             portfolio_equity[i] = capital
-            
-            # # If the current timestamp is different from the previous one, append the equity once
-            # if current_timestamp != previous_timestamp:
-            #     capital = temp_capital  # Update the main capital with temp changes
-            #     self.portfolio_equity.append(capital)
+            open_trade_count[i] = len(open_trades)
         
-        # # The print statement is great for debugging, let's keep it but make it clearer
-        # print(f"DEBUG: Input timestamps length: {len(timestamps)}, Output portfolio_equity length: {len(portfolio_equity)}")
-        
-        return portfolio_equity
+        return portfolio_equity, open_trade_count, closed_trades_log

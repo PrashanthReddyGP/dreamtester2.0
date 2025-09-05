@@ -186,61 +186,116 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
         send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "INFO", "message": "Calculating portfolio performance..."}})
 
         try:
-            all_trade_events = []
-            base_ohlcv_df = None
+            
+            # Collect all timestamp series
+            all_timestamps = [
+                res_tuple[0]['ohlcv']['timestamp'] 
+                for res_tuple in raw_results_for_portfolio 
+                if not res_tuple[0]['ohlcv'].empty
+            ]
+            if not all_timestamps: raise ValueError("No valid OHLCV data.")
+            
+            master_timestamps_array = np.sort(pd.concat(all_timestamps).unique())
+            base_ohlcv_df = pd.DataFrame({'timestamp': master_timestamps_array})
+            
             all_no_fee_equity_gain = 0.0
+            
+            # --- Step 2: Prepare a Master List of Entry and Exit Events ---
+            all_entry_events = []
+            all_exit_events = []
+            all_trade_events_for_log = [] # For building the final, combined trade log
+            trade_id_counter = 0
             
             for res_tuple in raw_results_for_portfolio:
                 
                 # Unpack the new 6-item tuple
                 strategy_data, _, _, _, no_fee_equity_array, trade_events = res_tuple
                 
-                # Store the first ohlcv_df's timestamp column as our master timeline
-                if base_ohlcv_df is None and not strategy_data['ohlcv'].empty:
-                    base_ohlcv_df = strategy_data['ohlcv'][['timestamp']].copy()
-                
-                all_trade_events.append(trade_events)
-                
+                # Sum up the no-fee gain for the final portfolio commission calculation
                 if len(no_fee_equity_array) > 1:
                     all_no_fee_equity_gain += no_fee_equity_array[-1] - no_fee_equity_array[0]
+                
+                if trade_events.empty:
+                    continue
+
+                # Give each trade a globally unique ID
+                trade_events['trade_id'] = range(trade_id_counter, trade_id_counter + len(trade_events))
+                trade_id_counter += len(trade_events)
+                all_trade_events_for_log.append(trade_events)
+                
+                entry_df = trade_events[[
+                    'timestamp', 'trade_id', 'Signal', 'Entry', 'Stop Loss', 'Take Profit'
+                ]].copy()
+                entry_df.rename(columns={
+                    'timestamp': 'event_timestamp', 'Signal': 'entry_direction', 
+                    'Entry': 'entry_price', 'Stop Loss': 'entry_sl', 'Take Profit': 'entry_tp'
+                }, inplace=True)
+                all_entry_events.append(entry_df)
+
+                # Create and collect Exit Events
+                exit_df = trade_events[['Exit_Time', 'trade_id', 'Result']].copy()
+                exit_df.rename(columns={'Exit_Time': 'event_timestamp', 'Result': 'exit_result'}, inplace=True)
+                all_exit_events.append(exit_df)
             
-            if base_ohlcv_df is None:
-                raise ValueError("Could not establish a base timeline for portfolio calculation.")
+            master_entries = pd.concat(all_entry_events, ignore_index=True) if all_entry_events else pd.DataFrame()
+            master_exits = pd.concat(all_exit_events, ignore_index=True) if all_exit_events else pd.DataFrame()
+
+            entries_agg = master_entries.groupby('event_timestamp').agg(list).reset_index() if not master_entries.empty else pd.DataFrame(columns=['event_timestamp'])
+            exits_agg = master_exits.groupby('event_timestamp').agg(list).reset_index() if not master_exits.empty else pd.DataFrame(columns=['event_timestamp'])
             
-            if not all_trade_events:
-                combined_events_df = pd.DataFrame()
-            else:
-                combined_events_df = pd.concat(all_trade_events, ignore_index=True)
+            complete_df = pd.merge(base_ohlcv_df, entries_agg, left_on='timestamp', right_on='event_timestamp', how='left')
+            complete_df = pd.merge(complete_df, exits_agg, left_on='timestamp', right_on='event_timestamp', how='left', suffixes=('_entry', '_exit'))
+
+            if 'event_timestamp_entry' in complete_df.columns: complete_df.drop(columns=['event_timestamp_entry'], inplace=True)
+            if 'event_timestamp_exit' in complete_df.columns: complete_df.drop(columns=['event_timestamp_exit'], inplace=True)
             
-            # 1. Create a temporary DataFrame for the merge, using Exit_Time as the key
-            #    We select only the columns needed for the Numba portfolio function.
-            merge_df = pd.DataFrame()
-            merge_df['timestamp'] = combined_events_df['Exit_Time']
-            merge_df['Result'] = combined_events_df['Result']
-            merge_df['RR'] = combined_events_df['RR']
-            merge_df['Commissioned Returns'] = combined_events_df['Commissioned Returns']
-            merge_df['Reduction'] = combined_events_df['Reduction']
-            
-            # 2. Merge these correctly-timed events onto the master timeline
-            complete_df = pd.merge(base_ohlcv_df, merge_df, on='timestamp', how='left')
-            
-            sample_instance = raw_results_for_portfolio[0][1] # Get a sample instance
-            
-            portfolio_equity = sample_instance.portfolio(
-                (complete_df['timestamp'].astype(np.int64) // 10**9).values,
-                complete_df['Result'].fillna(0).values, 
-                complete_df['RR'].fillna(0).values,
-                complete_df['Reduction'].fillna(0).values, 
-                complete_df['Commissioned Returns'].fillna(0).values
+            # --- Step 4: Call the NEW Portfolio Simulator (MODIFIED) ---
+            sample_instance = raw_results_for_portfolio[0][1]
+            portfolio_equity, open_trade_count, closed_trades_log = sample_instance.portfolio(
+                complete_df['timestamp'].values,
+                complete_df['trade_id_entry'].values,
+                complete_df['entry_direction'].values,
+                complete_df['entry_price'].values,
+                complete_df['entry_sl'].values,
+                complete_df['entry_tp'].values,
+                complete_df['trade_id_exit'].values,
+                complete_df['exit_result'].values
             )
-            
+
+            # --- Step 5: Process Results with the NEW, SIMPLIFIED LOGIC ---
             aligned_equity = pd.Series(portfolio_equity, index=complete_df.index)
+            complete_df['Portfolio_Open_Trades'] = open_trade_count
+
+            # Create the combined trade log DataFrame
+            all_trade_events_df = pd.concat(all_trade_events_for_log, ignore_index=True) if all_trade_events_for_log else pd.DataFrame()
             
+            if closed_trades_log:
+                # Convert the log from the portfolio into a DataFrame
+                returns_df = pd.DataFrame(closed_trades_log)
+                
+                # Merge the true returns back into the main trade log
+                all_trade_events_df = pd.merge(all_trade_events_df, returns_df, on='trade_id', how='left')
+                
+                # Overwrite the old, inaccurate returns columns
+                # Note: 'Returns' (gross) and 'Commissioned Returns' (net) are now accurate
+                all_trade_events_df['Returns'] = all_trade_events_df['final_gross_return'].round(2)
+                all_trade_events_df['Commissioned Returns'] = all_trade_events_df['final_net_return'].round(2)
+                
+                # Clean up helper columns
+                all_trade_events_df.drop(columns=['final_gross_return', 'final_net_return'], inplace=True)
+
+            # Update the 'Open_Trades' column (same as before)
+            if not all_trade_events_df.empty:
+                open_trades_lookup = complete_df[['timestamp', 'Portfolio_Open_Trades']]
+                all_trade_events_df = pd.merge(all_trade_events_df, open_trades_lookup, on='timestamp', how='left')
+                all_trade_events_df.drop(columns=['Open_Trades'], inplace=True, errors='ignore')
+                all_trade_events_df.rename(columns={'Portfolio_Open_Trades': 'Open_Trades'}, inplace=True)
+                
             portfolio_strategy_data = {
                 'strategy_name': 'Portfolio', 
                 'equity': aligned_equity, 
                 'ohlcv': complete_df, 
-                'signals': combined_events_df
+                'signals': all_trade_events_df # Use the combined events for the trade list
             }
             
             portfolio_net_profit = aligned_equity.iloc[-1] - aligned_equity.iloc[0]
@@ -252,16 +307,13 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
             
             portfolio_metrics, portfolio_returns = calculate_metrics(portfolio_strategy_data, initialCapital, commission)
             
-            # Prepare payload for both WebSocket and final DB save
             portfolio_payload = prepare_strategy_payload(portfolio_strategy_data, portfolio_metrics, portfolio_returns)
             
-            # Send the portfolio result to the UI
             send_update_to_queue(loop, queue, batch_id, {
                 "type": "strategy_result", 
                 "payload": convert_to_json_serializable(portfolio_payload)
             })
             
-            # Add portfolio to the beginning of the list for the final DB save
             all_processed_results_for_db.insert(0, portfolio_payload)
 
         except Exception as e:
@@ -1253,10 +1305,10 @@ def run_hedge_optimization_manager(batch_id: str, config: dict, manager: any, qu
         # --- PHASE 1: INDIVIDUAL OPTIMIZATION & PRE-FILTERING ---
         # --- Pass the base metric name to the helper ---
         send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 1: Optimizing Strategy A (Top {top_n})..."}})
-        top_n_a, base_ohlcv = run_individual_optimization(batch_id, config['strategy_a'], primary_symbol, top_n, base_metric_name, manager, queue, loop)
+        top_n_a, ohlcv_a = run_individual_optimization(batch_id, config['strategy_a'], primary_symbol, top_n, base_metric_name, manager, queue, loop)
         
         send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 1: Optimizing Strategy B (Top {top_n})..."}})
-        top_n_b, _ = run_individual_optimization(batch_id, config['strategy_b'], primary_symbol, top_n, base_metric_name, manager, queue, loop)
+        top_n_b, ohlcv_b = run_individual_optimization(batch_id, config['strategy_b'], primary_symbol, top_n, base_metric_name, manager, queue, loop)
         
         if not top_n_a or not top_n_b:
             raise ValueError("Individual optimization for one or both strategies failed to produce results.")
@@ -1265,6 +1317,9 @@ def run_hedge_optimization_manager(batch_id: str, config: dict, manager: any, qu
         total_pairs = len(top_n_a) * len(top_n_b)
         send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 2: Analyzing {total_pairs} hedge combinations..."}})
         
+        master_timestamps_array = np.sort(pd.concat([ohlcv_a['timestamp'], ohlcv_b['timestamp']]).unique())
+        master_ohlcv_df = pd.DataFrame({'timestamp': master_timestamps_array})
+
         # This list will now store tuples of (payload, ohlcv_df)
         portfolio_results_with_data = [] 
         with ThreadPoolExecutor() as executor:
@@ -1272,7 +1327,7 @@ def run_hedge_optimization_manager(batch_id: str, config: dict, manager: any, qu
             for res_a in top_n_a:
                 for res_b in top_n_b:
                     # Pass the master ohlcv_df to the combination function
-                    future = executor.submit(combine_and_evaluate_pair, res_a, res_b, base_ohlcv)
+                    future = executor.submit(combine_and_evaluate_pair, res_a, res_b, master_ohlcv_df)
                     futures[future] = (res_a, res_b)
             
             for future in as_completed(futures):
@@ -1355,7 +1410,7 @@ def run_individual_optimization(batch_id, strategy_config, symbol, top_n, metric
     
     # 2. Submit jobs to the standard worker and collect results (much cleaner)
     lightweight_results = [] 
-    base_ohlcv_df = None # To store the OHLCV from the first run
+    representative_ohlcv_df = None 
     
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
         futures = {}
@@ -1385,9 +1440,9 @@ def run_individual_optimization(batch_id, strategy_config, symbol, top_n, metric
                 if result_tuple:
                     strategy_data, instance, metrics, monthly, no_fee, trade_events_df = result_tuple
                     
-                    # Keep the first ohlcv_df we get as our master time index
-                    if base_ohlcv_df is None and not strategy_data['ohlcv'].empty:
-                        base_ohlcv_df = strategy_data['ohlcv'][['timestamp']].copy()
+                    # If we haven't found a timeline yet and this one is valid, grab it.
+                    if representative_ohlcv_df is None and not strategy_data['ohlcv'].empty:
+                        representative_ohlcv_df = strategy_data['ohlcv'][['timestamp']].copy()
                     
                     # The "lightweight" result now includes the full trade_events_df,
                     # which is small but contains all necessary columns for portfolio calcs.
@@ -1416,85 +1471,127 @@ def run_individual_optimization(batch_id, strategy_config, symbol, top_n, metric
     )
     
     # Return the top N lightweight results AND the single master OHLCV DataFrame
-    return lightweight_results[:top_n], base_ohlcv_df
+    return lightweight_results[:top_n], representative_ohlcv_df
 
 def combine_and_evaluate_pair(result_a, result_b, base_ohlcv_df):
     """
     Combines two LIGHTWEIGHT backtest results using a master OHLCV timeline.
+    This function now uses the same detailed portfolio simulation logic as run_batch_manager.
     """
     # Define names here so they are available in the except block
     name_a = "Strategy A"
     name_b = "Strategy B"
     try:
-        # 1. Get the lightweight data
+        # 1. Unpack the lightweight data for both strategies
         name_a, instance_a, _, _, no_fee_equity_array_a, events_a = result_a
-        name_b, _, _, _, no_fee_equity_array_b, events_b = result_b
+        name_b, instance_b, _, _, no_fee_equity_array_b, events_b = result_b
+
+        if events_a.empty and events_b.empty:
+            print(f"--- NOTE: No trades found for pair ({name_a}) + ({name_b}). Skipping. ---")
+            return None, None
+
+        # --- Step 2: Prepare a Master List of Entry and Exit Events (same as run_batch_manager) ---
+        all_entry_events = []
+        all_exit_events = []
+        all_trade_events_for_log = []
+        trade_id_counter = 0
         
-        # Calculate the scalar gain from the full arrays
-        no_fee_equity_gain_a = no_fee_equity_array_a[-1] - no_fee_equity_array_a[0] if len(no_fee_equity_array_a) > 1 else 0
-        no_fee_equity_gain_b = no_fee_equity_array_b[-1] - no_fee_equity_array_b[0] if len(no_fee_equity_array_b) > 1 else 0
+        # Process Strategy A's trades
+        if not events_a.empty:
+            events_a_copy = events_a.copy()
+            events_a_copy['trade_id'] = range(trade_id_counter, trade_id_counter + len(events_a_copy))
+            trade_id_counter += len(events_a_copy)
+            all_trade_events_for_log.append(events_a_copy)
         
-        portfolio_initial_capital = 1000 # Fixed for portfolios
-        
-        # 2. Combine the trade events DataFrames
-        if events_a is None: events_a = pd.DataFrame()
-        if events_b is None: events_b = pd.DataFrame()
-        combined_events_df = pd.concat([events_a, events_b], ignore_index=True)
-        
-        # 3. Create the complete timeline for the portfolio calculation
-        # The merge key is 'timestamp', which in `combined_events_df` is the EXIT time.
-        complete_df = pd.merge(base_ohlcv_df, combined_events_df, on='timestamp', how='left')
-        
-        # 4. Recalculate the Portfolio Equity Curve from scratch
-        sample_instance = instance_a 
-        
-        timestamps_unix = (complete_df['timestamp'].astype(np.int64) // 10**9).values
-        results_col = complete_df['Result'].fillna(0).values
-        rr_col = complete_df['RR'].fillna(0).values
-        reduction_col = complete_df['Reduction'].fillna(0).values
-        commission_returns_col = complete_df['Commissioned Returns'].fillna(0).values
-        
-        portfolio_equity = sample_instance.portfolio(
-            timestamps_unix,
-            results_col,
-            rr_col,
-            reduction_col,
-            commission_returns_col
+        # Process Strategy B's trades, ensuring unique IDs
+        if not events_b.empty:
+            events_b_copy = events_b.copy()
+            events_b_copy['trade_id'] = range(trade_id_counter, trade_id_counter + len(events_b_copy))
+            trade_id_counter += len(events_b_copy)
+            all_trade_events_for_log.append(events_b_copy)
+
+        for trade_events in all_trade_events_for_log:
+            entry_df = trade_events[['timestamp', 'trade_id', 'Signal', 'Entry', 'Stop Loss', 'Take Profit']].copy()
+            entry_df.rename(columns={
+                'timestamp': 'event_timestamp', 'Signal': 'entry_direction',
+                'Entry': 'entry_price', 'Stop Loss': 'entry_sl', 'Take Profit': 'entry_tp'
+            }, inplace=True)
+            all_entry_events.append(entry_df)
+
+            exit_df = trade_events[['Exit_Time', 'trade_id', 'Result']].copy()
+            exit_df.rename(columns={'Exit_Time': 'event_timestamp', 'Result': 'exit_result'}, inplace=True)
+            all_exit_events.append(exit_df)
+
+        # --- Step 3: Build the complete timeline DataFrame (same as run_batch_manager) ---
+        master_entries = pd.concat(all_entry_events, ignore_index=True) if all_entry_events else pd.DataFrame()
+        master_exits = pd.concat(all_exit_events, ignore_index=True) if all_exit_events else pd.DataFrame()
+
+        entries_agg = master_entries.groupby('event_timestamp').agg(list).reset_index() if not master_entries.empty else pd.DataFrame(columns=['event_timestamp'])
+        exits_agg = master_exits.groupby('event_timestamp').agg(list).reset_index() if not master_exits.empty else pd.DataFrame(columns=['event_timestamp'])
+
+        complete_df = pd.merge(base_ohlcv_df.copy(), entries_agg, left_on='timestamp', right_on='event_timestamp', how='left')
+        complete_df = pd.merge(complete_df, exits_agg, left_on='timestamp', right_on='event_timestamp', how='left', suffixes=('_entry', '_exit'))
+
+        if 'event_timestamp_entry' in complete_df.columns: complete_df.drop(columns=['event_timestamp_entry'], inplace=True)
+        if 'event_timestamp_exit' in complete_df.columns: complete_df.drop(columns=['event_timestamp_exit'], inplace=True)
+
+        # --- Step 4: Call the Portfolio Simulator with the new, detailed signature ---
+        sample_instance = instance_a  # We just need one instance to call the method
+        portfolio_equity, open_trade_count, closed_trades_log = sample_instance.portfolio(
+            complete_df['timestamp'].values,
+            complete_df['trade_id_entry'].values,
+            complete_df['entry_direction'].values,
+            complete_df['entry_price'].values,
+            complete_df['entry_sl'].values,
+            complete_df['entry_tp'].values,
+            complete_df['trade_id_exit'].values,
+            complete_df['exit_result'].values
         )
-        
+
+        # --- Step 5: Process Results with the new logic (same as run_batch_manager) ---
         aligned_equity = pd.Series(portfolio_equity, index=complete_df.index)
+        complete_df['Portfolio_Open_Trades'] = open_trade_count
         
-        # 4. Create the portfolio_data object for metrics calculation
+        all_trade_events_df = pd.concat(all_trade_events_for_log, ignore_index=True) if all_trade_events_for_log else pd.DataFrame()
+        
+        if closed_trades_log:
+            returns_df = pd.DataFrame(closed_trades_log)
+            all_trade_events_df = pd.merge(all_trade_events_df, returns_df, on='trade_id', how='left')
+            all_trade_events_df['Returns'] = all_trade_events_df['final_gross_return'].round(2)
+            all_trade_events_df['Commissioned Returns'] = all_trade_events_df['final_net_return'].round(2)
+            all_trade_events_df.drop(columns=['final_gross_return', 'final_net_return'], inplace=True)
+
+        # Update the 'Open_Trades' column for the final trade log
+        if not all_trade_events_df.empty:
+            open_trades_lookup = complete_df[['timestamp', 'Portfolio_Open_Trades']]
+            all_trade_events_df = pd.merge(all_trade_events_df, open_trades_lookup, on='timestamp', how='left')
+            all_trade_events_df.drop(columns=['Open_Trades'], inplace=True, errors='ignore')
+            all_trade_events_df.rename(columns={'Portfolio_Open_Trades': 'Open_Trades'}, inplace=True)
+            
         portfolio_name = f"Hedge: ({name_a}) + ({name_b})"
         portfolio_strategy_data = {
             'strategy_name': portfolio_name,
             'equity': aligned_equity,
             'ohlcv': complete_df,
-            'signals': combined_events_df
+            'signals': all_trade_events_df
         }
-        
-        # 5. Recalculate portfolio-level commission
+
+        # --- Step 6: Recalculate portfolio-level commission ---
+        no_fee_equity_gain_a = no_fee_equity_array_a[-1] - no_fee_equity_array_a[0] if len(no_fee_equity_array_a) > 1 else 0
+        no_fee_equity_gain_b = no_fee_equity_array_b[-1] - no_fee_equity_array_b[0] if len(no_fee_equity_array_b) > 1 else 0
         total_no_fee_equity_gain = no_fee_equity_gain_a + no_fee_equity_gain_b
-        portfolio_net_profit = aligned_equity.iloc[-1] - aligned_equity.iloc[0]
         
-        # Handle the case where there are no gains to avoid division by zero
+        portfolio_net_profit = aligned_equity.iloc[-1] - aligned_equity.iloc[0]
+
         if total_no_fee_equity_gain > 0:
             commission = round(((total_no_fee_equity_gain - portfolio_net_profit) * 100) / total_no_fee_equity_gain, 2)
         else:
             commission = 0.0
-        
-        # 6. Recalculate metrics for the new portfolio
-        portfolio_metrics, portfolio_returns = calculate_metrics(portfolio_strategy_data, portfolio_initial_capital, commission)
-        
-        # 7. Prepare the payload (without OHLCV) for the frontend
+
+        # --- Step 7: Recalculate metrics and prepare final payload ---
+        portfolio_metrics, portfolio_returns = calculate_metrics(portfolio_strategy_data, 1000, commission)
         frontend_payload = prepare_strategy_payload(portfolio_strategy_data, portfolio_metrics, portfolio_returns)
-        
-        # # Send the portfolio result to the UI
-        # send_update_to_queue(loop, queue, batch_id, {
-        #     "type": "strategy_result", 
-        #     "payload": convert_to_json_serializable(frontend_payload)
-        # })
-        
+
         # 8. Return both the payload and the base OHLCV for potential backend use
         return frontend_payload, complete_df
 

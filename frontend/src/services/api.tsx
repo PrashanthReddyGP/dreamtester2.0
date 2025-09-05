@@ -118,6 +118,46 @@ export interface SubmissionResponse {
     batch_id: string;
 }
 
+
+// --- Define the ML-specific analysis types ---
+export interface FeatureImportance {
+    feature: string;
+    importance: number;
+}
+
+export interface ClassificationReport {
+  // e.g., "class_-1", "class_0", "class_1", "accuracy", "macro_avg"
+    [key: string]: {
+        precision: number;
+        recall: number;
+        'f1-score': number;
+        support: number;
+    } | number; // For accuracy
+}
+
+export interface ModelAnalysis {
+    feature_importance: FeatureImportance[];
+    classification_report: ClassificationReport;
+    confusion_matrix: number[][];
+}
+
+
+// --- The main ML Result interface ---
+// It's like a regular StrategyResult, but with an added `model_analysis` section.
+export interface MLResult extends StrategyResult {
+    strategy_name: 'ML Model'; // The name is fixed for an ML run
+    model_analysis: ModelAnalysis;
+    // We can also add the run config for display purposes
+    run_config: {
+        model: string;
+        features: string[];
+        labeling_method: string;
+        symbol: string;
+        timeframe: string;
+    }
+}
+
+
 /**
  * Submits a new backtest job to the backend.
  */

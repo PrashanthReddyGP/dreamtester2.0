@@ -210,6 +210,68 @@ class Indicators(object):
 
         return df
 
+    def calculate_signed_extreme_change(
+        self,
+        df: pd.DataFrame,
+        lookback: int = 9,
+        as_percentage: bool = True
+    ) -> pd.DataFrame:
+        """
+        Calculates a signed indicator representing the dominant "stretch" of the market.
+
+        This indicator measures whether the primary price move was an upward stretch
+        (current high vs. lookback low) or a downward stretch (current low vs.
+        lookback high) and returns a signed value representing that dominant move.
+
+        - A positive value means the upward stretch was greater.
+        - A negative value means the downward stretch was greater.
+
+        Args:
+            df (pd.DataFrame): Input DataFrame with 'high' and 'low' columns.
+            lookback (int, optional): The number of preceding periods to look back. Defaults to 9.
+            as_percentage (bool, optional): If True, returns the change as a percentage
+                                            of the lookback period's midpoint price.
+                                            Defaults to False (absolute price change).
+
+        Returns:
+            pd.DataFrame: A new DataFrame with the signed indicator column added.
+        """
+        
+        if not all(col in df.columns for col in ['high', 'low']):
+            raise ValueError("Input DataFrame must contain 'high' and 'low' columns.")
+        
+        df_out = df.copy()
+
+        # 1. Get the highest high and lowest low of the PRECEDING 'lookback' periods
+        lookback_high = df_out['high'].rolling(window=lookback).max().shift(1)
+        lookback_low = df_out['low'].rolling(window=lookback).min().shift(1)
+
+        # 2. Calculate the signed stretches
+        upward_stretch = df_out['high'] - lookback_low
+        downward_stretch = df_out['low'] - lookback_high # This will be negative
+
+        # 3. Determine the dominant stretch using np.where
+        # The condition checks which stretch has a larger absolute magnitude.
+        # `upward_stretch > -downward_stretch` is equivalent to `abs(upward_stretch) > abs(downward_stretch)`
+        # since `downward_stretch` is negative.
+        dominant_stretch = np.where(
+            upward_stretch > -downward_stretch,
+            upward_stretch,      # Value if True
+            downward_stretch     # Value if False
+        )
+        
+        # 4. Handle results based on user preference
+        if as_percentage:
+            lookback_midpoint = (lookback_high + lookback_low) / 2
+            # Use the signed dominant_stretch value for the calculation
+            pct_change = (dominant_stretch / lookback_midpoint).replace([np.inf, -np.inf], 0) * 100
+            df_out[f'roec_{lookback}'] = pct_change.round(2).fillna(0)
+        else:
+            # The result is already a float, assign it directly
+            df_out[f'roec_{lookback}'] = pd.Series(dominant_stretch, index=df_out.index).round(4).fillna(0)
+        
+        return df_out
+
     # ICHIMOKU
     def calculate_ichimoku(self, df, conversion_line = 9, base_line = 26, lagging_span_b = 52, lagging_span = 26):
         
@@ -503,14 +565,14 @@ class Indicators(object):
         return df
 
     # CALCULATE STOP LOSS
-    def calculate_stop_loss(self, df, length = 14, multiplier = 8):
+    def calculate_stop_loss(self, df, length = 14, multiplier = 8, index=1):
         
         df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].apply(pd.to_numeric)
         
         df = self.calculate_atr(df, length)
         df['atr_multiplier'] = df['atr'] * multiplier
-        df['stoploss_long'] = df['low'] - df['atr_multiplier']
-        df['stoploss_short'] = df['high'] + df['atr_multiplier']
+        df[f'stoploss_long_{index}'] = df['low'] - df['atr_multiplier']
+        df[f'stoploss_short_{index}'] = df['high'] + df['atr_multiplier']
         
         return df
     

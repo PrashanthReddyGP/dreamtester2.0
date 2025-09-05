@@ -157,16 +157,17 @@ def calculate_indicators(strategy_instance, df):
         if name == 'ATR':
             
             # Ensure you have at least 2 params
-            if len(params) == 2:
+            if len(params) == 3:
                 # Convert the first two params to integers (or float, as needed)
                 length = int(params[0])  # or float(params[0]) if you need float
                 multiplier = float(params[1])  # or float(params[1]) if you need float
+                index = int(params[2])
                 
-                df = idk.calculate_stop_loss(df, length, multiplier)
+                df = idk.calculate_stop_loss(df, length, multiplier, index)
             
             else:
                 
-                print(f"ATR takes 2 Input params, But {len(params)} were given...")
+                print(f"ATR takes 3 Input params, But {len(params)} were given...")
                 
         if name == 'SUPERTREND':
             
@@ -284,6 +285,33 @@ def calculate_indicators(strategy_instance, df):
         if name == 'REGIME FILTERS':
             
             df = idk.calculate_regime_filters(df)
+            
+        if name == 'ROC':
+            
+            if len(params) == 1:
+                
+                lookback = int(params[0])
+                
+                df = idk.calculate_roc(df, lookback)
+                
+            else:
+                print(f"ROC takes 1 Input Value, But {len(params)} were given...")
+                
+        if name == 'ROEC':
+            
+            if len(params) >= 1:
+                
+                lookback = int(params[0])
+                
+                if len(params) == 2 and int(params[1] == 0):
+                    as_percentage=False
+                else:
+                    as_percentage=True
+                
+                df = idk.calculate_signed_extreme_change(df, lookback, as_percentage)
+                
+            else:
+                print(f"ROEC takes 1 Input Value, But {len(params)} were given...")
     
     print("Indicators processed successfully")
     

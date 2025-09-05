@@ -1,13 +1,16 @@
 // src/context/AnalysisContext.tsx
 import React, { createContext, useState, useContext, useCallback, useRef, useEffect } from 'react';
 import type {ReactNode} from 'react';
-import type { StrategyResult } from '../services/api';
+import type { StrategyResult, MLResult } from '../services/api';
+
+// This is the union type we will use throughout the file
+type AnalysisResult = StrategyResult | MLResult;
 
 interface AnalysisContextType {
-  results: StrategyResult[];
+  results: AnalysisResult[]; // Use the union type
   isComplete: boolean;
   batchConfig: BatchConfig | null;
-  addResult: (result: StrategyResult) => void;
+  addResult: (result: AnalysisResult) => void; // Use the union type
   clearResults: () => void;
   markComplete: () => void;
   setBatchConfig: (config: BatchConfig) => void; 
@@ -22,7 +25,7 @@ const AnalysisContext = createContext<AnalysisContextType | undefined>(undefined
 
 export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
 
-  const [results, setResults] = useState<StrategyResult[]>([]);
+  const [results, setResults] = useState<(StrategyResult | MLResult)[]>([]);
   const [isComplete, setIsComplete] = useState(false);
   const resultsBuffer = useRef<StrategyResult[]>([]);
   const animationFrameId = useRef<number | null>(null);
