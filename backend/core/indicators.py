@@ -1265,3 +1265,65 @@ class Indicators(object):
         df['Composite_Regime_Score'] = df["sma_trend_score"] + df["macd_trend_score"] + df["rsi_momentum_score"] + df["volume_score"]
         
         return df
+    
+    # ACTIVITY FILTER
+    # 0 = Low Activity, 1 = High Activity
+    def activity_filter(self, df, window = 50, thresh=0.05):
+        
+        df = self.calculate_adx(df, length=14)
+        df = self.calculate_atr(df, length=14, smoothing='sma')
+        df = self.calculate_bollinger_bands(df, length=20)
+        
+        adx_mean = df['adx'].rolling(window=window, min_periods=1).mean()
+        volume_mean = df['volume'].rolling(window=window, min_periods=1).mean()
+        
+        # Store the rolling mean values in the DataFrame
+        df['adx_rolling_mean'] = adx_mean
+        df['volume_rolling_mean'] = volume_mean
+        
+        adx_mean_thresh = (1 + thresh) * adx_mean   # require ADX to be 5% above mean
+        vol_mean_thresh = (1 + thresh) * volume_mean
+        
+        df['Activity_Mean_Thresh'] = np.where(
+            (df['adx'] < adx_mean_thresh) & (df['volume'] < vol_mean_thresh), 0, 1
+        ).astype(np.int64)
+        
+        df['Activity_Mean'] = np.where((df['adx'] < adx_mean) & (df['volume'] < volume_mean), 0, 1).astype(np.int64)
+        
+        df['Activity_Mean_Smoothed'] = (
+            df['Activity_Mean'].rolling(window=5, min_periods=1).mean().round().astype(int)
+        )
+        
+        adx_mid = df['adx'].rolling(window=window, min_periods=1).median()
+        volume_mid = df['volume'].rolling(window=window, min_periods=1).median()
+        
+        # Store the rolling median values in the DataFrame
+        df['adx_rolling_median'] = adx_mid
+        df['volume_rolling_median'] = volume_mid
+        
+        adx_mid_thresh = (1 + thresh) * adx_mid   # require ADX to be 5% above mean
+        vol_mid_thresh = (1 + thresh) * volume_mid
+        
+        df['Activity_Median_Thresh'] = np.where(
+            (df['adx'] < adx_mid_thresh) & (df['volume'] < vol_mid_thresh), 0, 1
+        ).astype(np.int64)
+        
+        df['Activity_Median'] = np.where((df['adx'] < adx_mid) & (df['volume'] < volume_mid), 0, 1).astype(np.int64)
+        
+        df['Activity_Median_Smoothed'] = (
+            df['Activity_Median'].rolling(window=5, min_periods=1).mean().round().astype(int)
+        )
+        
+        adx_z = (df['adx'] - adx_mean) / (df['adx'].rolling(window).std(ddof=0) + 1e-9)
+        vol_z = (df['volume'] - volume_mean) / (df['volume'].rolling(window).std(ddof=0) + 1e-9)
+        
+        df['Activity_Z'] = (adx_z + vol_z) / 2
+        df['Activity_Binary'] = np.where(df['Activity_Z'] < 0, 0, 1)
+        
+        df['Meta_Activity'] = (
+            df['Activity_Median'] + 
+            (df['atr'] > df['atr'].rolling(50).mean()).astype(int) +
+            (df['bb_width'] > df['bb_width'].rolling(50).mean()).astype(int)
+        ) / 3
+        
+        return df

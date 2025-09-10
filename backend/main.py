@@ -7,12 +7,18 @@ try:
     import uuid
     import uvicorn
     import asyncio
+    import pandas as pd
+    import numpy as np
+    from datetime import datetime, timezone
     from typing import List, Literal, Union, Annotated
     from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, Response, Depends
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel, Field
-    from typing import Optional, List, Dict, Literal, Union
+    from typing import Optional, List, Dict, Literal, Union, Any
     from sqlalchemy.orm import Session
+    import json
+    from core.json_encoder import CustomJSONEncoder # Import our new encoder
+    from types import SimpleNamespace
 
     # Import the new database functions
     from database import (
@@ -32,7 +38,10 @@ try:
         clear_ohlcv_tables,
         get_all_labeling_templates,
         save_labeling_template,
-        delete_labeling_template
+        delete_labeling_template,
+        get_all_fe_templates,
+        save_fe_template,
+        delete_fe_template
     )
 
     from pipeline import run_unified_test_manager, run_optimization_manager, run_asset_screening_manager, run_batch_manager, run_local_backtest_manager, run_hedge_optimization_manager
@@ -40,6 +49,10 @@ try:
     
     from core.indicator_registry import get_indicator_schema
     from core.connect_to_brokerage import get_client
+    from core.data_manager import get_ohlcv
+    from core.machinelearning import load_data_for_ml, transform_features_for_backend
+    from core.robust_idk_processor import calculate_indicators
+    from core.state import WORKFLOW_CACHE
 
     ##########################################
 
@@ -59,6 +72,9 @@ try:
         name: str
         content: str
 
+    class BatchSubmitPayload(BaseModel):
+        strategies: List[StrategyFileModel]
+        use_training_set: bool
 
     #########################################
 
@@ -213,23 +229,19 @@ try:
     ]
 
 
-    class IndicatorConfig(BaseModel):
-        id: str
-        name: str
-        params: Dict[str, Union[int, str]]
-
     class ProblemDefinitionConfig(BaseModel):
         type: Literal['template', 'custom']
         # Use Field(alias=...) to map from frontend's camelCase to Python's snake_case
         template_key: str = Field(alias='templateKey')
         custom_code: str = Field(alias='customCode')
 
-    class DataSourceConfig(BaseModel):
-        symbol: str
-        timeframe: str
 
     class ModelConfig(BaseModel):
         name: str
+        hyperparameters: Dict[str, Any] = Field(
+            default_factory=dict,
+            description="A dictionary of hyperparameter names and their values."
+        )
 
     class ValidationConfig(BaseModel):
         method: Literal['train_test_split', 'walk_forward']
@@ -237,12 +249,59 @@ try:
         walk_forward_train_window: int = Field(alias='walkForwardTrainWindow')
         walk_forward_test_window: int = Field(alias='walkForwardTestWindow')
 
+    class LabelingTemplateModel(BaseModel):
+        key: str
+        name: str
+        description: str
+        code: str
+        
+    class FETemplateModel(BaseModel):
+        key: str
+        name: str
+        description: str
+        code: str
+
+    class DataSourceConfig(BaseModel):
+        symbol: str
+        timeframe: str
+        startDate: str
+        endDate: str
+
+    class IndicatorConfig(BaseModel):
+        id: str
+        name: str
+        params: Dict[str, Any]
+
     class PreprocessingConfig(BaseModel):
-        scaler: Literal['none', 'StandardScaler', 'MinMaxScaler']
-        remove_correlated: bool = Field(alias='removeCorrelated')
-        correlation_threshold: float = Field(alias='correlationThreshold')
-        use_pca: bool = Field(alias='usePCA')
-        pca_components: int = Field(alias='pcaComponents')
+        scaler: str
+        removeCorrelated: bool
+        correlationThreshold: float
+        usePCA: bool
+        pcaComponents: int
+        customFeatureCode: str
+    
+    class MLBacktestConfig(BaseModel):
+        capital: float
+        risk: float
+        commissionBps: float
+        slippageBps: float
+        tradeOnClose: bool
+    
+    class FeaturesCalculationRequest(BaseModel):
+        dataSource: DataSourceConfig
+        features: List[IndicatorConfig] = Field(default_factory=list)
+
+    class FeaturesEngineeringRequest(BaseModel):
+        dataSource: DataSourceConfig
+        features: List[IndicatorConfig] = Field(default_factory=list)
+        preprocessing: PreprocessingConfig    
+        
+    class DataValidationRequest(BaseModel):
+        dataSource: DataSourceConfig
+        features: List[IndicatorConfig] = Field(default_factory=list)
+        preprocessing: PreprocessingConfig
+        validation: ValidationConfig
+        problemDefinition: ProblemDefinitionConfig
 
     class MLPipelineConfig(BaseModel):
         """The main model that captures the entire configuration from the frontend."""
@@ -252,13 +311,91 @@ try:
         model: ModelConfig
         validation: ValidationConfig
         preprocessing: PreprocessingConfig
+        backtestSettings: MLBacktestConfig
+    
+    # --- Helper function to generate the detailed info dictionary ---
 
-    class LabelingTemplateModel(BaseModel):
-        key: str
-        name: str
-        description: str
-        code: str
+    def format_bytes(size_bytes):
+        """Converts bytes to a human-readable string."""
+        if size_bytes == 0:
+            return "0B"
+        size_name = ("B", "KB", "MB", "GB", "TB")
+        i = int(np.floor(np.log(size_bytes) / np.log(1024))) 
+        p = np.power(1024, i)
+        s = round(size_bytes / p, 2)
+        return f"{s} {size_name[i]}"
 
+    def generate_df_info(df: pd.DataFrame, symbol: str, timeframe: str) -> dict:
+        """Analyzes a DataFrame and returns a dictionary of metadata."""
+        if df.empty:
+            return { "message": "No data available to generate information." }
+
+        # Work on a copy to avoid modifying the original DataFrame
+        df_copy = df.copy()
+        if 'timestamp' not in df_copy.columns:
+            raise ValueError("DataFrame must contain a 'timestamp' column to generate info.")
+
+        # The incoming timestamp is UTC. Convert it to US/Pacific (PDT/PST).
+        df_copy['timestamp'] = pd.to_datetime(df_copy['timestamp'], unit='ms')
+        df_copy['timestamp'] = df_copy['timestamp'].dt.tz_localize('UTC').dt.tz_convert('US/Pacific')
+        df_copy.set_index('timestamp', inplace=True)
+        
+        # General Info
+        memory_usage_bytes = df_copy.memory_usage(deep=True).sum()
+        
+        # Data Quality
+        missing_values = df_copy.isnull().sum()
+        total_missing = int(missing_values.sum())
+        missing_by_column = missing_values[missing_values > 0].to_dict()
+        
+        # Structure and Stats
+        # Step 1: Build the data_types dictionary, including the index.
+        index_name = df_copy.index.name if df_copy.index.name is not None else 'timestamp'
+        data_types = {index_name: str(df_copy.index.dtype)}
+        data_types.update({col: str(dtype) for col, dtype in df_copy.dtypes.items()})
+
+        # Step 2: Derive the column count from the dictionary for accuracy.
+        total_columns = len(data_types)
+        
+        # Structure and Stats (only for numeric columns)
+        descriptive_stats = df_copy.describe(include=np.number).round(4).to_dict()
+        
+        info = {
+            # General Info
+            "Symbol": symbol,
+            "Timeframe": timeframe,
+            "Data Points": f"{df_copy.shape[0]} rows x {total_columns} columns",
+            "Start Date": df_copy.index.min().strftime('%Y-%m-%d %H:%M:%S'),
+            "End Date": df_copy.index.max().strftime('%Y-%m-%d %H:%M:%S'),
+            "Memory Usage": format_bytes(memory_usage_bytes),
+            
+            # Data Quality Analysis
+            "Total Missing Values": total_missing,
+            "Missing Values by Column": missing_by_column,
+            
+            # Data Structure
+            "Data Types": data_types,
+            "Descriptive Statistics": descriptive_stats        }
+        return info
+
+    # You will need this helper function for the preprocessing step
+    def apply_standard_preprocessing(df: pd.DataFrame, config: PreprocessingConfig) -> pd.DataFrame:
+        """
+        Applies standard preprocessing steps like scaling after custom code has run.
+        NOTE: This is a placeholder for your future logic.
+        """
+        print("Applying standard preprocessing steps (scaling, PCA, etc)...")
+        
+        # In the future, you would implement your scaler/PCA logic here.
+        # For now, it just returns the dataframe.
+        # Example:
+        # if config.scaler != 'none':
+        #     scaler = get_scaler(config.scaler)
+        #     numeric_cols = df.select_dtypes(include=np.number).columns
+        #     df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
+
+        print("Standard preprocessing complete.")
+        return df
 
     class ConnectionManager:
         def __init__(self):
@@ -281,10 +418,16 @@ try:
             print(f"Client disconnected from batch_id: {batch_id}")
 
         async def send_json_to_batch(self, batch_id: str, message: dict):
-            if batch_id in self.active_connections:
-                # Create a list of tasks to send messages concurrently
-                tasks = [connection.send_json(message) for connection in self.active_connections[batch_id]]
-                await asyncio.gather(*tasks)
+            # 1. Manually serialize the message dictionary to a JSON string
+            #    using our custom encoder.
+            json_string = json.dumps(message, cls=CustomJSONEncoder)
+            
+            # 2. Send the resulting string as a text message.
+            # The frontend's `JSON.parse()` will handle this perfectly.
+            tasks = [connection.send_text(json_string) for connection in self.active_connections[batch_id]]
+            
+            await asyncio.gather(*tasks)
+
 
     websocket_queue = asyncio.Queue()
 
@@ -300,8 +443,22 @@ try:
         """
         while True:
             batch_id, message = await queue.get()
-            await manager.send_json_to_batch(batch_id, message)
+            
+            # Before attempting to send, check if there are any active connections
+            # for this batch_id. This is a thread-safe way to prevent the race condition.
+            if batch_id in manager.active_connections and manager.active_connections[batch_id]:
+                try:
+                    await manager.send_json_to_batch(batch_id, message)
+                except Exception as e:
+                    # Log any errors during the actual sending, but don't crash the sender.
+                    print(f"ERROR sending message to batch {batch_id}: {e}")
+            else:
+                # This is not an error, it just means the client disconnected before
+                # all messages could be sent. It's safe to just discard the message.
+                print(f"INFO: No active connections for batch {batch_id}. Discarding message.")
+            
             queue.task_done()
+
 
 
 
@@ -651,12 +808,13 @@ try:
         return {"job_id": job_id}
 
     @app.post("/api/backtest/batch-submit")
-    async def submit_batch_backtest_endpoint(files: List[StrategyFileModel], background_tasks: BackgroundTasks, request: Request):
+    async def submit_batch_backtest_endpoint(payload: BatchSubmitPayload, background_tasks: BackgroundTasks, request: Request):
         """
         Accepts a batch of strategies, creates a job record, queues a background task,
         and returns a unique batch_id for the client to connect to via WebSocket.
         """
-        print(f"API: Received a batch of {len(files)} strategies.")
+        print(f"API: Received a batch of {len(payload.strategies)} strategies.")
+        print(f"API: Use Training Set flag is: {payload.use_training_set}") # You can log the new value
         
         batch_id = str(uuid.uuid4())
         
@@ -666,7 +824,8 @@ try:
         connection_event = asyncio.Event()
         request.app.state.connection_events[batch_id] = connection_event
         
-        files_data = [file.model_dump() for file in files]
+        # Extract the list of files from the payload
+        files_data = [file.model_dump() for file in payload.strategies]
         
         # Get the queue and pass it
         queue = request.app.state.websocket_queue
@@ -675,7 +834,8 @@ try:
         background_tasks.add_task(
             run_batch_manager, 
             batch_id=batch_id, 
-            files_data=files_data, 
+            files_data=files_data,
+            use_training_set=payload.use_training_set,
             manager=manager,
             queue=queue,
             loop=main_loop,
@@ -788,6 +948,354 @@ try:
             print(f"Error generating indicator schema: {e}")
             raise HTTPException(status_code=500, detail="Could not generate indicator schema.")
 
+    # --- Endpoint to Start a Workflow ---
+    @app.get("/api/ml/workflow/start")
+    def start_workflow():
+        """Generates a unique ID for a new ML workflow session."""
+        workflow_id = str(uuid.uuid4())
+        WORKFLOW_CACHE[workflow_id] = {} # Initialize an empty dictionary for this workflow
+        print(f"Started new ML workflow with ID: {workflow_id}")
+        return {"workflow_id": workflow_id}
+    
+    @app.post("/api/ml/workflow/{workflow_id}/fetch-data")
+    async def fetch_ohlcv_data_for_workflow(workflow_id: str, body: DataSourceConfig):
+        """
+        Acts as a controller that calls the data manager to get OHLCV data,
+        then formats it for the frontend.
+        """
+        
+        if workflow_id not in WORKFLOW_CACHE:
+            raise HTTPException(status_code=404, detail="Workflow ID not found. Please start a new workflow.")
+        
+        print(f"Received request to fetch data for: {body.symbol} ({body.timeframe}) from {body.startDate} to {body.endDate}")
+        
+        try:
+            # --- Step 1: Data Loading ---
+            df = load_data_for_ml(
+                symbol=body.symbol,
+                timeframe=body.timeframe,
+                start_date_str=body.startDate,
+                end_date_str=body.endDate
+            )
+            
+            # Handle the case where no data is returned
+            if df.empty:
+                return {"data": [], "info": {"message": "No data found for the selected criteria."}}
+            
+            # Store the raw DataFrame in the cache for the next step
+            WORKFLOW_CACHE[workflow_id]['raw_df'] = df
+            
+            # # Sort the DataFrame by the 'timestamp' column in descending order
+            # # The data manager already returns a datetime column, which sorts correctly.
+            # df.sort_values(by='timestamp', ascending=False, inplace=True)
+            
+            # Generate the info dictionary from the DataFrame when it still has the correct dtypes.
+            info = generate_df_info(df.copy(), body.symbol, body.timeframe)
+            
+            # Ensure correct numeric types after fetching
+            numeric_cols = ['open', 'high', 'low', 'close', 'volume']
+            df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors='coerce')
+            
+            # --- Format DataFrame for JSON response ---
+            df['timestamp'] = (df['timestamp'].astype('int64') // 10**6)
+            
+            data_as_dicts = df.to_dict(orient='records')
+            
+            return {"data": data_as_dicts, "info": info}
+        except Exception as e:
+            print(f"ERROR in fetch_ohlcv_data endpoint: {e}")
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500, 
+                detail=f"An error occurred while processing the data request: {str(e)}"
+            )
+    
+    @app.post("/api/ml/workflow/{workflow_id}/calculate-features")
+    async def calculate_features_for_workflow(workflow_id: str, body: FeaturesCalculationRequest):
+        """
+        This endpoint fetches raw data, calculates features/indicators based on the provided
+        configuration, and returns the resulting DataFrame along with its metadata.
+        """
+        
+        if workflow_id not in WORKFLOW_CACHE or 'raw_df' not in WORKFLOW_CACHE[workflow_id]:
+            raise HTTPException(status_code=400, detail="Raw data not found. Please fetch data first.")
+        
+        try:
+            # STEP 1: Retrieve the DataFrame from the previous step (the cache)
+            df_raw = WORKFLOW_CACHE[workflow_id]['raw_df']
+            
+            # --- Step 2: Feature Engineering ---
+            # 2a. Transform the frontend feature config to the backend's expected format
+            indicator_tuples = transform_features_for_backend(
+                body.features, 
+                body.dataSource.timeframe
+            )
+            
+            # If no indicators are selected, just return the raw data
+            if not indicator_tuples:
+                print("No indicators specified. Returning raw data.")
+                df_final = df_raw.copy()
+            else:
+                print(f"Calculating {len(indicator_tuples)} indicators...")
+                # 2b. Create a mock 'strategy' object
+                mock_strategy = SimpleNamespace(indicators=indicator_tuples)
+                
+                # 2c. Call the indicator calculation function
+                df_final = calculate_indicators(mock_strategy, df_raw.copy())
+                print(f"Features calculated. Final shape: {df_final.shape}")
+            
+            # STEP 3: Save the result of THIS step to the cache for the NEXT step
+            WORKFLOW_CACHE[workflow_id]['features_df'] = df_final
+            
+            # --- Step 3: Generate Info BEFORE Sanitization ---
+            # Generate the info dictionary from the DataFrame when it still has the correct dtypes.
+            info = generate_df_info(df_final.copy(), body.dataSource.symbol, body.dataSource.timeframe)
+            
+            # --- Step 4: Sanitize a copy of the data for JSON response ---
+            df_final.replace([np.inf, -np.inf], np.nan, inplace=True)
+            df_for_json = df_final.astype(object).where(pd.notnull(df_final), None)
+            
+            # --- Step 5: Format the Sanitized Data for the Frontend ---
+            # df_reset = df_for_json.reset_index()
+            
+            # if 'timestamp' in df_for_json.columns:
+            #     df_for_json['timestamp'] = pd.to_datetime(df_for_json['timestamp']).astype('int64') // 10**6
+            
+            data_as_dicts = df_for_json.to_dict(orient='records')
+            
+            print(f"Total Columns: {df_for_json.columns}")
+            
+            return {"data": data_as_dicts, "info": info}
+        
+        except Exception as e:
+            print(f"ERROR in calculate_features endpoint: {e}")
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500, 
+                detail=f"An error occurred during feature calculation: {str(e)}"
+            )
+
+    @app.post("/api/ml/workflow/{workflow_id}/feature-engineering")
+    async def engineer_features_for_workflow(workflow_id: str, body: FeaturesEngineeringRequest):
+        """
+        This single, unified endpoint handles the entire feature generation process:
+        1. Loads raw OHLCV data.
+        2. Calculates technical indicators.
+        3. Executes the user's custom Python code for feature engineering.
+        4. Applies standard preprocessing (scaling, etc.).
+        5. Returns the final, transformed DataFrame and its metadata.
+        """
+        
+        if workflow_id not in WORKFLOW_CACHE or 'features_df' not in WORKFLOW_CACHE[workflow_id]:
+            raise HTTPException(status_code=400, detail="Features data not found. Please calculate indicators first.")
+        
+        try:
+            df_features = WORKFLOW_CACHE[workflow_id]['features_df']
+            
+            # --- Step 3: Execute Custom Feature Engineering Code ---
+            df_transformed = df_features.copy()
+            
+            custom_code = body.preprocessing.customFeatureCode
+            
+            if custom_code and custom_code.strip():
+                print("Executing custom feature engineering script...")
+                local_namespace = {}
+                # WARNING: exec is powerful. Run in a sandboxed/isolated environment in production.
+                exec(custom_code, globals(), local_namespace)
+
+                if 'transform_features' in local_namespace:
+                    transform_func = local_namespace['transform_features']
+                    
+                    # FIX: Pass the correct DataFrame into the function and update it with the result.
+                    df_transformed = transform_func(df_transformed.copy())
+                    
+                    if not isinstance(df_transformed, pd.DataFrame):
+                        raise TypeError("Custom script's 'transform_features' function must return a pandas DataFrame.")
+                    print(f"Custom script executed successfully. Shape after transform: {df_transformed.shape}")
+                else:
+                    raise NameError("Custom script must contain a function named 'transform_features'.")
+            else:
+                print("No custom feature code provided. Skipping custom script execution.")
+
+
+            # --- Step 4: Apply Standard Preprocessing (Scaling, PCA, etc.) ---
+            # The user's custom code runs BEFORE standard scaling.
+            df_final = apply_standard_preprocessing(df_transformed, body.preprocessing)
+
+            # --- Step 5: Generate Final Info and Format for Frontend ---
+            print("Generating final metadata and formatting for response...")
+            
+            # STEP 3: Save the final engineered DataFrame to the cache for the final run
+            WORKFLOW_CACHE[workflow_id]['engineered_df'] = df_final
+            
+            # FIX: Generate info from the FINAL DataFrame to get accurate stats.
+            info = generate_df_info(df_final, body.dataSource.symbol, body.dataSource.timeframe)
+
+            # Sanitize a copy of the final data for JSON response
+            df_final.replace([np.inf, -np.inf], np.nan, inplace=True)
+            df_for_json = df_final.astype(object).where(pd.notnull(df_final), None)
+            
+            # Format the data for the frontend (reset index, handle timestamp)
+            # df_reset = df_for_json.reset_index()
+            # if 'timestamp' in df_for_json.columns:
+            #     # Ensure timestamp column exists before trying to convert
+            #     df_for_json['timestamp'] = pd.to_datetime(df_for_json['timestamp']).astype('int64') // 10**6
+            
+            # Convert the FINAL processed data to dicts.
+            data_as_dicts = df_for_json.to_dict(orient='records')
+            
+            print(f"Processing complete. Returning {len(data_as_dicts)} rows.")
+            
+            # 6. Prepare and return the response
+            return {"data": data_as_dicts, "info": info}
+        
+        except Exception as e:
+            print(f"ERROR in feature_engineering endpoint: {e}")
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500, 
+                detail=f"An error occurred during feature engineering: {str(e)}"
+            )
+    
+    @app.post("/api/ml/workflow/{workflow_id}/data-validation")
+    async def validate_data_for_workflow(workflow_id: str, body: DataValidationRequest):
+        if workflow_id not in WORKFLOW_CACHE or 'engineered_df' not in WORKFLOW_CACHE[workflow_id]:
+            raise HTTPException(status_code=400, detail="Engineered data not found. Please engineer the features first.")
+
+        try:
+            # STEP 1: Retrieve the engineered DataFrame from the cache
+            df_engineered = WORKFLOW_CACHE[workflow_id]['engineered_df'].copy()
+            print(f"Data validation started on DataFrame with shape: {df_engineered.shape}")
+
+            # STEP 2: Generate Labels using the provided custom code
+            user_code = body.problemDefinition.custom_code
+            execution_scope = {}
+            try:
+                exec(user_code, execution_scope)
+                labeling_func = execution_scope.get('generate_labels')
+                if not callable(labeling_func):
+                    raise ValueError("'generate_labels' function not found in custom code.")
+                
+                labels = labeling_func(df_engineered.copy())
+                if not isinstance(labels, pd.Series):
+                    raise TypeError("'generate_labels' function must return a Pandas Series.")
+                
+                df_engineered['label'] = labels
+                # Drop rows where a label could not be generated (e.g., look-forward period)
+                df_labeled = df_engineered.dropna(subset=['label'])
+                print(f"Labels generated. Shape after dropping NaN labels: {df_labeled.shape}")
+
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Error in labeling logic: {str(e)}")
+
+            # STEP 3: Calculate Label Distribution (Support)
+            label_counts = df_labeled['label'].value_counts()
+            # Convert to a JSON-friendly format (string keys)
+            label_distribution = {str(k): int(v) for k, v in label_counts.to_dict().items()}
+            print(f"Label Distribution: {label_distribution}")
+
+            # STEP 4: Calculate Data Split Info
+            split_info = {}
+            total_samples = len(df_labeled)
+
+            if body.validation.method == 'train_test_split':
+                train_pct = body.validation.train_split / 100.0
+                split_idx = int(total_samples * train_pct)
+                train_count = split_idx
+                test_count = total_samples - split_idx
+                split_info = {
+                    "method": "Train/Test Split",
+                    "train_samples": train_count,
+                    "test_samples": test_count,
+                    "total_samples": total_samples
+                }
+            elif body.validation.method == 'walk_forward':
+                train_window = body.validation.walk_forward_train_window
+                test_window = body.validation.walk_forward_test_window
+                # Calculate the number of folds possible with these settings
+                if total_samples > train_window and test_window > 0:
+                    num_folds = 1 + (total_samples - train_window) // test_window
+                else:
+                    num_folds = 0
+                
+                split_info = {
+                    "method": "Walk-Forward",
+                    "train_window_size": train_window,
+                    "test_window_size": test_window,
+                    "approximate_folds": num_folds,
+                    "total_samples": total_samples
+                }
+            print(f"Split Info: {split_info}")
+
+            # STEP 5: Assemble the final response
+            # We don't need to re-cache anything, this is just for information
+            
+            # Get the base info (shape, columns, etc.)
+            info = generate_df_info(df_labeled.copy(), body.dataSource.symbol, body.dataSource.timeframe)
+            
+            # Add our new validation section to the info object
+            info['validation_info'] = {
+                "label_distribution": label_distribution,
+                "split_info": split_info
+            }
+
+            # Format the full, labeled DataFrame for the frontend to display
+            df_json = df_labeled.copy()
+            df_json.replace([np.inf, -np.inf], np.nan, inplace=True)
+            df_for_json = df_json.astype(object).where(pd.notnull(df_json), None)
+            
+            # if 'timestamp' in df_for_json.columns:
+            #     df_for_json['timestamp'] = pd.to_datetime(df_for_json['timestamp']).astype('int64') // 10**6
+            
+            data_as_dicts = df_for_json.to_dict(orient='records')
+            
+            return {"data": data_as_dicts, "info": info}
+
+        except Exception as e:
+            print(f"ERROR in data_validation endpoint: {e}")
+            traceback.print_exc()
+            raise HTTPException(
+                status_code=500, 
+                detail=f"An error occurred during data validation: {str(e)}"
+            )
+
+    @app.post("/api/ml/workflow/{workflow_id}/run")
+    async def run_ml_pipeline_for_workflow(
+        workflow_id: str,
+        body: MLPipelineConfig, # We still send the full config for logging and final settings
+        background_tasks: BackgroundTasks,
+        request: Request
+    ):
+        """
+        Triggers the final ML pipeline run for a given workflow.
+        It uses the cached, engineered DataFrame and the provided final configuration.
+        """
+        if workflow_id not in WORKFLOW_CACHE or 'engineered_df' not in WORKFLOW_CACHE[workflow_id]:
+            raise HTTPException(status_code=400, detail="Engineered data not found in workflow cache. Please complete previous steps.")
+
+        batch_id = str(uuid.uuid4())
+        create_backtest_job(batch_id)
+
+        config_dict = body.model_dump()
+        
+        # --- Add the workflow_id to the config for the manager ---
+        config_dict['workflow_id'] = workflow_id
+        
+        queue = request.app.state.websocket_queue
+        main_loop = asyncio.get_running_loop()
+
+        background_tasks.add_task(
+            run_ml_pipeline_manager,
+            batch_id=batch_id,
+            config=config_dict,
+            manager=manager,
+            queue=queue,
+            loop=main_loop
+        )
+
+        return {"message": "Machine Learning pipeline job started.", "batch_id": batch_id}
+
+
     @app.post("/api/ml/run")
     async def submit_ml_pipeline(
         body: MLPipelineConfig,
@@ -857,6 +1365,44 @@ try:
         except Exception as e:
             print(f"Error deleting template: {e}")
             raise HTTPException(status_code=500, detail="Could not delete labeling template.")
+
+
+    @app.get("/api/ml/fe-templates")
+    def get_fe_templates_endpoint(db: Session = Depends(get_db)):
+        """Fetches all custom feature engineering templates stored in the database."""
+        try:
+            return get_all_fe_templates(db)
+        except Exception as e:
+            print(f"Error fetching FE templates: {e}")
+            raise HTTPException(status_code=500, detail="Could not fetch feature engineering templates.")
+
+    @app.post("/api/ml/fe-templates")
+    def save_fe_template_endpoint(template: FETemplateModel, db: Session = Depends(get_db)):
+        """Saves a new or updates an existing feature engineering template."""
+        try:
+            saved = save_fe_template(
+                db=db,
+                key=template.key,
+                name=template.name,
+                description=template.description,
+                code=template.code
+            )
+            return {"status": "success", "template": saved}
+        except Exception as e:
+            print(f"Error saving FE template: {e}")
+            raise HTTPException(status_code=500, detail="Could not save feature engineering template.")
+
+    @app.delete("/api/ml/fe-templates/{template_key}")
+    def delete_fe_template_endpoint(template_key: str, db: Session = Depends(get_db)):
+        """Deletes a custom feature engineering template."""
+        try:
+            result = delete_fe_template(db=db, key=template_key)
+            if result is None:
+                raise HTTPException(status_code=404, detail="FE Template not found.")
+            return result
+        except Exception as e:
+            print(f"Error deleting FE template: {e}")
+            raise HTTPException(status_code=500, detail="Could not delete feature engineering template.")
 
 
     ####################################

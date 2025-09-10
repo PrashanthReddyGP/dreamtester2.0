@@ -168,7 +168,20 @@ def calculate_indicators(strategy_instance, df):
             else:
                 
                 print(f"ATR takes 3 Input params, But {len(params)} were given...")
+        
+        if name == 'ADX':
+            
+            # Ensure you have at least 2 params
+            if len(params) == 1:
                 
+                length = int(params[0])  # or float(params[0]) if you need float
+                
+                df = idk.calculate_adx(df, length)
+            
+            else:
+                
+                print(f"ADX takes 1 Input params, But {len(params)} were given...")
+        
         if name == 'SUPERTREND':
             
             # Ensure you have at least 2 params
@@ -312,7 +325,18 @@ def calculate_indicators(strategy_instance, df):
                 
             else:
                 print(f"ROEC takes 1 Input Value, But {len(params)} were given...")
-    
+
+        if name == 'ACTIVITY FILTER':
+            
+            if len(params) >= 1:
+                
+                window = int(params[0])
+                
+                df = idk.activity_filter(df, window=window)
+                
+            else:
+                print(f"ACTIVITY FILTER takes 1 Input Value, But {len(params)} were given...")
+
     print("Indicators processed successfully")
     
     return df

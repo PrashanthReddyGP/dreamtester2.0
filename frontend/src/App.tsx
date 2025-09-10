@@ -14,6 +14,7 @@ import type { SettingsState, ApiKeySet } from './context/types';
 import { TerminalContextProvider, useTerminal } from './context/TerminalContext';
 import { AnalysisContextProvider, useAnalysis } from './context/AnalysisContext';
 import { websocketService } from './services/websocketService';
+import { MLProvider } from './context/MLContext';
 
 
 // --- 1. THE WebSocketManager COMPONENT ---
@@ -169,20 +170,21 @@ function App() {
       <AnalysisContextProvider>
         <TerminalContextProvider>
           <WebSocketManager />
-
-          <ThemeProvider theme={theme}>
-            <Router>
-              <Routes>
-                <Route element={<MainLayout mode={mode} toggleTheme={toggleTheme} />}>
-                  <Route path="/" element={<Navigate to="/lab" replace />} />
-                  <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
-                  <Route path="/machinelearning" element={<AnimatedPage><MachineLearning /></AnimatedPage>} />
-                  <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
-                  <Route path="/automation" element={<div style={{display:'flex', justifyContent:'center', alignItems:'center', width:'100%'}}><AnimatedPage>Automation Page</AnimatedPage></div>} />
-                </Route>
-              </Routes>
-            </Router>
-          </ThemeProvider>
+            <MLProvider>
+              <ThemeProvider theme={theme}>
+                <Router>
+                  <Routes>
+                    <Route element={<MainLayout mode={mode} toggleTheme={toggleTheme} />}>
+                      <Route path="/" element={<Navigate to="/lab" replace />} />
+                      <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
+                      <Route path="/machinelearning" element={<AnimatedPage><MachineLearning /></AnimatedPage>} />
+                      <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
+                      <Route path="/automation" element={<div style={{display:'flex', justifyContent:'center', alignItems:'center', width:'100%'}}><AnimatedPage>Automation Page</AnimatedPage></div>} />
+                    </Route>
+                  </Routes>
+                </Router>
+            </ThemeProvider>
+          </MLProvider>
         </TerminalContextProvider>
       </AnalysisContextProvider>
     </AppContext.Provider>

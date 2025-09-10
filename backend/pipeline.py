@@ -64,7 +64,7 @@ def send_update_to_queue(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, 
 
 
 # --- The Batch Manager Function ---
-def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, connection_event: asyncio.Event): 
+def run_batch_manager(batch_id: str, files_data: list[dict], use_training_set: bool, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, connection_event: asyncio.Event): 
     """
     Orchestrates the batch in parallel. It now primarily collects raw data
     for the final portfolio calculation, as workers send their own UI updates.
@@ -77,7 +77,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
     future = asyncio.run_coroutine_threadsafe(wait_for_connection(), loop)
     future.result() # This blocks until the client connects
     
-    print(f"--- BATCH MANAGER ({batch_id}): Starting PARALLEL batch processing ---")
+    print(f"Starting batch manager for {batch_id}. Training set only: {use_training_set}")
     
     # --- 2. SEND INITIAL STATUS UPDATE ---
     send_update_to_queue(loop, queue, batch_id, {
@@ -99,7 +99,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
         
         # Create a dictionary to map a "future" object back to its file_name
         future_to_file = {
-            executor.submit(process_backtest_job, batch_id, manager, str(uuid.uuid4()), file['name'], file['content'], initialCapital, client, queue, loop, send_ui_update = True): file
+            executor.submit(process_backtest_job, batch_id, manager, str(uuid.uuid4()), file['name'], file['content'], initialCapital, client, queue, loop, send_ui_update = True, use_training_set = use_training_set): file
             for file in files_data
         }
         
@@ -224,11 +224,11 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
                 all_trade_events_for_log.append(trade_events)
                 
                 entry_df = trade_events[[
-                    'timestamp', 'trade_id', 'Signal', 'Entry', 'Stop Loss', 'Take Profit'
+                    'timestamp', 'trade_id', 'Signal', 'Entry', 'Stop Loss', 'Take Profit', 'Risk'
                 ]].copy()
                 entry_df.rename(columns={
                     'timestamp': 'event_timestamp', 'Signal': 'entry_direction', 
-                    'Entry': 'entry_price', 'Stop Loss': 'entry_sl', 'Take Profit': 'entry_tp'
+                    'Entry': 'entry_price', 'Stop Loss': 'entry_sl', 'Take Profit': 'entry_tp', 'Risk': 'risk_percent'
                 }, inplace=True)
                 all_entry_events.append(entry_df)
 
@@ -251,6 +251,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
             
             # --- Step 4: Call the NEW Portfolio Simulator (MODIFIED) ---
             sample_instance = raw_results_for_portfolio[0][1]
+            
             portfolio_equity, open_trade_count, closed_trades_log = sample_instance.portfolio(
                 complete_df['timestamp'].values,
                 complete_df['trade_id_entry'].values,
@@ -258,6 +259,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
                 complete_df['entry_price'].values,
                 complete_df['entry_sl'].values,
                 complete_df['entry_tp'].values,
+                complete_df['risk_percent'].values,
                 complete_df['trade_id_exit'].values,
                 complete_df['exit_result'].values
             )
@@ -338,7 +340,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], manager: any, queue
         
 
 # process_backtest_job should now RETURN the results instead of just printing
-def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: str, file_content: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, send_ui_update: bool = True):
+def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: str, file_content: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, send_ui_update: bool = True, use_training_set: bool = False):
     """
     Processes a SINGLE backtest job, sends live updates, and returns its results.
     """
@@ -348,7 +350,9 @@ def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: st
         update_job_status(batch_id, "running", log_msg)
         
         # This pure function does all the heavy lifting
-        strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity, trade_events_df = run_single_backtest(batch_id, manager, job_id, file_name, file_content, initialCapital, client, queue, loop)
+        strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity, trade_events_df = run_single_backtest(
+            batch_id, manager, job_id, file_name, file_content, initialCapital, client, queue, loop, use_training_set=use_training_set
+            )
         
         if send_ui_update:
             # Prepare the payload for the UI
@@ -375,7 +379,7 @@ def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: st
         return None
 
 # This is a placeholder for your actual backtest engine
-def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str, strategy_code: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, ohlcv_df: Optional[pd.DataFrame] = None):
+def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str, strategy_code: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, ohlcv_df: Optional[pd.DataFrame] = None, use_training_set: bool = False):
     
     print(f"--- Running core backtest for {file_name} ---")
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Running core backtest for {file_name}"}})
@@ -392,6 +396,13 @@ def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str,
         print(f"--- Fetching OHLCV data from exchange for {file_name} ---")
         client = get_client('binance')
         asset, ohlcv = fetch_candlestick_data(client, strategy_instance)
+    
+    # If use_training_set is True, filter the DataFrame to include only 70% of the data
+    if use_training_set:
+        print(f"Initial OHLCV rows: {len(ohlcv)}")
+        split_index = int(len(ohlcv) * 0.7)
+        ohlcv = ohlcv.iloc[:split_index]
+        print(f"Using training set only: {len(ohlcv)} rows")
     
     # 2. Fetch data
     # asset, ohlcv = fetch_candlestick_data(client, strategy_instance)

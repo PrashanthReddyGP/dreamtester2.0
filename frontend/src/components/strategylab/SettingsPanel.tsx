@@ -1,5 +1,5 @@
-import React, {useRef} from 'react';
-import { Box, Typography, Button, MenuItem, FormControl, InputLabel, Select, Divider, IconButton } from '@mui/material';
+import React, {useRef, useState} from 'react';
+import { Box, Typography, Button, MenuItem, FormControl, InputLabel, Select, Divider, IconButton, FormControlLabel, Checkbox } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import { DatePicker, LocalizationProvider } from '@mui/x-date-pickers';
@@ -11,7 +11,7 @@ import ClearIcon from '@mui/icons-material/Clear';
 export const SettingsPanel: React.FC<{
   onSave: () => Promise<void>;
   isSaveDisabled: boolean;
-  onRunBacktest: () => void;
+  onRunBacktest: (useTrainingSet: boolean) => void;
   onOptimizeStrategy: () => void;
   onDurabilityTests: () => void;
   onHedgeOptimize: () => void;
@@ -21,6 +21,7 @@ export const SettingsPanel: React.FC<{
   onClearCsv: () => void;
   selectedCsvFile: File | null;
 }> = ({ onSave, isSaveDisabled, onRunBacktest, onRunBacktestWithCsv, onOptimizeStrategy, onDurabilityTests, onHedgeOptimize, isBacktestRunning, onFileChange, onClearCsv, selectedCsvFile }) => {
+  const [useTrainingSet, setUseTrainingSet] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -39,17 +40,17 @@ export const SettingsPanel: React.FC<{
       }}>
         <Typography variant="h2" sx={{ mb: 3 }}>Configuration</Typography>
 
-        <FormControl fullWidth margin="normal" variant="filled">
+        <FormControl fullWidth margin="normal" variant="outlined">
           <InputLabel>Asset</InputLabel>
           <Select defaultValue={'BTC/USDT'}><MenuItem value={'BTC/USDT'}>BTC/USDT</MenuItem></Select>
         </FormControl>
-        <FormControl fullWidth margin="normal" variant="filled">
+        <FormControl fullWidth margin="normal" variant="outlined">
           <InputLabel>Timeframe</InputLabel>
           <Select defaultValue={'1h'}><MenuItem value={'1h'}>1 hour</MenuItem></Select>
         </FormControl>
 
-        <DatePicker label="Start Date" sx={{ width: '100%', mt: 1 }} slotProps={{ textField: { variant: 'filled' } }}/>
-        <DatePicker label="End Date" sx={{ width: '100%', mt: 2, mb: 2 }} slotProps={{ textField: { variant: 'filled' } }}/>
+        <DatePicker label="Start Date" sx={{ width: '100%', mt: 1 }} slotProps={{ textField: { variant: 'outlined' } }}/>
+        <DatePicker label="End Date" sx={{ width: '100%', mt: 2, mb: 2 }} slotProps={{ textField: { variant: 'outlined' } }}/>
 
         <Box sx={{ flexGrow: 1 }} /> 
 
@@ -109,7 +110,7 @@ export const SettingsPanel: React.FC<{
               </IconButton>
             )}
           </Box>
-
+          
           <Button 
             variant="contained" 
             color="secondary" 
@@ -122,13 +123,32 @@ export const SettingsPanel: React.FC<{
           >
             {isBacktestRunning ? 'Running...' : 'Run with CSV'}
           </Button>
+
+          <Divider/>
+
+          <Box>
+            <FormControlLabel
+              control={
+                <Checkbox 
+                  checked={useTrainingSet} 
+                  onChange={(event) => setUseTrainingSet(event.target.checked)}
+                />
+              }
+              label="Use Training Set"
+              sx={{ display: 'block', textAlign: 'center', mb: 1 }}
+            />
+            <Button 
+              variant="contained" 
+              size="large" 
+              startIcon={<PlayArrowIcon />} 
+              fullWidth 
+              onClick={() => onRunBacktest(useTrainingSet)} 
+              disabled={isBacktestRunning || isSaveDisabled}
+            >
+              {isBacktestRunning ? 'Running...' : 'Run Backtest'}
+            </Button>
+          </Box>
           
-          <Divider sx={{ mb: 1 }}/>
-
-          <Button variant="contained" size="large" startIcon={<PlayArrowIcon />} fullWidth onClick={onRunBacktest} disabled={isBacktestRunning || isSaveDisabled}>
-            {isBacktestRunning ? 'Running...' : 'Run Backtest'}
-          </Button>
-
           <Button variant="outlined" size="large" startIcon={<ArrowDown01 />} fullWidth onClick={onOptimizeStrategy} disabled={isBacktestRunning || isSaveDisabled}>
             {isBacktestRunning ? 'Fetching Data...' : 'Optimize Strategy'}
           </Button>

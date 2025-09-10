@@ -17,7 +17,7 @@ import type { DragEndEvent } from '@dnd-kit/core';
 import { ConfirmationDialog } from '../components/common/ConfirmationDialog';
 
 import {  submitBatchBacktest } from '../services/api';
-import type { StrategyFilePayload, BatchSubmitResponse } from '../services/api';
+import type { StrategyFilePayload, BatchSubmitPayload, BatchSubmitResponse } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useTerminal } from '../context/TerminalContext';
 import { useAnalysis } from '../context/AnalysisContext';
@@ -536,7 +536,7 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
-    const handleRunBacktest = async () => {
+    const handleRunBacktest = async (useTrainingSet: boolean) => {
 
         if (!selectedFileId) {
             alert("Please select a strategy file before running a backtest.");
@@ -572,8 +572,13 @@ export const StrategyLab: React.FC = () => {
                 return;
             }
 
+            const payload: BatchSubmitPayload = {
+                strategies: rootFiles,
+                use_training_set: useTrainingSet,
+            };
+            
             // Call the API service with the filtered list of root files
-            const result = await submitBatchBacktest(rootFiles);
+            const result = await submitBatchBacktest(payload);
             console.log("Batch backtest submitted successfully!", result);
 
             if (result.batch_id) {
@@ -635,7 +640,12 @@ export const StrategyLab: React.FC = () => {
             };
 
             // The `submitBatchBacktest` API can handle an array with just one item
-            const result = await submitBatchBacktest([fileToBacktest]);
+            const payload: BatchSubmitPayload = {
+                strategies: [fileToBacktest],
+                use_training_set: true, // Defaulting to true for context-menu runs
+            };
+
+            const result = await submitBatchBacktest(payload);
             
             console.log("Single file backtest submitted successfully!", result);
 

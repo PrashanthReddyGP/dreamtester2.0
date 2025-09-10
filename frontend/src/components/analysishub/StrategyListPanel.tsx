@@ -97,7 +97,6 @@ export const StrategyListPanel: FC<StrategyListPanelProps> = ({ results, selecte
       )}
 
       <Box sx={{ flexGrow: 1, overflowY: 'auto', position: 'relative' }}>
-        {/* --- USE THE FILTERED LIST --- */}
         {filteredResults.length > 0 ? (
           <List component="nav" dense>
             {filteredResults.map((result) => (

@@ -102,12 +102,18 @@ export interface TradesType {
     trades: Trades[];
 }
 
+
+
 export interface BacktestResultPayload {
     name: string;
     strategies_results: StrategyResult[];
     initial_capital: number;
 }
 
+export interface BatchSubmitPayload {
+  strategies: StrategyFilePayload[];
+  use_training_set: boolean;
+}
 export interface BatchSubmitResponse {
     message: string;
     batch_id: string;
@@ -157,6 +163,10 @@ export interface MLResult extends StrategyResult {
     }
 }
 
+export function isMLResult(result: StrategyResult | MLResult): result is MLResult {
+  return (result as MLResult).model_analysis !== undefined;
+}
+
 
 /**
  * Submits a new backtest job to the backend.
@@ -184,19 +194,19 @@ export const submitBacktest = async (config: BacktestConfig): Promise<BacktestJo
 /**
  * Submits a batch of strategy files for backtesting.
  */
-export const submitBatchBacktest = async (files: StrategyFilePayload[]): Promise<BatchSubmitResponse> => { 
+export const submitBatchBacktest = async (payload: BatchSubmitPayload[]): Promise<BatchSubmitResponse> => { 
     // This will call a new endpoint designed for batch submissions
     const response = await fetch(`${API_URL}/api/backtest/batch-submit`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify(files),
+        body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ detail: 'An unknown error occurred.' }));
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+      const errorData = await response.json().catch(() => ({ detail: 'An unknown error occurred.' }));
+      throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
     }
 
     return response.json();

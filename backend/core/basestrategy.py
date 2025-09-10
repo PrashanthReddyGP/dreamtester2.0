@@ -134,6 +134,7 @@ class BaseStrategy:
         df_full['Open_Trades'] = self.open_trades
         df_full['Signal'] = self.signals
         df_full['RR'] = self.rr
+        df_full['Risk'] = self.risk_percent
         df_full['Returns'] = self.returns
         df_full['Commissioned Returns'] = self.commissioned_returns
         
@@ -330,6 +331,7 @@ class BaseStrategy:
                 entry_prices_list,
                 entry_sls_list,
                 entry_tps_list,
+                entry_risks_list,
                 exit_trade_ids_list,
                 exit_results_list):
         """
@@ -347,19 +349,24 @@ class BaseStrategy:
             portfolio_equity[0] = capital
         
         open_trades = {}
-        closed_trades_log = [] # <<< NEW: To store results
+        closed_trades_log = []
         
         for i in range(1, len(timestamps)):
             capital = portfolio_equity[i-1]
             
             # --- Step 1: Process Entries (No changes here) ---
             if isinstance(entry_trade_ids_list[i], list):
+                
                 for idx, entry_id in enumerate(entry_trade_ids_list[i]):
+                    
+                    risk_percent_for_trade = entry_risks_list[i][idx]
+                    
                     entry_price = entry_prices_list[i][idx]
                     stop_loss = entry_sls_list[i][idx]
                     risk_per_unit = abs(entry_price - stop_loss)
+                    
                     if risk_per_unit > 1e-9:
-                        cash_at_risk = capital * (risk_percent / 100)
+                        cash_at_risk = capital * (risk_percent_for_trade / 100)
                         position_size = cash_at_risk / risk_per_unit
                         open_trades[int(entry_id)] = {
                             'direction': entry_directions_list[i][idx],

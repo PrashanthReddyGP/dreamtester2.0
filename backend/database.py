@@ -83,6 +83,16 @@ class LabelingTemplate(Base):
     # The actual Python code for the template
     code = Column(Text)
 
+# It's identical in structure to the LabelingTemplate model.
+class FeatureEngineeringTemplate(Base):
+    __tablename__ = "feature_engineering_templates"
+
+    key = Column(String, primary_key=True, index=True)
+    name = Column(String, index=True)
+    description = Column(String)
+    code = Column(Text)
+
+
 
 # --- Create all tables in the database ---
 # This will now only create api_keys, strategy_files, and backtest_jobs tables.
@@ -368,6 +378,37 @@ def save_labeling_template(db: Session, key: str, name: str, description: str, c
 
 def delete_labeling_template(db: Session, key: str):
     db_template = db.query(LabelingTemplate).filter(LabelingTemplate.key == key).first()
+    if db_template:
+        db.delete(db_template)
+        db.commit()
+        return {"status": "success", "message": f"Template {key} deleted."}
+    return None
+
+
+# --- CRUD functions for Feature Engineering Templates ---
+def get_all_fe_templates(db: Session):
+    templates_from_db = db.query(FeatureEngineeringTemplate).all()
+    # Convert the list of ORM objects into a dictionary for the frontend
+    return {t.key: {"name": t.name, "description": t.description, "code": t.code, "isDeletable": True} for t in templates_from_db}
+
+def save_fe_template(db: Session, key: str, name: str, description: str, code: str):
+    # Check if a template with the same key already exists
+    db_template = db.query(FeatureEngineeringTemplate).filter(FeatureEngineeringTemplate.key == key).first()
+    if db_template:
+        # Update existing template
+        db_template.name = name
+        db_template.description = description
+        db_template.code = code
+    else:
+        # Create a new template
+        db_template = FeatureEngineeringTemplate(key=key, name=name, description=description, code=code)
+        db.add(db_template)
+    db.commit()
+    db.refresh(db_template)
+    return db_template
+
+def delete_fe_template(db: Session, key: str):
+    db_template = db.query(FeatureEngineeringTemplate).filter(FeatureEngineeringTemplate.key == key).first()
     if db_template:
         db.delete(db_template)
         db.commit()

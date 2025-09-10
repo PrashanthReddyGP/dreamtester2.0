@@ -5,31 +5,28 @@ import { Panel, PanelGroup } from 'react-resizable-panels';
 // Import the components we just created
 import { StrategyListPanel } from '../components/analysishub/StrategyListPanel';
 import { AnalysisContentPanel } from '../components/analysishub/AnalysisContentPanel';
-import type { StrategyResult } from '../services/api';
+import type { StrategyResult, MLResult } from '../services/api';
 import { ResizeHandle } from '../components/common/ResizeHandle';
 import { useAnalysis } from '../context/AnalysisContext';
 import { ComparisonModal } from '../components/analysishub/ComparisonModal';
 
+// A type alias for clarity
+type AnalysisResult = StrategyResult | MLResult;
+
 export const AnalysisHub: React.FC = () => {
   
   const { results, isComplete, batchConfig } = useAnalysis();
-  const [selectedStrategy, setSelectedStrategy] = useState<StrategyResult | null>(null);
+  const [selectedStrategy, setSelectedStrategy] = useState<AnalysisResult | null>(null);
   const [isCompareModalOpen, setCompareModalOpen] = useState(false);
   const [isDataSegmentationMode, setIsDataSegmentationMode] = useState(false); 
 
   useEffect(() => {
     if (results.length > 0) {
-
-      if (!selectedStrategy) {
-        setSelectedStrategy(results[0]);
-      } 
-
-      else if (!results.some(r => r.strategy_name === selectedStrategy.strategy_name)) {
+      if (!selectedStrategy || !results.some(r => r.strategy_name === selectedStrategy.strategy_name)) {
         setSelectedStrategy(results[0]);
       }
     } else {
-        // If results are cleared, clear the selection
-        setSelectedStrategy(null);
+      setSelectedStrategy(null);
     }
   }, [results, selectedStrategy]);
 

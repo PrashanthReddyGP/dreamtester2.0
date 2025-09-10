@@ -7,12 +7,17 @@ import { EquityTab } from './EquityTab';
 import { TradeLogTab } from './TradeLogTab';
 import { AdvancedMetricsTab } from './AdvancedMetricsTab';
 import { MetricsOverviewTab } from './MetricsOverviewTab';
-import type { StrategyResult } from '../../services/api'; 
+import type { StrategyResult, MLResult } from '../../services/api';
+import { isMLResult } from '../../services/api';
 import { CorrelationMatrixTab } from './CorrelationMatrixTab';
+import { ModelAnalysisTab } from './ModelAnalysisTab';
+
+// A type alias for clarity
+type AnalysisResult = StrategyResult | MLResult;
 
 export const AnalysisContentPanel: FC<{
-    results: StrategyResult[],
-    result: StrategyResult,
+    results: AnalysisResult[], // Accept the union type
+    result: AnalysisResult,   // Accept the union type
     initialCapital: number
   }> = ({ results, result, initialCapital }) => {
   const [currentTab, setCurrentTab] = useState(0);
@@ -23,6 +28,8 @@ export const AnalysisContentPanel: FC<{
 
   const isPortfolioView = result.strategy_name === 'Portfolio';
 
+  const showMLTab = isMLResult(result);
+
   return (
     <Paper elevation={0} sx={{display: 'flex', flexDirection: 'column', height:'100%', width:'100%', position:'relative'}}>
       <Box sx={{ display:'flex', flexDirection:'row', justifyContent:'space-between', paddingRight:4, borderBottom: 1, borderColor: 'divider', overflow:'fixed'}}>
@@ -31,6 +38,7 @@ export const AnalysisContentPanel: FC<{
             <Tab label="Equity" />
             <Tab label="Trade Log" />
             <Tab label="Metrics Overview" />
+            {showMLTab && <Tab label="Model Analysis" />} // Conditionally render the ML tab
             <Tab label="Correlation Matrix" /> 
             <Tab label="Advanced Metrics" />
             </Tabs>
@@ -58,11 +66,14 @@ export const AnalysisContentPanel: FC<{
           <MetricsOverviewTab
             results={results}
           />}
-        {currentTab === 3 &&
+        {showMLTab && currentTab === 3 && (
+          <ModelAnalysisTab analysis={result.model_analysis} />
+        )}
+        {currentTab === (showMLTab ? 4 : 3) &&
           <CorrelationMatrixTab 
             results={results}
           />}
-        {currentTab === 4 && 
+        {currentTab === (showMLTab ? 5 : 4) && 
           <AdvancedMetricsTab 
             metrics={result.metrics}
             monthlyReturns={result.monthly_returns}
