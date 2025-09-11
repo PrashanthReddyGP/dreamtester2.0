@@ -14,6 +14,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'; 
 import { TerminalPanel } from '../components/common/TerminalPanel';
 import { useTerminal } from '../context/TerminalContext';
+import DesignServicesIcon from '@mui/icons-material/DesignServices';
 
 interface MainLayoutProps {
   mode: 'light' | 'dark';
@@ -22,6 +23,7 @@ interface MainLayoutProps {
 
 const navItems = [
   { text: 'Strategy Lab', icon: <ScienceIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/lab' },
+  { text: 'Pipeline Editor', icon: <DesignServicesIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/pipeline' },
   { text: 'Machine Learning', icon: <PrecisionManufacturingIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/machinelearning' },
   { text: 'Analysis Hub', icon: <BarChartIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/analysis' },
   { text: 'Automation', icon: <AutoAwesomeIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/automation' },
