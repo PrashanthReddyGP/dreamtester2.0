@@ -7,16 +7,17 @@ export const HYPERPARAMETER_CONFIG: Record<string, { name: string; label: string
     ],
     'RandomForestClassifier': [
         { name: 'n_estimators', label: 'Number of Trees', type: 'number', defaultValue: 100 },
-        { name: 'max_depth', label: 'Max Depth', type: 'number', defaultValue: 10 },
-        { name: 'min_samples_split', label: 'Min Samples to Split', type: 'number', defaultValue: 2 },
+        { name: 'max_depth', label: 'Max Depth', type: 'number', defaultValue: 100000 },
         { name: 'min_samples_leaf', label: 'Min Samples per Leaf', type: 'number', defaultValue: 1 },
-        { name: 'class_weight', label: 'Class Weight', type: 'select', options: ['balanced', 'balanced_subsample', 'none'], defaultValue: 'balanced' },
+        { name: 'max_features', label: 'Max Features', type: 'select', options: ['sqrt', 'log2', 'none'], defaultValue: 'sqrt' },
+        { name: 'class_weight', label: 'Class Weight', type: 'select', options: ['balanced', 'balanced_subsample', 'none'], defaultValue: 'none' },
     ],
     'LightGBMClassifier': [
         { name: 'n_estimators', label: 'Number of Estimators', type: 'number', defaultValue: 100 },
         { name: 'learning_rate', label: 'Learning Rate', type: 'number', defaultValue: 0.1 },
         { name: 'num_leaves', label: 'Number of Leaves', type: 'number', defaultValue: 31 },
         { name: 'max_depth', label: 'Max Depth', type: 'number', defaultValue: -1 },
+        { name: 'class_weight', label: 'Class Weight', type: 'select', options: ['balanced', 'none'], defaultValue: 'none' }
     ],
     'XGBoostClassifier': [
         { name: 'n_estimators', label: 'Number of Estimators', type: 'number', defaultValue: 100 },
@@ -24,6 +25,7 @@ export const HYPERPARAMETER_CONFIG: Record<string, { name: string; label: string
         { name: 'max_depth', label: 'Max Depth', type: 'number', defaultValue: 3 },
         { name: 'subsample', label: 'Subsample Ratio', type: 'number', defaultValue: 1.0 },
         { name: 'colsample_bytree', label: 'Colsample by Tree', type: 'number', defaultValue: 1.0 },
+        { name: 'scale_pos_weight', label: 'Scale Positive Weight', type: 'number', defaultValue: 1.0 }
     ],
     'SVC': [ // Support Vector Classifier
         { name: 'C', label: 'Regularization (C)', type: 'number', defaultValue: 1.0 },
@@ -85,4 +87,31 @@ export const HYPERPARAMETER_CONFIG: Record<string, { name: string; label: string
         { name: 'min_samples', label: 'Min Samples in Neighborhood', type: 'number', defaultValue: 5 },
         { name: 'algorithm', label: 'Algorithm', type: 'select', options: ['auto', 'ball_tree', 'kd_tree', 'brute'], defaultValue: 'auto' },
     ]
+};
+
+
+// Configuration for the Hyperparameter Tuning Node
+export const TUNING_GRID_CONFIG: { [key: string]: ParamDef[] } = {
+    RandomForestClassifier: [
+        { name: 'n_estimators', label: 'Number of Trees', type: 'text', defaultValue: '[50, 100, 200]' },
+        { name: 'max_depth', label: 'Max Depth', type: 'text', defaultValue: '[10, 20, 100000]' },
+        { name: 'min_samples_split', label: 'Min Samples Split', type: 'text', defaultValue: '[2, 5, 10]' },
+        { name: 'criterion', label: 'Criterion', type: 'select', options: ["['gini', 'entropy']"], defaultValue: "['gini', 'entropy']" }
+    ],
+    XGBClassifier: [
+        { name: 'n_estimators', label: 'Number of Estimators', type: 'text', defaultValue: '[100, 200, 300]' },
+        { name: 'learning_rate', label: 'Learning Rate', type: 'text', defaultValue: '[0.01, 0.1, 0.2]' },
+        { name: 'max_depth', label: 'Max Depth', type: 'text', defaultValue: '[3, 5, 7]' },
+        { name: 'subsample', label: 'Subsample Ratio', type: 'text', defaultValue: '[0.8, 0.9, 1.0]' }
+    ],
+    // Add other models here in the same format
+};
+
+// Also add a type definition for the param grid
+export type ParamDef = {
+    name: string;
+    label: string;
+    type: 'number' | 'text' | 'select';
+    options?: string[];
+    defaultValue: any;
 };

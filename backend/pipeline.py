@@ -6,6 +6,7 @@ import ast
 import math
 import uuid
 import asyncio
+import inspect
 import itertools
 import traceback
 from enum import Enum
@@ -13,6 +14,7 @@ import numpy as np
 import pandas as pd
 import operator as op
 from typing import Optional
+from fastapi import HTTPException
 from datetime import time, timedelta 
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,6 +27,9 @@ from core.run_backtest import run_backtest_loop
 from core.metrics import calculate_metrics
 from core.connect_to_brokerage import get_client
 from core.basestrategy import BaseStrategy
+from core.params_heatmap import generate_parameter_heatmap
+from core.indicator_manager import IndicatorManager
+from core.portfolio import Portfolio as DefaultPortfolio
 
 # --- Map string operators from frontend to actual Python functions ---
 OPERATOR_MAP = {
@@ -36,6 +41,7 @@ OPERATOR_MAP = {
     '!==': op.ne
 }
 
+idk_manager = IndicatorManager()
 
 def send_update_to_queue(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, batch_id: str, message: dict):
     """
@@ -62,9 +68,51 @@ def send_update_to_queue(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, 
 
 
 
+# Helper function to dynamically load the custom portfolio class
+def get_portfolio_class_from_code(code_string: str) -> type[DefaultPortfolio]:
+    """
+    Executes the provided code string and extracts the first class that
+    inherits from the base Portfolio class.
+    """
+    try:
+        # Define the environment the user's code will run in.
+        # We don't need to provide our base class here anymore, as the user is
+        # defining their own from scratch.
+        global_scope = {
+            "__builtins__": __builtins__,
+            "np": np,
+            "pd": pd,
+        }
+        local_scope = {}
+
+        # Execute the code.
+        exec(code_string, global_scope, local_scope)
+
+        # --- Find the class named 'Portfolio' ---
+        # Instead of checking inheritance, we look for the specific class name.
+        if 'Portfolio' in local_scope and inspect.isclass(local_scope['Portfolio']):
+            
+            CustomPortfolioClass = local_scope['Portfolio']
+            
+            # As a safety check, ensure it has the required 'portfolio' method.
+            if hasattr(CustomPortfolioClass, 'portfolio') and callable(getattr(CustomPortfolioClass, 'portfolio')):
+                print(f"INFO: Successfully loaded custom portfolio class: {CustomPortfolioClass.__name__}")
+                return CustomPortfolioClass
+            else:
+                raise ValueError("The defined 'Portfolio' class is missing a callable 'portfolio' method.")
+
+        # If we get here, the user's code did not define a class named 'Portfolio'.
+        raise ValueError("No class named 'Portfolio' was found in the provided code.")
+
+    except Exception as e:
+        print(f"ERROR: Failed to load custom portfolio code: {e}")
+        traceback.print_exc()
+        print("--- Falling back to default Portfolio ---")
+        return DefaultPortfolio # Fallback to our default implementation
+
 
 # --- The Batch Manager Function ---
-def run_batch_manager(batch_id: str, files_data: list[dict], use_training_set: bool, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, connection_event: asyncio.Event): 
+def run_batch_manager(batch_id: str, files_data: list[dict], use_training_set: bool, portfolio_code: str | None, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, connection_event: asyncio.Event): 
     """
     Orchestrates the batch in parallel. It now primarily collects raw data
     for the final portfolio calculation, as workers send their own UI updates.
@@ -89,6 +137,19 @@ def run_batch_manager(batch_id: str, files_data: list[dict], use_training_set: b
     client = get_client(exchange_name='binance') # Instantiate the client once
 
     initialCapital = 1000 # Make this dynamic later
+
+    # Instantiate the correct Portfolio Manager
+    PortfolioManagerClass = DefaultPortfolio # Default
+    
+    if portfolio_code:
+        print(f"[{batch_id}] Custom portfolio code provided. Attempting to load...")
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Loading custom portfolio manager..."}})
+        PortfolioManagerClass = get_portfolio_class_from_code(portfolio_code)
+    else:
+        print(f"[{batch_id}] No custom portfolio code. Using default manager.")
+    
+    # Instantiate the chosen class
+    portfolio_manager = PortfolioManagerClass(initial_capital=initialCapital)
 
     raw_results_for_portfolio = []
 
@@ -249,10 +310,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], use_training_set: b
             if 'event_timestamp_entry' in complete_df.columns: complete_df.drop(columns=['event_timestamp_entry'], inplace=True)
             if 'event_timestamp_exit' in complete_df.columns: complete_df.drop(columns=['event_timestamp_exit'], inplace=True)
             
-            # --- Step 4: Call the NEW Portfolio Simulator (MODIFIED) ---
-            sample_instance = raw_results_for_portfolio[0][1]
-            
-            portfolio_equity, open_trade_count, closed_trades_log = sample_instance.portfolio(
+            portfolio_equity, open_trade_count, closed_trades_log = portfolio_manager.portfolio(
                 complete_df['timestamp'].values,
                 complete_df['trade_id_entry'].values,
                 complete_df['entry_direction'].values,
@@ -285,7 +343,43 @@ def run_batch_manager(batch_id: str, files_data: list[dict], use_training_set: b
                 
                 # Clean up helper columns
                 all_trade_events_df.drop(columns=['final_gross_return', 'final_net_return'], inplace=True)
-
+                
+                ##############################
+                # import matplotlib.pyplot as plt
+                
+                # # Extract trade-level returns from closed trades log
+                # trade_returns = np.array([t['final_net_return'] for t in closed_trades_log])
+                
+                # def monte_carlo_from_trades(trade_returns, n_sims=1000, n_trades=None, initial_capital=0):
+                #     if n_trades is None:
+                #         n_trades = len(trade_returns)
+                    
+                #     sims = []
+                #     for _ in range(n_sims):
+                #         sampled = np.random.choice(trade_returns, size=n_trades, replace=True)
+                #         equity = initial_capital + np.cumsum(sampled)
+                #         sims.append(equity)
+                #     return np.array(sims)
+                
+                # # Run simulation
+                # sims = monte_carlo_from_trades(trade_returns, n_sims=1000, initial_capital=0)
+                
+                # # Plot some equity curves
+                # plt.figure(figsize=(12,6))
+                # for i in np.random.choice(range(sims.shape[0]), 20, replace=False):
+                #     plt.plot(sims[i], alpha=0.3)
+                # plt.title("Monte Carlo Portfolio Simulations (Shuffled Trades)")
+                # plt.savefig(f"monte_carlo_sims\montecarlo_equity_{batch_id}.png")
+                # plt.close()
+                
+                # # Distribution of final equity
+                # final_equities = sims[:, -1]
+                # plt.hist(final_equities, bins=50)
+                # plt.title("Distribution of Final Equity After Monte Carlo")
+                # plt.savefig(f"monte_carlo_sims\montecarlo_hist_{batch_id}.png")
+                # plt.close()
+                ###########################
+            
             # Update the 'Open_Trades' column (same as before)
             if not all_trade_events_df.empty:
                 open_trades_lookup = complete_df[['timestamp', 'Portfolio_Open_Trades']]
@@ -340,7 +434,7 @@ def run_batch_manager(batch_id: str, files_data: list[dict], use_training_set: b
         
 
 # process_backtest_job should now RETURN the results instead of just printing
-def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: str, file_content: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, send_ui_update: bool = True, use_training_set: bool = False):
+def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: str, file_content: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, send_ui_update: bool = True, use_training_set: bool = False, ohlcv_df: Optional[pd.DataFrame] = None, sub_df: Optional[pd.DataFrame] = None):
     """
     Processes a SINGLE backtest job, sends live updates, and returns its results.
     """
@@ -351,7 +445,7 @@ def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: st
         
         # This pure function does all the heavy lifting
         strategy_data, strategy_instance, strategy_metrics, monthly_returns, no_fee_equity, trade_events_df = run_single_backtest(
-            batch_id, manager, job_id, file_name, file_content, initialCapital, client, queue, loop, use_training_set=use_training_set
+            batch_id, manager, job_id, file_name, file_content, initialCapital, client, queue, loop, use_training_set=use_training_set, ohlcv_df=ohlcv_df, sub_df=sub_df
             )
         
         if send_ui_update:
@@ -379,13 +473,15 @@ def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: st
         return None
 
 # This is a placeholder for your actual backtest engine
-def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str, strategy_code: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, ohlcv_df: Optional[pd.DataFrame] = None, use_training_set: bool = False):
+def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str, strategy_code: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, ohlcv_df: Optional[pd.DataFrame] = None, sub_df: Optional[pd.DataFrame] = None, use_training_set: bool = False):
     
     print(f"--- Running core backtest for {file_name} ---")
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Running core backtest for {file_name}"}})
-
+    
     # 1. Parse the code of config
     strategy_instance, strategy_name = parse_file(job_id, file_name, strategy_code)
+    
+    timeframe = strategy_instance.timeframe
     
     # 2. Get OHLCV data (either from CSV or from exchange)
     if ohlcv_df is not None:
@@ -395,7 +491,7 @@ def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str,
     else:
         print(f"--- Fetching OHLCV data from exchange for {file_name} ---")
         client = get_client('binance')
-        asset, ohlcv = fetch_candlestick_data(client, strategy_instance)
+        asset, ohlcv = fetch_candlestick_data(client, strategy_instance, sub_timeframe='')
     
     # If use_training_set is True, filter the DataFrame to include only 70% of the data
     if use_training_set:
@@ -404,17 +500,115 @@ def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str,
         ohlcv = ohlcv.iloc[:split_index]
         print(f"Using training set only: {len(ohlcv)} rows")
     
+    strategy_instance.dataframes = {timeframe: ohlcv}
+    
+    if strategy_instance.sub_timeframes != []:
+        for sub_timeframe in strategy_instance.sub_timeframes:
+            print(f"--- Fetching sub-timeframe ({sub_timeframe}) OHLCV data for {file_name} ---")
+            asset, sub_df = fetch_candlestick_data(client, strategy_instance, sub_timeframe=sub_timeframe)
+            strategy_instance.dataframes[sub_timeframe] = sub_df
+            print(f"  -> Sub-timeframe {sub_timeframe} has {len(sub_df)} rows.")
+    
     # 2. Fetch data
     # asset, ohlcv = fetch_candlestick_data(client, strategy_instance)
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Ohlcv Fetch Successful"}})
-
+    
     # 3. Calculate indicators
-    ohlcv_idk = calculate_indicators(strategy_instance, ohlcv)
+    ohlcv_idk = idk_manager.calculate_indicators(strategy_instance, strategy_instance.dataframes)
+    
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Indicators Calculation Successful"}})
     pd.set_option('display.max_columns', None)
     
+    # ohlcv_idk.to_csv('SOLUSDT.csv', index=False)
+    
+    strategy_instance.dataframes[timeframe] = ohlcv_idk
+    
+    main_timeframe = strategy_instance.timeframe
+    
+    if main_timeframe not in strategy_instance.dataframes:
+        raise ValueError(f"Main timeframe '{main_timeframe}' not found in strategy_instance.dataframes.")
+    
+    # Isolate the main dataframe and other "sub" dataframes. Use .copy() to prevent side effects.
+    main_df = strategy_instance.dataframes[main_timeframe].copy()
+    sub_dfs = {}
+    
+    if strategy_instance.sub_timeframes != []:
+        
+        sub_dfs = {tf: df.copy() for tf, df in strategy_instance.dataframes.items() if tf != main_timeframe}
+        
+        # --- 2. Pre-processing: Convert all timestamps to datetime objects ---
+        main_df['timestamp'] = pd.to_datetime(main_df['timestamp'], unit='ms')
+        
+        for tf, df in sub_dfs.items():
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        
+        print(f"  -> Main DF ('{main_timeframe}') has {len(main_df)} rows before merging.")
+        
+        # --- 3. Iteratively Merge Sub-DataFrames into the Main DataFrame ---
+        main_df_freq = main_df['timestamp'].diff().median()
+        
+        for sub_timeframe, sub_df in sub_dfs.items():
+            if sub_df.empty:
+                print(f"  - Skipping empty sub-dataframe for timeframe '{sub_timeframe}'.")
+                continue
+            
+            print(f"  - Merging sub-timeframe '{sub_timeframe}' into '{main_timeframe}'...")
+            sub_df_freq = sub_df['timestamp'].diff().median()
+            
+            # SCENARIO 1: sub_df is lower frequency (e.g., 1D sub -> 15m main)
+            if sub_df_freq > main_df_freq:
+                print(f"    - Scenario: Lower freq sub_df ({sub_df_freq}) -> Higher freq main_df ({main_df_freq}).")
+                print("    - Projecting data onto finer bars (with shift to prevent lookahead).")
+                
+                # Shift data by 1 to prevent lookahead bias (data from 10:00 1H bar is available at 11:00)
+                data_cols_to_shift = [col for col in sub_df.columns if col != 'timestamp']
+                sub_df[data_cols_to_shift] = sub_df[data_cols_to_shift].shift(1)
+                
+                # Rename columns dynamically (e.g., 'open' -> '1h_open')
+                prefix = f"{sub_timeframe}_"
+                sub_df_renamed = sub_df.add_prefix(prefix)
+                sub_df_renamed = sub_df_renamed.rename(columns={f'{prefix}timestamp': 'timestamp'})
+                
+                # Drop first row which is now NaN after the shift
+                sub_df_renamed = sub_df_renamed.dropna(subset=[f'{prefix}{col}' for col in data_cols_to_shift])
+                
+                # Use merge_asof for efficient point-in-time merging
+                main_df = main_df.sort_values('timestamp')
+                sub_df_renamed = sub_df_renamed.sort_values('timestamp')
+                
+                main_df = pd.merge_asof(main_df, sub_df_renamed, on='timestamp', direction='backward')
+                
+                # ffill() propagates the last known value, which is safe.
+                # bfill() would use future data, causing lookahead bias.
+                sub_columns = [col for col in main_df.columns if col.startswith(prefix)]
+                main_df[sub_columns] = main_df[sub_columns].ffill()
+                
+            # SCENARIO 2: sub_df is higher frequency (e.g., 15m sub -> 1D main)
+            else:
+                print(f"    - Scenario: Higher freq sub_df ({sub_df_freq}) -> Lower freq main_df ({main_df_freq}).")
+                print("    - Aggregating (resampling) finer data up to the main timeframe.")
+                
+                # Convert our timeframe string (e.g., '1h', '15m') to a pandas-compatible one ('1H', '15T')
+                resample_freq_str = main_timeframe.upper().replace('M', 'T')
+                
+                sub_df_agg = sub_df.set_index('timestamp').resample(resample_freq_str).agg({
+                    'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
+                }).dropna()
+                
+                sub_df_agg = sub_df_agg.reset_index()
+                
+                # Rename columns dynamically before merging (e.g., 'open' -> '15m_open')
+                prefix = f"{sub_timeframe}_"
+                sub_df_agg_renamed = sub_df_agg.add_prefix(prefix)
+                sub_df_agg_renamed = sub_df_agg_renamed.rename(columns={f'{prefix}timestamp': 'timestamp'})
+                
+                # Merge on the shared, resampled timestamp
+                main_df = pd.merge(main_df, sub_df_agg_renamed, on='timestamp', how='left')
+        
+        print(f"  -> After all merges, main_df has {len(main_df)} rows and columns: {list(main_df.columns)}")
+    
     # --- Step 4: Run the backtest simulation loop ---
-    run_result = run_backtest_loop(strategy_name, strategy_instance, ohlcv_idk, initialCapital)
+    run_result = run_backtest_loop(strategy_name, strategy_instance, initialCapital, main_df, sub_dfs)
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Backtest loop finished."}})
     
     # --- Step 5: Check for a complete failure from the backtest loop ---
@@ -436,7 +630,7 @@ def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str,
             np.array([]), # Empty no-fee equity
             pd.DataFrame() # Empty trade events
         )
-
+    
     # --- Step 6: Unpack the successful result ---
     (
         corrected_equity, 
@@ -446,6 +640,9 @@ def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str,
         corrected_no_fee_equity, 
         trade_events_df
     ) = run_result
+    
+    
+    # df_full.to_csv('ADAUSDT_with_Indicators.csv', index=False)
     
     # --- Step 7: Assemble the `strategy_data` dictionary for metrics ---
     # This dictionary is the primary data structure used by downstream functions.
@@ -463,7 +660,7 @@ def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str,
     print(f"--- Core backtest for {asset} finished ---")
     # print(f"  -> Strategy Metrics: {strategy_metrics}")
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Core backtest for {file_name} finished"}})
-
+    
     # In a real app, this would return the full results object
     return strategy_data, strategy_instance, strategy_metrics, monthly_returns, corrected_no_fee_equity, trade_events_df
 
@@ -519,14 +716,14 @@ def prepare_strategy_payload(strategy_data, metrics, monthly_returns, is_portfol
     equity_curve = list(zip(timestamps_ms[:min_len], equity_values[:min_len]))
     
     signals_df = strategy_data.get('signals')
-        
+    
     trades_json = []
     
     if signals_df is not None and not signals_df.empty:
         formatted_trades_df = format_datetime_columns_for_json(signals_df)
         
         trades_json = formatted_trades_df.to_dict(orient='records')
-        
+    
     return {
         "strategy_name": strategy_data['strategy_name'],
         "equity_curve": equity_curve,
@@ -645,21 +842,21 @@ def run_optimization_manager(batch_id: str, config: dict, manager: any, queue: a
         print(f"[{batch_id}] Batch manager started, waiting for client to connect...")
         await connection_event.wait()
         print(f"[{batch_id}] Client connected! Proceeding with batch...")
-
+    
     future = asyncio.run_coroutine_threadsafe(wait_for_connection(), loop)
     future.result() # This blocks until the client connects
     
     params_to_optimize = config['parameters_to_optimize']
     original_code = config['strategy_code']
-
+    
     param_ranges = [np.arange(p['start'], p['end'] + p['step'], p['step']) for p in params_to_optimize]
     all_combinations = list(itertools.product(*param_ranges))
     total_runs = len(all_combinations)
-
+    
     print(f"Total optimization runs to execute: {total_runs}")
-
+    
     send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Generated {total_runs} parameter sets to test."}})
-
+    
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
         for i, combo in enumerate(all_combinations):
             
@@ -673,7 +870,7 @@ def run_optimization_manager(batch_id: str, config: dict, manager: any, queue: a
                 param_strings.append(f"{param_config['name']}={current_value}")
             
             strategy_display_name = ", ".join(param_strings)
-
+            
             executor.submit(
                 process_optimization_job,
                 batch_id, manager, str(uuid.uuid4()), i + 1, total_runs,
@@ -681,12 +878,12 @@ def run_optimization_manager(batch_id: str, config: dict, manager: any, queue: a
                 queue=queue,
                 loop=loop
             )
-
+        
         #     futures.append(future)
         
         # for future in as_completed(futures):
         #     future.result() # Wait for all tasks to complete and raise exceptions if any
-
+    
     update_job_status(batch_id, "completed", "Optimization finished.")
     send_update_to_queue(loop, queue, batch_id, {"type": "batch_complete", "payload": {"message": "Optimization complete."}})
     print(f"--- OPTIMIZATION MANAGER ({batch_id}): Job finished. ---")
@@ -698,7 +895,7 @@ def modify_strategy_code(original_code: str, modifications: list) -> str:
     in the strategy code string before a run.
     """
     modified_code = original_code
-
+    
     # --- Step 1: Modify `self.params` dictionary ---
     params_match = re.search(r"self\.params\s*=\s*(\{.*?\})", modified_code, re.DOTALL)
     if params_match:
@@ -796,6 +993,9 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
         # Call the new, dedicated manager for this test type
         run_data_segmentation_manager(batch_id, config, manager, queue, loop)
         return # Important: exit after calling the specific manager
+    elif test_type == 'walk_forward':
+        run_walk_forward_manager(batch_id, config, manager, queue, loop)
+        return
 
     print(f"[{batch_id}] Starting standard optimization/screening test...")
     
@@ -865,15 +1065,25 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
         fail_job(batch_id, "No valid test combinations to run after pruning."); 
         return
     
+    # This list will hold all the raw results needed for the heatmap
+    all_results_for_heatmap = []
+    # This dictionary will map each running job (future) back to its parameter combo
+    future_to_combo = {}
+    
     # --- Step 7: The Nested Loop Logic for Job Submission ---
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
         for symbol in symbols_to_screen:
+            
+            # We can only generate a heatmap if we're optimizing on a single symbol.
+            # If screening multiple symbols, we will skip the heatmap.
+            can_generate_heatmap = (len(symbols_to_screen) == 1 and params_to_optimize)
+            
             code_with_symbol = re.sub(r"self\.symbol\s*=\s*['\"].*?['\"]", f"self.symbol = '{symbol}'", original_code)
             
             for combo in valid_combinations:
                 modifications_for_run = []
                 param_strings = []
-
+                
                 for j, param_config in enumerate(params_to_optimize):
                     current_value = combo[j]
                     modifications_for_run.append({**param_config, 'value': current_value})
@@ -883,9 +1093,9 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
                 final_modified_code = modify_strategy_code(code_with_symbol, modifications_for_run)
                 param_part = ", ".join(param_strings)
                 strategy_display_name = f"{symbol}" + (f" | {param_part}" if param_part else "")
-
+                
                 # Submit the job to the worker pool
-                executor.submit(
+                future = executor.submit(
                     process_backtest_job, # We can reuse the simplest worker
                     batch_id=batch_id,
                     manager=manager,
@@ -898,7 +1108,50 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
                     loop=loop,
                     send_ui_update=True # Immediate updates for each test
                 )
+                
+                # If we can generate a heatmap, map this job back to its combo
+                if can_generate_heatmap:
+                    future_to_combo[future] = combo
 
+    # This block will only run if we have futures to process for a heatmap
+    if future_to_combo:
+        print(f"--- UNIFIED MANAGER ({batch_id}): All jobs submitted. Now waiting for results to generate heatmap... ---")
+        
+        # Iterate through the futures as they complete
+        for future in as_completed(future_to_combo):
+            combo = future_to_combo[future]
+            try:
+                # result_tuple = (strategy_data, strategy_instance, strategy_metrics, ...)
+                result_tuple = future.result()
+                if result_tuple:
+                    # We need the combo (a tuple of values) and the metric value
+                    metrics = result_tuple[2]
+                    # You need to decide which metric to plot. Let's assume it's in the config.
+                    metric_to_plot = config.get('optimization_metric', 'Equity_Efficiency_Rate')
+                    metric_value = metrics.get(metric_to_plot)
+                    
+                    if metric_value is not None:
+                        # The heatmap function expects a list of (combo_tuple, metric_value)
+                        all_results_for_heatmap.append((combo, metric_value))
+            except Exception as e:
+                print(f"--- ERROR collecting result for combo {combo}: {e} ---")
+        
+        # After all results are collected, generate the heatmap
+        if all_results_for_heatmap:
+            print(f"--- UNIFIED MANAGER ({batch_id}): Generating parameter heatmap... ---")
+            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "All runs complete. Generating parameter heatmap..."}})
+            
+            # Assuming you have a single symbol for the heatmap
+            strategy_key = symbols_to_screen[0] 
+            
+            generate_parameter_heatmap(
+                results_data=all_results_for_heatmap,
+                params_to_optimize=params_to_optimize,
+                metric=config.get('optimization_metric', 'Equity_Efficiency_Rate'),
+                batch_id=batch_id,
+                strategy_key=strategy_key
+            )
+    
     # Note: A truly robust implementation would wait for all futures to complete
     # before sending the final "batch_complete" message. For simplicity, we omit that here.
     # The current implementation will send "batch_complete" after all jobs are submitted.
@@ -968,7 +1221,9 @@ def universal_backtest_worker(
     client, 
     queue: asyncio.Queue, 
     loop: asyncio.AbstractEventLoop, 
-    ohlcv_df: Optional[pd.DataFrame] = None
+    ohlcv_df: Optional[pd.DataFrame] = None,
+    sub_df: Optional[pd.DataFrame] = None,
+    send_to_frontend: Optional[bool] = True
 ):
     """
     This worker runs one backtest and sends the result. It can be called by any manager.
@@ -978,19 +1233,20 @@ def universal_backtest_worker(
     try:
         # We reuse the core backtest engine, passing the optional DataFrame
         strategy_data, strategy_instance, metrics, monthly_returns, no_fee_equity, trade_events_df = run_single_backtest(
-            batch_id, manager, job_id, display_name, code_str, capital, client, queue, loop, ohlcv_df=ohlcv_df
+            batch_id, manager, job_id, display_name, code_str, capital, client, queue, loop, ohlcv_df=ohlcv_df, sub_df=sub_df
         )
         
-        full_payload = prepare_strategy_payload(strategy_data, metrics, monthly_returns)
-        full_payload['strategy_name'] = display_name 
-
-        send_update_to_queue(loop, queue, batch_id, {
-            "type": "strategy_result",
-            "payload": convert_to_json_serializable(full_payload)
-        })
-                
+        if send_to_frontend == True:
+            full_payload = prepare_strategy_payload(strategy_data, metrics, monthly_returns)
+            full_payload['strategy_name'] = display_name 
+            
+            send_update_to_queue(loop, queue, batch_id, {
+                "type": "strategy_result",
+                "payload": convert_to_json_serializable(full_payload)
+            })
+        
         # Return raw data for portfolio manager if needed
-        return strategy_data, strategy_instance, metrics, monthly_returns, no_fee_equity
+        return strategy_data, strategy_instance, metrics, monthly_returns, no_fee_equity, trade_events_df
 
     except Exception as e:
         error_msg = f"ERROR in run '{display_name}': {traceback.format_exc()}"
@@ -1022,10 +1278,15 @@ def run_data_segmentation_manager(batch_id: str, config: dict, manager: any, que
         optimization_metric = config['optimization_metric']
         top_n_sets = config['top_n_sets']
         
+        sub_df = pd.DataFrame()
+        
         temp_code = re.sub(r"self\.symbol\s*=\s*['\"].*?['\"]", f"self.symbol = '{primary_symbol}'", original_code)
         strategy_instance, _ = parse_file(str(uuid.uuid4()), "temp", temp_code)
         client = get_client('binance')
-        _, full_ohlcv_df = fetch_candlestick_data(client, strategy_instance)
+        _, full_ohlcv_df = fetch_candlestick_data(client, strategy_instance, sub_timeframe='')
+        
+        if strategy_instance.sub_timeframe != '':
+            asset, sub_df = fetch_candlestick_data(client, strategy_instance, sub_timeframe=strategy_instance.sub_timeframe)
 
         total_rows = len(full_ohlcv_df)
         train_end_idx = int(total_rows * (config['training_pct'] / 100))
@@ -1041,6 +1302,9 @@ def run_data_segmentation_manager(batch_id: str, config: dict, manager: any, que
         # --- 4. Run Optimization on Training Data (Unchanged) ---
         send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Phase 1: Optimizing on Training data..."}})
         training_results = []
+        
+        all_results_for_heatmap = []
+        
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
             
             param_combos = generate_and_prune_combinations(config)
@@ -1048,6 +1312,7 @@ def run_data_segmentation_manager(batch_id: str, config: dict, manager: any, que
             if not param_combos: raise ValueError("No valid parameter combinations.")
             
             futures = {}
+            
             for c in param_combos:
                 # Call the helper function ONCE to get both pieces of data
                 modifications, display_name = build_modifications_and_name(c, config['parameters_to_optimize'], primary_symbol)
@@ -1057,15 +1322,41 @@ def run_data_segmentation_manager(batch_id: str, config: dict, manager: any, que
                 future = executor.submit(
                     universal_backtest_worker,
                     batch_id, manager, display_name, modified_code, 1000,
-                    client, queue, loop, train_df.copy()
+                    client, queue, loop, train_df.copy(), sub_df=sub_df
                 )
                 futures[future] = c
             
             for future in as_completed(futures):
+                
+                combo = futures[future]
                 result = future.result()
-                if result: training_results.append((result, futures[future]))
+                
+                if result: 
+                    training_results.append((result, combo))
+                    
+                    # result is a tuple: (strategy_data, instance, metrics, ...)
+                    metrics = result[2]
+                    metric_to_plot = config.get('optimization_metric', 'Equity_Efficiency_Rate')
+                    metric_value = metrics.get(metric_to_plot)
+                    
+                    if metric_value is not None:
+                        # The heatmap function expects (combo_tuple, metric_value)
+                        all_results_for_heatmap.append((combo, metric_value))
         
         if not training_results: raise ValueError("Optimization on training data yielded no runs.")
+        
+        # This is the perfect spot: all training backtests are complete.
+        if all_results_for_heatmap:
+            print(f"--- DATA SEGMENTATION ({batch_id}): Generating parameter heatmap for Training data... ---")
+            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Generating parameter heatmap for Training results..."}})
+            
+            generate_parameter_heatmap(
+                results_data=all_results_for_heatmap,
+                params_to_optimize=config.get('parameters_to_optimize', []),
+                metric=config.get('optimization_metric', 'Equity_Efficiency_Rate'),
+                batch_id=batch_id,
+                strategy_key=f"{primary_symbol}_Training" # Add a suffix to the filename
+            )
         
         # --- Create a dictionary for easy lookup of training metrics by combo ---
         training_metrics_map = { combo: result[2] for result, combo in training_results }
@@ -1073,7 +1364,7 @@ def run_data_segmentation_manager(batch_id: str, config: dict, manager: any, que
         # --- 5. Rank Results and Select Top N ---
         is_reverse_sort = optimization_metric != 'Max_Drawdown'
         training_results.sort(key=lambda x: x[0][2].get(optimization_metric, -9999), reverse=is_reverse_sort)
-        top_n_from_training = training_results[:top_n_sets]
+        top_n_from_training = training_results#[:top_n_sets]
         send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Phase 1 Complete. Selected top {len(top_n_from_training)} parameter sets for validation."}})
 
         # --- Split Step 6 into three parts ---
@@ -1088,13 +1379,39 @@ def run_data_segmentation_manager(batch_id: str, config: dict, manager: any, que
             for _, combo in top_n_from_training:
                 modifications, display_name = build_modifications_and_name(combo, config['parameters_to_optimize'], primary_symbol)
                 modified_code = modify_strategy_code(temp_code, modifications)
-                future = executor.submit(universal_backtest_worker, batch_id, manager, f"{display_name} [Validation]", modified_code, 1000, client, queue, loop, validation_df.copy())
+                future = executor.submit(universal_backtest_worker, batch_id, manager, f"{display_name} [Validation]", modified_code, 1000, client, queue, loop, validation_df.copy(), sub_df=sub_df)
                 futures[future] = combo # Store the combo to link it to the result
             
             for future in as_completed(futures):
-                result = future.result()
-                if result: validation_results.append((result, futures[future]))
                 
+                combo = futures[future]
+                result = future.result()
+                
+                if result: 
+                    validation_results.append((result, combo))
+                    
+                    # result is a tuple: (strategy_data, instance, metrics, ...)
+                    metrics = result[2]
+                    metric_to_plot = config.get('optimization_metric', 'Equity_Efficiency_Rate')
+                    metric_value = metrics.get(metric_to_plot)
+                    
+                    if metric_value is not None:
+                        # The heatmap function expects (combo_tuple, metric_value)
+                        all_results_for_heatmap.append((combo, metric_value))
+        
+        # This is the perfect spot: all training backtests are complete.
+        if all_results_for_heatmap:
+            print(f"--- DATA SEGMENTATION ({batch_id}): Generating parameter heatmap for Validation data... ---")
+            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Generating parameter heatmap for Validation results..."}})
+            
+            generate_parameter_heatmap(
+                results_data=all_results_for_heatmap,
+                params_to_optimize=config.get('parameters_to_optimize', []),
+                metric=config.get('optimization_metric', 'Equity_Efficiency_Rate'),
+                batch_id=batch_id,
+                strategy_key=f"{primary_symbol}_Validation" # Add a suffix to the filename
+            )
+        
         # --- Create a dictionary for easy lookup of validation metrics by combo ---
         validation_metrics_map = { combo: result[2] for result, combo in validation_results }
 
@@ -1171,7 +1488,7 @@ def run_data_segmentation_manager(batch_id: str, config: dict, manager: any, que
                 for combo in qualified_for_testing:
                     modifications, display_name = build_modifications_and_name(combo, config['parameters_to_optimize'], primary_symbol)
                     modified_code = modify_strategy_code(temp_code, modifications)
-                    future = executor.submit(universal_backtest_worker, batch_id, manager, f"{display_name} [Testing]", modified_code, 1000, client, queue, loop, test_df.copy())
+                    future = executor.submit(universal_backtest_worker, batch_id, manager, f"{display_name} [Testing]", modified_code, 1000, client, queue, loop, test_df.copy(), sub_df=sub_df)
                     futures[future] = combo # <-- Map the future back to its combo
                 
                 # --- Collect the testing results ---
@@ -1221,6 +1538,295 @@ def run_data_segmentation_manager(batch_id: str, config: dict, manager: any, que
         update_job_status(batch_id, "completed", "Data Segmentation test finished.")
         send_update_to_queue(loop, queue, batch_id, {"type": "batch_complete", "payload": {"message": "Data Segmentation test complete."}})
         print(f"--- DATA SEGMENTATION ({batch_id}): Job finished. ---")
+
+
+def run_walk_forward_manager(batch_id: str, config: dict, manager: any, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+    """
+    Manages a Walk-Forward Analysis test. (Corrected to use direct combo tracking)
+    """
+    try:
+        send_update_to_queue(loop, queue, batch_id, {
+            "type": "batch_info", 
+            "payload": { "config": config }
+        })
+        
+        print(f"--- WALK-FORWARD ({batch_id}): Starting job ---")
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "Starting Walk-Forward Analysis..."}})
+        
+        original_code = config['strategy_code']
+        primary_symbol = config.get('symbols_to_screen', [])[0]
+        optimization_metric = config['optimization_metric']
+        
+        sub_df = pd.DataFrame()
+        
+        temp_code = re.sub(r"self\.symbol\s*=\s*['\"].*?['\"]", f"self.symbol = '{primary_symbol}'", original_code)
+        strategy_instance, _ = parse_file(str(uuid.uuid4()), "temp", temp_code)
+        client = get_client('binance')
+        _, full_ohlcv_df = fetch_candlestick_data(client, strategy_instance)
+        
+        strategy_instance.dataframes = {strategy_instance.timeframe: full_ohlcv_df}
+        
+        if 'timestamp' not in full_ohlcv_df.columns:
+            raise ValueError("OHLCV DataFrame must have a 'timestamp' column.")
+        full_ohlcv_df['timestamp'] = pd.to_datetime(full_ohlcv_df['timestamp'], unit='ms')
+        
+        def get_timedelta(length, unit):
+            if unit == 'days': return timedelta(days=length)
+            if unit == 'weeks': return timedelta(weeks=length)
+            if unit == 'months': return timedelta(days=length * 30)
+            raise ValueError(f"Invalid time unit: {unit}")
+        
+        train_delta = get_timedelta(config['training_period_length'], config['training_period_unit'])
+        test_delta = get_timedelta(config['testing_period_length'], config['testing_period_unit'])
+        step_delta = test_delta * (config['step_forward_pct'] / 100)
+        is_anchored = config['is_anchored']
+        
+        start_date = full_ohlcv_df['timestamp'].min()
+        end_date = full_ohlcv_df['timestamp'].max()
+        all_out_of_sample_results = []
+        
+        current_train_start = start_date
+        current_train_end = start_date + train_delta
+        fold_num = 1
+        
+        strategy_name = ""
+        
+        while current_train_end + test_delta <= end_date:
+            current_test_start = current_train_end
+            current_test_end = current_train_end + test_delta
+            
+            train_df = full_ohlcv_df[(full_ohlcv_df['timestamp'] >= current_train_start) & (full_ohlcv_df['timestamp'] < current_train_end)].reset_index(drop=True)
+            test_df = full_ohlcv_df[(full_ohlcv_df['timestamp'] >= current_test_start) & (full_ohlcv_df['timestamp'] < current_test_end)].reset_index(drop=True)
+            
+            if train_df.empty or test_df.empty:
+                current_train_end += step_delta
+                if not is_anchored: current_train_start += step_delta
+                fold_num += 1
+                continue
+            
+            log_msg = (f"--- FOLD {fold_num} ---\n"
+                        f"  Training: {train_df['timestamp'].min().date()} to {train_df['timestamp'].max().date()} ({len(train_df)} rows)\n"
+                        f"  Testing:  {test_df['timestamp'].min().date()} to {test_df['timestamp'].max().date()} ({len(test_df)} rows)")
+            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": log_msg}})
+            
+            training_results = []
+            param_combos = generate_and_prune_combinations(config)
+            if not param_combos: raise ValueError("No valid parameter combinations.")
+            
+            with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+                # Use a dictionary to map futures back to their combos
+                futures = {}
+                for c in param_combos:
+                    modifications, display_name = build_modifications_and_name(c, config['parameters_to_optimize'], primary_symbol)
+                    modified_code = modify_strategy_code(temp_code, modifications)
+                    
+                    if strategy_name == "":
+                        strategy_name = display_name
+                    
+                    future = executor.submit(
+                        universal_backtest_worker,
+                        batch_id, manager, f"Fold {fold_num} Train | {display_name}", 
+                        modified_code, 1000, client, queue, loop, train_df.copy(), sub_df=sub_df, send_to_frontend=False
+                    )
+                    futures[future] = c # Map the future to the combo tuple
+                
+                for future in as_completed(futures):
+                    combo = futures[future]
+                    result_tuple = future.result()
+                    if result_tuple:
+                        # Store the result AND its corresponding combo together
+                        training_results.append((result_tuple, combo))
+                        
+            if not training_results:
+                send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"level": "WARNING", "message": f"Fold {fold_num}: No training results. Skipping."}})
+                current_train_end += step_delta
+                if not is_anchored: current_train_start += step_delta
+                fold_num += 1
+                continue
+            
+            # --- Find Best Parameter Set ---
+            is_reverse_sort = optimization_metric not in ['Max_Drawdown', 'Max_Drawdown_Duration']
+            # Now we sort based on the metrics inside the nested result tuple
+            training_results.sort(key=lambda x: x[0][2].get(optimization_metric, -9999), reverse=is_reverse_sort)
+            
+            best_run_tuple, best_combo = training_results[0]
+            
+            # Use the simple, reliable combo tuple to build the display name and modifications
+            modifications, display_name = build_modifications_and_name(best_combo, config['parameters_to_optimize'], '')
+            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Fold {fold_num}: Best params found: {display_name.strip(' | ')}"}})
+            
+            # Re-create the code with the single best set of parameters
+            best_code = modify_strategy_code(temp_code, modifications)
+            
+            strategy_name = strategy_name.split('|')[0].strip()
+            
+            # Run the single backtest on Out-of-Sample data
+            oos_result_tuple = universal_backtest_worker(
+                batch_id, manager, f"{strategy_name} | Fold {fold_num} [OOS]", best_code,
+                1000, client, queue, loop, test_df.copy(), sub_df=sub_df, send_to_frontend=True
+            )
+            
+            if oos_result_tuple:
+                all_out_of_sample_results.append(oos_result_tuple)
+            
+            # Advance the time windows
+            current_train_end += step_delta
+            if not is_anchored: current_train_start += step_delta
+            fold_num += 1
+            
+        if not all_out_of_sample_results:
+            raise ValueError("Walk-Forward Analysis produced no out-of-sample results.")
+        
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "All folds complete. Aggregating out-of-sample results..."}})
+        
+        # This function does not need the combos, only the final results, so it remains unchanged.
+        combine_walk_forward_results(batch_id, all_out_of_sample_results, queue, loop, full_ohlcv_df, strategy_name)
+        
+    except Exception as e:
+        error_msg = f"Walk-Forward Analysis failed: {traceback.format_exc()}"
+        print(error_msg)
+        fail_job(batch_id, error_msg)
+        send_update_to_queue(loop, queue, batch_id, {"type": "error", "payload": {"message": str(e)}})
+    finally:
+        update_job_status(batch_id, "completed", "Walk-Forward Analysis finished.")
+        send_update_to_queue(loop, queue, batch_id, {"type": "batch_complete", "payload": {"message": "Walk-Forward Analysis complete."}})
+        print(f"--- WALK-FORWARD ({batch_id}): Job finished. ---")
+
+
+def combine_walk_forward_results(batch_id, oos_results, queue, loop, full_ohlcv_df, strategy_name):
+    """
+    Combines the results from individual out-of-sample (OOS) folds
+    into a single, continuous performance report.
+    """
+    if not oos_results:
+        print(f"[{batch_id}] No out-of-sample results to combine.")
+        return
+    
+    strategy_instance = None
+    
+    all_entry_events = []
+    all_exit_events = []
+    all_trade_events_for_log = []
+    trade_id_counter = 0
+    total_no_fee_equity_gain = 0
+    
+    for fold in oos_results:
+        
+        _, instance, _, _, no_fee_equity, events = fold
+        
+        if strategy_instance is None:
+            strategy_instance = instance
+        
+        events_copy = events.copy()
+        events_copy['trade_id'] = range(trade_id_counter, trade_id_counter + len(events_copy))
+        
+        trade_id_counter += len(events_copy)
+        
+        all_trade_events_for_log.append(events_copy)
+        
+        no_fee_equity_gain = no_fee_equity[-1] - no_fee_equity[0] if len(no_fee_equity) > 1 else 0
+        total_no_fee_equity_gain += no_fee_equity_gain
+    
+    filtered_trade_events_list = []
+    processed_entry_timestamps = set()
+    
+    for trades_df in all_trade_events_for_log:
+        if not trades_df.empty:
+            is_new_trade = ~trades_df['timestamp'].isin(processed_entry_timestamps)
+            new_trades_df = trades_df[is_new_trade]
+            
+            if not new_trades_df.empty:
+                filtered_trade_events_list.append(new_trades_df)
+                processed_entry_timestamps.update(new_trades_df['timestamp'].tolist())
+    
+    # Now, concatenate the CLEANED list of trades
+    all_trade_events_df = pd.concat(filtered_trade_events_list, ignore_index=True) if filtered_trade_events_list else pd.DataFrame()
+    
+    # Now that we have a clean, combined DataFrame, assign unique trade IDs
+    if not all_trade_events_df.empty:
+        all_trade_events_df['trade_id'] = range(len(all_trade_events_df))
+    
+        # Prepare for portfolio simulation from the single, clean DataFrame
+        entry_df = all_trade_events_df[['timestamp', 'trade_id', 'Signal', 'Entry', 'Stop Loss', 'Take Profit', 'Risk']].copy()
+        entry_df.rename(columns={
+            'timestamp': 'event_timestamp', 'Signal': 'entry_direction',
+            'Entry': 'entry_price', 'Stop Loss': 'entry_sl', 'Take Profit': 'entry_tp', 'Risk': 'risk_percent'
+        }, inplace=True)
+        all_entry_events.append(entry_df)
+        
+        exit_df = all_trade_events_df[['Exit_Time', 'trade_id', 'Result']].copy()
+        exit_df.rename(columns={'Exit_Time': 'event_timestamp', 'Result': 'exit_result'}, inplace=True)
+        all_exit_events.append(exit_df)
+    
+    master_entries = pd.concat(all_entry_events, ignore_index=True) if all_entry_events else pd.DataFrame()
+    master_exits = pd.concat(all_exit_events, ignore_index=True) if all_exit_events else pd.DataFrame()
+    
+    entries_agg = master_entries.groupby('event_timestamp').agg(list).reset_index() if not master_entries.empty else pd.DataFrame(columns=['event_timestamp'])
+    exits_agg = master_exits.groupby('event_timestamp').agg(list).reset_index() if not master_exits.empty else pd.DataFrame(columns=['event_timestamp'])
+    
+    complete_df = pd.merge(full_ohlcv_df.copy(), entries_agg, left_on='timestamp', right_on='event_timestamp', how='left')
+    complete_df = pd.merge(complete_df, exits_agg, left_on='timestamp', right_on='event_timestamp', how='left', suffixes=('_entry', '_exit'))
+    
+    if 'event_timestamp_entry' in complete_df.columns: complete_df.drop(columns=['event_timestamp_entry'], inplace=True)
+    if 'event_timestamp_exit' in complete_df.columns: complete_df.drop(columns=['event_timestamp_exit'], inplace=True)
+    
+    portfolio_equity, open_trade_count, closed_trades_log = strategy_instance.portfolio(
+        complete_df['timestamp'].values,
+        complete_df['trade_id_entry'].values,
+        complete_df['entry_direction'].values,
+        complete_df['entry_price'].values,
+        complete_df['entry_sl'].values,
+        complete_df['entry_tp'].values,
+        complete_df['risk_percent'].values,
+        complete_df['trade_id_exit'].values,
+        complete_df['exit_result'].values
+    )
+    
+    # --- Step 5: Process Results with the new logic (same as run_batch_manager) ---
+    aligned_equity = pd.Series(portfolio_equity, index=complete_df.index)
+    complete_df['Portfolio_Open_Trades'] = open_trade_count
+    
+    if closed_trades_log:
+        returns_df = pd.DataFrame(closed_trades_log)
+        all_trade_events_df = pd.merge(all_trade_events_df, returns_df, on='trade_id', how='left')
+        all_trade_events_df['Returns'] = all_trade_events_df['final_gross_return'].round(2)
+        all_trade_events_df['Commissioned Returns'] = all_trade_events_df['final_net_return'].round(2)
+        all_trade_events_df.drop(columns=['final_gross_return', 'final_net_return'], inplace=True)
+
+    # Update the 'Open_Trades' column for the final trade log
+    if not all_trade_events_df.empty:
+        open_trades_lookup = complete_df[['timestamp', 'Portfolio_Open_Trades']]
+        all_trade_events_df = pd.merge(all_trade_events_df, open_trades_lookup, on='timestamp', how='left')
+        all_trade_events_df.drop(columns=['Open_Trades'], inplace=True, errors='ignore')
+        all_trade_events_df.rename(columns={'Portfolio_Open_Trades': 'Open_Trades'}, inplace=True)
+    
+    
+    portfolio_name = f"{strategy_name} [Walk-Forward OOS]"
+    portfolio_strategy_data = {
+        'strategy_name': portfolio_name,
+        'equity': aligned_equity,
+        'ohlcv': complete_df,
+        'signals': all_trade_events_df
+    }
+    
+    portfolio_net_profit = aligned_equity.iloc[-1] - aligned_equity.iloc[0]
+    
+    if total_no_fee_equity_gain > 0:
+        commission = round(((total_no_fee_equity_gain - portfolio_net_profit) * 100) / total_no_fee_equity_gain, 2)
+    else:
+        commission = 0.0
+    
+    # --- Step 7: Recalculate metrics and prepare final payload ---
+    portfolio_metrics, portfolio_returns = calculate_metrics(portfolio_strategy_data, 1000, commission)
+    final_payload = prepare_strategy_payload(portfolio_strategy_data, portfolio_metrics, portfolio_returns)
+    
+    send_update_to_queue(loop, queue, batch_id, {
+        "type": "strategy_result",
+        "payload": convert_to_json_serializable(final_payload)
+    })
+    
+    print(f"[{batch_id}] Successfully combined walk-forward results and sent final report.")
+
 
 # --- 2. Helper Functions for the New Manager ---
 # We need to extract the combination generation logic from `run_unified_test_manager`
@@ -1275,6 +1881,12 @@ def build_modifications_and_name(combo: tuple, params_config: list, symbol: str)
     """Builds modification list and display name from a parameter combo."""
     modifications = []
     param_strings = []
+    
+    # Ensure that 'combo' is always treated as a tuple or list-like object,
+    # even if it's a single value (e.g., an int or float) from a single-parameter optimization.
+    if not isinstance(combo, (list, tuple)):
+        combo = (combo,)
+    
     for i, param_conf in enumerate(params_config):
         current_value = combo[i]
         modifications.append({**param_conf, 'value': current_value})
@@ -1330,7 +1942,7 @@ def run_hedge_optimization_manager(batch_id: str, config: dict, manager: any, qu
         
         master_timestamps_array = np.sort(pd.concat([ohlcv_a['timestamp'], ohlcv_b['timestamp']]).unique())
         master_ohlcv_df = pd.DataFrame({'timestamp': master_timestamps_array})
-
+        
         # This list will now store tuples of (payload, ohlcv_df)
         portfolio_results_with_data = [] 
         with ThreadPoolExecutor() as executor:
@@ -1423,6 +2035,8 @@ def run_individual_optimization(batch_id, strategy_config, symbol, top_n, metric
     lightweight_results = [] 
     representative_ohlcv_df = None 
     
+    all_results_for_heatmap = []
+    
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
         futures = {}
         for combo in param_combos:
@@ -1451,6 +2065,12 @@ def run_individual_optimization(batch_id, strategy_config, symbol, top_n, metric
                 if result_tuple:
                     strategy_data, instance, metrics, monthly, no_fee, trade_events_df = result_tuple
                     
+                    combo = futures[future]
+                    metric_value = metrics.get(metric)
+                    
+                    if metric_value is not None:
+                        all_results_for_heatmap.append((combo, metric_value))
+                    
                     # If we haven't found a timeline yet and this one is valid, grab it.
                     if representative_ohlcv_df is None and not strategy_data['ohlcv'].empty:
                         representative_ohlcv_df = strategy_data['ohlcv'][['timestamp']].copy()
@@ -1465,10 +2085,20 @@ def run_individual_optimization(batch_id, strategy_config, symbol, top_n, metric
                         no_fee,
                         trade_events_df
                     )
+                    
                     lightweight_results.append(lightweight_tuple)
             except Exception as e:
                 print(f"!!! Error in individual optimization sub-task for {futures[future]}: {e} !!!")
 
+    if all_results_for_heatmap:
+        generate_parameter_heatmap(
+            results_data=all_results_for_heatmap,
+            params_to_optimize=strategy_config.get('parameters_to_optimize', []),
+            metric=metric,
+            batch_id=batch_id,
+            strategy_key='x'
+        )
+    
     if not lightweight_results:
         return [], None
 
@@ -1522,10 +2152,10 @@ def combine_and_evaluate_pair(result_a, result_b, base_ohlcv_df):
             all_trade_events_for_log.append(events_b_copy)
 
         for trade_events in all_trade_events_for_log:
-            entry_df = trade_events[['timestamp', 'trade_id', 'Signal', 'Entry', 'Stop Loss', 'Take Profit']].copy()
+            entry_df = trade_events[['timestamp', 'trade_id', 'Signal', 'Entry', 'Stop Loss', 'Take Profit', 'Risk']].copy()
             entry_df.rename(columns={
                 'timestamp': 'event_timestamp', 'Signal': 'entry_direction',
-                'Entry': 'entry_price', 'Stop Loss': 'entry_sl', 'Take Profit': 'entry_tp'
+                'Entry': 'entry_price', 'Stop Loss': 'entry_sl', 'Take Profit': 'entry_tp', 'Risk': 'risk_percent'
             }, inplace=True)
             all_entry_events.append(entry_df)
 
@@ -1555,6 +2185,7 @@ def combine_and_evaluate_pair(result_a, result_b, base_ohlcv_df):
             complete_df['entry_price'].values,
             complete_df['entry_sl'].values,
             complete_df['entry_tp'].values,
+            complete_df['risk_percent'].values,
             complete_df['trade_id_exit'].values,
             complete_df['exit_result'].values
         )
@@ -1747,3 +2378,189 @@ def calculate_metrics_from_equity(equity_df: pd.DataFrame, name: str, initial_ca
         "monthly_returns": monthly_returns_data
     }
     return payload
+
+def get_charting_data(code, symbol, timeframe):
+    
+    file_name = f"{symbol}_{timeframe}.py"
+    
+    strategy_instance, strategy_name = parse_file(str(uuid.uuid4()), file_name, code)
+    
+    print(f"[{strategy_name}] Preparing chart data for {symbol} on {timeframe}...")
+    
+    timeframe = strategy_instance.timeframe
+    
+    client = get_client('binance')
+    
+    try:
+        asset, ohlcv = fetch_candlestick_data(client, strategy_instance, sub_timeframe='')
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch OHLCV data: {str(e)}")
+    
+    strategy_instance.dataframes = {timeframe: ohlcv}
+    
+    if strategy_instance.sub_timeframes != []:
+        for sub_timeframe in strategy_instance.sub_timeframes:
+            print(f"--- Fetching sub-timeframe ({sub_timeframe}) OHLCV data for {file_name} ---")
+            asset, sub_df = fetch_candlestick_data(client, strategy_instance, sub_timeframe=sub_timeframe)
+            strategy_instance.dataframes[sub_timeframe] = sub_df
+            print(f"  -> Sub-timeframe {sub_timeframe} has {len(sub_df)} rows.")
+    
+    # Calculate indicators
+    ohlcv_idk = idk_manager.calculate_indicators(strategy_instance, strategy_instance.dataframes)
+    
+    # 4a. Format OHLCV data
+    ohlcv_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    
+    # Ensure timestamp is in milliseconds for the frontend
+    ohlcv_idk['timestamp_ms'] = (pd.to_datetime(ohlcv_idk['timestamp']).astype(np.int64) // 10**6)
+    
+    ohlcv_payload = ohlcv_idk[['timestamp_ms'] + ohlcv_cols[1:]].values.tolist()
+
+    # 4b. Format Indicator data
+    indicator_payload = {}
+    # Find all columns that are NOT the standard OHLCV or timestamp columns
+    indicator_cols = [col for col in ohlcv_idk.columns if col not in ohlcv_cols and col != 'timestamp_ms']
+    
+    for col_name in indicator_cols:
+        # Create a clean DataFrame for this indicator to handle NaNs
+        indicator_df = ohlcv_idk[['timestamp_ms', col_name]].dropna()
+        
+        # Convert to the required {"time": ..., "value": ...} format
+        indicator_payload[col_name] = indicator_df.rename(
+            columns={'timestamp_ms': 'time', col_name: 'value'}
+        ).to_dict(orient='records')
+    
+    return ohlcv_payload, indicator_payload, strategy_name
+
+
+def download_dataframe(code, symbol, timeframe):
+    
+    file_name = f"{symbol}_{timeframe}.py"
+    
+    strategy_instance, strategy_name = parse_file(str(uuid.uuid4()), file_name, code)
+    
+    print(f"[{strategy_name}] Preparing data for {symbol} on {timeframe}...")
+    
+    timeframe = strategy_instance.timeframe
+    
+    client = get_client('binance')
+    
+    try:
+        asset, ohlcv = fetch_candlestick_data(client, strategy_instance, sub_timeframe='')
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch OHLCV data: {str(e)}")
+    
+    strategy_instance.dataframes = {timeframe: ohlcv}
+    
+    if strategy_instance.sub_timeframes != []:
+        for sub_timeframe in strategy_instance.sub_timeframes:
+            print(f"--- Fetching sub-timeframe ({sub_timeframe}) OHLCV data for {file_name} ---")
+            asset, sub_df = fetch_candlestick_data(client, strategy_instance, sub_timeframe=sub_timeframe)
+            strategy_instance.dataframes[sub_timeframe] = sub_df
+            print(f"  -> Sub-timeframe {sub_timeframe} has {len(sub_df)} rows.")
+    
+    # Calculate indicators
+    ohlcv_idk = idk_manager.calculate_indicators(strategy_instance, strategy_instance.dataframes)
+    
+    strategy_instance.dataframes[timeframe] = ohlcv_idk
+    
+    main_timeframe = strategy_instance.timeframe
+    
+    if main_timeframe not in strategy_instance.dataframes:
+        raise ValueError(f"Main timeframe '{main_timeframe}' not found in strategy_instance.dataframes.")
+    
+    main_df = strategy_instance.dataframes[main_timeframe].copy()
+    
+    if strategy_instance.sub_timeframes != []:
+        
+        # Isolate the main dataframe and other "sub" dataframes. Use .copy() to prevent side effects.
+        sub_dfs = {tf: df.copy() for tf, df in strategy_instance.dataframes.items() if tf != main_timeframe}
+        
+        # --- 2. Pre-processing: Convert all timestamps to datetime objects ---
+        main_df['timestamp'] = pd.to_datetime(main_df['timestamp'], unit='ms')
+        
+        for tf, df in sub_dfs.items():
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        
+        print(f"  -> Main DF ('{main_timeframe}') has {len(main_df)} rows before merging.")
+        
+        # --- 3. Iteratively Merge Sub-DataFrames into the Main DataFrame ---
+        main_df_freq = main_df['timestamp'].diff().median()
+        
+        for sub_timeframe, sub_df in sub_dfs.items():
+            if sub_df.empty:
+                print(f"  - Skipping empty sub-dataframe for timeframe '{sub_timeframe}'.")
+                continue
+            
+            print(f"  - Merging sub-timeframe '{sub_timeframe}' into '{main_timeframe}'...")
+            sub_df_freq = sub_df['timestamp'].diff().median()
+            
+            # SCENARIO 1: sub_df is lower frequency (e.g., 1D sub -> 15m main)
+            if sub_df_freq > main_df_freq:
+                print(f"    - Scenario: Lower freq sub_df ({sub_df_freq}) -> Higher freq main_df ({main_df_freq}).")
+                print("    - Projecting data onto finer bars (with shift to prevent lookahead).")
+                
+                # Shift data by 1 to prevent lookahead bias (data from 10:00 1H bar is available at 11:00)
+                data_cols_to_shift = [col for col in sub_df.columns if col != 'timestamp']
+                sub_df[data_cols_to_shift] = sub_df[data_cols_to_shift].shift(1)
+                
+                # Rename columns dynamically (e.g., 'open' -> '1h_open')
+                prefix = f"{sub_timeframe}_"
+                sub_df_renamed = sub_df.add_prefix(prefix)
+                sub_df_renamed = sub_df_renamed.rename(columns={f'{prefix}timestamp': 'timestamp'})
+                
+                # Drop first row which is now NaN after the shift
+                sub_df_renamed = sub_df_renamed.dropna(subset=[f'{prefix}{col}' for col in data_cols_to_shift])
+                
+                # Use merge_asof for efficient point-in-time merging
+                main_df = main_df.sort_values('timestamp')
+                sub_df_renamed = sub_df_renamed.sort_values('timestamp')
+                
+                main_df = pd.merge_asof(main_df, sub_df_renamed, on='timestamp', direction='backward')
+                
+                # Back-fill any NaNs at the very beginning
+                sub_columns = [col for col in main_df.columns if col.startswith(prefix)]
+                main_df[sub_columns] = main_df[sub_columns].bfill()
+                
+            # SCENARIO 2: sub_df is higher frequency (e.g., 15m sub -> 1D main)
+            else:
+                print(f"    - Scenario: Higher freq sub_df ({sub_df_freq}) -> Lower freq main_df ({main_df_freq}).")
+                print("    - Aggregating (resampling) finer data up to the main timeframe.")
+                
+                # Convert our timeframe string (e.g., '1h', '15m') to a pandas-compatible one ('1H', '15T')
+                resample_freq_str = main_timeframe.upper().replace('M', 'T')
+                
+                sub_df_agg = sub_df.set_index('timestamp').resample(resample_freq_str).agg({
+                    'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
+                }).dropna()
+                
+                sub_df_agg = sub_df_agg.reset_index()
+                
+                # Rename columns dynamically before merging (e.g., 'open' -> '15m_open')
+                prefix = f"{sub_timeframe}_"
+                sub_df_agg_renamed = sub_df_agg.add_prefix(prefix)
+                sub_df_agg_renamed = sub_df_agg_renamed.rename(columns={f'{prefix}timestamp': 'timestamp'})
+                
+                # Merge on the shared, resampled timestamp
+                main_df = pd.merge(main_df, sub_df_agg_renamed, on='timestamp', how='left')
+        
+        print(f"  -> After all merges, main_df has {len(main_df)} rows and columns: {list(main_df.columns)}")
+    
+    # Ensure timestamp is a timezone-aware datetime object (likely UTC from fetch)
+    main_df['timestamp'] = pd.to_datetime(main_df['timestamp'])
+    
+    if main_df['timestamp'].dt.tz is None:
+        main_df['timestamp'] = main_df['timestamp'].dt.tz_localize('UTC')
+    
+    # Convert the timestamp column to the 'America/Vancouver' timezone
+    main_df['timestamp'] = main_df['timestamp'].dt.tz_convert('America/Vancouver')
+    
+    # Remove timezone information to make the timestamp naive for the CSV output
+    main_df['timestamp'] = main_df['timestamp'].dt.tz_localize(None)
+    
+    # Convert DataFrame to CSV string
+    #    - index=False: Prevents pandas from writing row indices to the CSV.
+    #    - encoding='utf-8': Ensures compatibility with special characters.
+    csv_data = main_df.to_csv(index=False, encoding='utf-8')
+    
+    return csv_data

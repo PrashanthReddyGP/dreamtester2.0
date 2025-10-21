@@ -41,7 +41,7 @@ const metricsConfig = [
     { key: 'Total_Trades', label: 'Total Trades', tooltip: 'The total number of closed trades executed.' },
     { key: 'Sharpe_Ratio', label: 'Sharpe Ratio', tooltip: 'Measures risk-adjusted return, considering volatility.', format: formatRatio },
     { key: 'Profit_Factor', label: 'Profit Factor', tooltip: 'Gross profits divided by gross losses. Higher is better.', format: formatRatio },
-    { key: 'Calmar_Ratio', label: 'Calmar Ratio', tooltip: 'Measures return relative to the maximum drawdown.', format: formatRatio },
+    { key: 'Winrate', label: 'Win Rate', tooltip: 'The percentage of trades that were profitable.', format: formatPercent },
     { key: 'Equity_Efficiency_Rate', label: 'EER', tooltip: 'A custom metric for strategy quality.', format: formatRatio },
 ];
 

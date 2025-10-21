@@ -8,7 +8,7 @@ def calculate_indicators(strategy_instance, df):
     """
     indicators_to_run = strategy_instance.indicators
     print(f"--- Calculating {len(indicators_to_run)} indicators (Refactored) ---")
-
+    
     for indicator_tuple in indicators_to_run:
         name, timeframe, params_list = indicator_tuple
         
@@ -21,7 +21,7 @@ def calculate_indicators(strategy_instance, df):
             # Validate parameter count
             if len(params_list) == expected_params_count:
                 # Dynamically call the function with the parameters
-                df = func(df, *params_list)
+                df = func(df, timeframe, *params_list)
             else:
                 print(f"ERROR for {name}: Expected {expected_params_count} params, but got {len(params_list)}.")
         else:

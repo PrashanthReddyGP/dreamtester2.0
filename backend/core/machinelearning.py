@@ -20,17 +20,18 @@ from core.ml_models import get_model, get_scaler
 
 from .state import WORKFLOW_CACHE
 
-def transform_features_for_backend(features_config: list, timeframe: str) -> list:
+def transform_features_for_backend(features_config: list) -> list:
     """
     Converts the feature config from the frontend into the tuple format
     required by the `calculate_indicators` function.
     """
     backend_format_indicators = []
+    
     # 'features_config' is a list of 'IndicatorConfig' Pydantic model instances
     for feature in features_config:
         # Use dot notation to access attributes of the Pydantic model
         name = feature.name
-        
+        timeframe = feature.timeframe
         if name in INDICATOR_REGISTRY:
             param_order = INDICATOR_REGISTRY[name]['params']
             
@@ -121,11 +122,11 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
             if not workflow_id or workflow_id not in WORKFLOW_CACHE or 'engineered_df' not in WORKFLOW_CACHE[workflow_id]:
                 await send_log("❌ FATAL ERROR: Could not find pre-processed data in the workflow session. Stopping.", level='ERROR')
                 return
-
+            
             await send_log("Found pre-processed data in workflow session. Proceeding...")
             # We start directly with the engineered DataFrame
             df_engineered = WORKFLOW_CACHE[workflow_id]['engineered_df'].copy()
-
+            
             # --- STEP 2: LABEL GENERATION (Previously Step 3) ---
             await send_log("Generating labels from user-defined logic...")
             user_code = config['problem_definition']['custom_code']
@@ -139,7 +140,7 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                 labels = labeling_func(df_engineered.copy())
                 if not isinstance(labels, pd.Series):
                     raise TypeError("'generate_labels' must return a Pandas Series.")
-
+                
                 df_engineered['label'] = labels
                 await send_log(f"Labels generated. Distribution:\n{labels.value_counts().to_string(na_rep='NaNs')}")
                 
@@ -148,7 +149,7 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                 await send_log(error_msg, level='ERROR') 
                 print(traceback.format_exc()) 
                 raise
-
+            
             # --- STEP 3: FINAL DATA PREPARATION FOR ML (Previously Step 4) ---
             await send_log("Preparing data for model training (handling NaNs, separating X/y)...")
             
@@ -158,7 +159,7 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
             if X.empty:
                 await send_log("❌ ERROR: No data remaining after cleaning NaNs. Stopping.")
                 return
-
+            
             await send_log(f"Data prepared. Training on {len(X)} samples.")
             
             # --- Step 5: Model Training Loop ---
@@ -167,11 +168,11 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
             preprocessing_cfg = config['preprocessing']
             
             await send_log(f"Initializing model training with '{validation_cfg['method']}' validation...")
-
+            
             all_predictions = pd.Series(index=y.index, dtype=float)
-            n_splits = 5 
+            n_splits = 1
             tscv = TimeSeriesSplit(n_splits=n_splits)
-
+            
             for fold, (train_index, test_index) in enumerate(tscv.split(X)):
                 await send_log(f"--- Processing Fold {fold + 1}/{n_splits} ---")
                 
@@ -191,13 +192,14 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                     X_test_scaled = pd.DataFrame(X_test_scaled, index=X_test_df.index, columns=X_test_df.columns)
                 else:
                     X_train_scaled, X_test_scaled = X_train_df, X_test_df
-
+                
                 model = get_model(model_cfg['name'])
                 
                 await send_log(f"Training {model_cfg['name']} on {len(X_train_scaled)} samples...")
                 
                 # Create an in-memory text buffer
                 log_capture_buffer = io.StringIO()
+                
                 try:
                     # Use redirect_stdout to capture all print statements from the enclosed block
                     with redirect_stdout(log_capture_buffer):
@@ -210,12 +212,12 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                     # After the block, get the captured content and send it as a proper log
                     captured_logs = log_capture_buffer.getvalue()
                     await send_log(f"--- Model Training Output (Fold {fold + 1}) ---\n{captured_logs}")
-
+                
                 finally:
                     log_capture_buffer.close() # Always close the buffer
                 
                 await send_log("Training for this fold is complete.")
-
+                
                 # --- Prediction (can also be verbose, so we capture its logs too) ---
                 await send_log("Generating predictions for the test set...")
                 
@@ -223,21 +225,22 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                     None,
                     lambda: model.predict_proba(X_test_scaled)
                 )
-
+                
                 # First, get the index of the highest probability
                 predicted_indices = np.argmax(pred_probas, axis=1)
+                
                 # Then, use the model's `classes_` attribute to map the index back to the original label
                 predictions_for_fold = model.classes_[predicted_indices]
                 
                 fold_predictions = pd.Series(predictions_for_fold, index=y_test.index)
                 all_predictions.update(fold_predictions)
-
+            
             await send_log("All training folds completed.")
             await send_log(f"Generated {all_predictions.count()} predictions out of {len(y)} possible.")
-
+            
             # --- Step 6: Backtesting and Performance Analysis (REVISED) ---
             await send_log("Running backtest and generating performance metrics...")
-
+            
             # First, create the series of valid (non-NaN) predictions
             valid_predictions = all_predictions.dropna()
             
@@ -255,6 +258,7 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
             
             # Get all unique labels that exist in the ground truth
             all_possible_labels = np.union1d(true_labels_for_preds.unique(), valid_predictions.unique())
+            
             # Sort them for consistent ordering
             all_possible_labels.sort() 
             
@@ -262,19 +266,19 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
             #    This index might be sparse because of dropna().
             price_data = df_engineered.loc[valid_predictions.index]['close'].copy()
             price_data.index = pd.to_datetime(price_data.index)
-
+            
             # 2. Generate the sparse signals based on predictions.
             #    Their index will match price_data's index for now.
             sparse_entries = (valid_predictions == 1)
             sparse_exits = (valid_predictions == -1)
-
+            
             # 3. Explicitly align the signals to the price_data index.
             #    This is the crucial step. It ensures entries, exits, and price_data
             #    are perfectly identical in shape and index. fill_value=False means
             #    any timestamp without a signal is explicitly marked as "no signal".
             entries = sparse_entries.reindex(price_data.index, fill_value=False)
             exits = sparse_exits.reindex(price_data.index, fill_value=False)
-
+            
             portfolio = vbt.Portfolio.from_signals(
                 price_data, 
                 entries, 
@@ -286,10 +290,10 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                 # trade_on_close=config['backtestSettings']['tradeOnClose']
             )
             stats = portfolio.stats()
-
+            
             # --- Step 7: Assemble the Final JSON Payload (REVISED) ---
             await send_log("Assembling final report...")
-
+            
             metrics_data = {
                 "Net_Profit": stats.get('Total Return [%]', 0),
                 "Total_Trades": stats.get('Total Trades', 0),
@@ -299,23 +303,23 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                 "Profit_Factor": stats.get('Profit Factor', 0),
                 "Calmar_Ratio": stats.get('Calmar_Ratio', 0), # Corrected key from previous version
             }
-
+            
             equity_df = portfolio.value().reset_index()
             equity_df.columns = ['timestamp_ns', 'equity']
             equity_df['timestamp_ms'] = (equity_df['timestamp_ns'].astype(np.int64) // 1_000_000)
             equity_curve_data = equity_df[['timestamp_ms', 'equity']].values.tolist()
-
+            
             trades_data = []
             if portfolio.trades.count() > 0:
                 trades_df = pd.DataFrame(portfolio.trades.records)
                 
                 # `price_index` is now guaranteed to be a DatetimeIndex
                 price_index = price_data.index
-
+                
                 # Selecting with integers from a DatetimeIndex returns a new DatetimeIndex
                 entry_timestamps = price_index[trades_df['entry_idx']]
                 exit_timestamps = price_index[trades_df['exit_idx']]
-
+                
                 # A DatetimeIndex object has a vectorized .strftime() method. This is the cleanest way.
                 trades_df['entry_date'] = entry_timestamps.strftime('%Y-%m-%dT%H:%M:%SZ')
                 trades_df['exit_date'] = exit_timestamps.strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -323,7 +327,7 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                 trades_data = trades_df.to_dict(orient='records')
             else:
                 await send_log("⚠️ No trades were executed in this backtest.")
-
+            
             # Generate the standard report from scikit-learn
             class_report_dict = classification_report(
                 true_labels_for_preds, 
@@ -332,7 +336,7 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                 output_dict=True, 
                 zero_division=0
             )
-
+            
             # Create a new, formatted dictionary
             formatted_report = {}
             for key, value in class_report_dict.items():
@@ -344,7 +348,7 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                 except ValueError:
                     # If it's not a number-like string (e.g., "accuracy", "macro avg"), keep it as is
                     formatted_report[key] = value
-
+            
             model_analysis_data = {
                 
                 "feature_importance": pd.DataFrame({
@@ -360,7 +364,7 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                     labels=all_possible_labels
                     ).tolist()
             }
-
+            
             # Add the run_config data
             run_config_data = {
                 "model": config['model']['name'],
@@ -369,7 +373,7 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
                 "symbol": config['data_source']['symbol'],
                 "timeframe": config['data_source']['timeframe']
             }
-
+            
             final_payload = {
                 "strategy_name": "ML Model",
                 "metrics": metrics_data,
@@ -389,7 +393,7 @@ def run_ml_pipeline_manager(batch_id: str, config: dict, manager, queue, loop):
             await queue.put((batch_id, {"type": "strategy_result", "payload": sanitized_payload}))
             
             await send_log("✅ ML Pipeline finished successfully.", level='SUCCESS')
-
+        
         except Exception as e:
             error_message = f"An error occurred in the ML pipeline: {e}"
             print(error_message)

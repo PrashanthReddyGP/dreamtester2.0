@@ -1,5 +1,5 @@
 // src/context/AnalysisContext.tsx
-import React, { createContext, useState, useContext, useCallback, useRef, useEffect } from 'react';
+import React, { createContext, useState, useContext, useCallback, useRef, useEffect, useMemo } from 'react';
 import type {ReactNode} from 'react';
 import type { StrategyResult, MLResult } from '../services/api';
 
@@ -7,13 +7,13 @@ import type { StrategyResult, MLResult } from '../services/api';
 type AnalysisResult = StrategyResult | MLResult;
 
 interface AnalysisContextType {
-  results: AnalysisResult[]; // Use the union type
-  isComplete: boolean;
-  batchConfig: BatchConfig | null;
-  addResult: (result: AnalysisResult) => void; // Use the union type
-  clearResults: () => void;
-  markComplete: () => void;
-  setBatchConfig: (config: BatchConfig) => void; 
+    results: AnalysisResult[]; // Use the union type
+    isComplete: boolean;
+    batchConfig: BatchConfig | null;
+    addResult: (result: AnalysisResult) => void; // Use the union type
+    clearResults: () => void;
+    markComplete: () => void;
+    setBatchConfig: (config: BatchConfig) => void; 
 }
 
 export interface BatchConfig {
@@ -25,83 +25,91 @@ const AnalysisContext = createContext<AnalysisContextType | undefined>(undefined
 
 export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
 
-  const [results, setResults] = useState<AnalysisResult[]>([]); // Use the union type
-  const [isComplete, setIsComplete] = useState(false);
+    const [results, setResults] = useState<AnalysisResult[]>([]); // Use the union type
+    const [isComplete, setIsComplete] = useState(false);
 
-  const resultsBuffer = useRef<AnalysisResult[]>([]); 
-  
-  const animationFrameId = useRef<number | null>(null);
-  const [batchConfig, setBatchConfigState] = useState<BatchConfig | null>(null);
-
-  // This is the core function to flush the buffer to the React state
-  const flushBuffer = useCallback(() => {
-    if (resultsBuffer.current.length > 0) {
-      setResults(prevResults => [...prevResults, ...resultsBuffer.current]);
-      resultsBuffer.current = [];
-    }
-    animationFrameId.current = null;
-  }, []);
-
-  // addResult now uses throttling with requestAnimationFrame
-  const addResult = useCallback((newResult: AnalysisResult) => {
-    resultsBuffer.current.push(newResult);
-
-    if (animationFrameId.current === null) {
-      animationFrameId.current = requestAnimationFrame(flushBuffer);
-    }
-  }, [flushBuffer]);
-
-  const clearResults = useCallback(() => {
-    if (animationFrameId.current !== null) {
-      cancelAnimationFrame(animationFrameId.current);
-      animationFrameId.current = null;
-    }
+    const resultsBuffer = useRef<AnalysisResult[]>([]); 
     
-    resultsBuffer.current = [];
-    setResults([]);
-    setIsComplete(false);
-    setBatchConfigState(null);
-  }, []);
+    const animationFrameId = useRef<number | null>(null);
+    const [batchConfig, setBatchConfigState] = useState<BatchConfig | null>(null);
 
-  const markComplete = useCallback(() => {
-    if (animationFrameId.current !== null) {
-      cancelAnimationFrame(animationFrameId.current);
+    // This is the core function to flush the buffer to the React state
+    const flushBuffer = useCallback(() => {
+      if (resultsBuffer.current.length > 0) {
+        setResults(prevResults => [...prevResults, ...resultsBuffer.current]);
+        resultsBuffer.current = [];
+      }
       animationFrameId.current = null;
-    }
-    
-    flushBuffer();
-    setIsComplete(true);
-  }, [flushBuffer]);
+    }, []);
 
-  const setBatchConfig = useCallback((config: BatchConfig) => {
-    setBatchConfigState(config);
-  }, []);
+    // addResult now uses throttling with requestAnimationFrame
+    const addResult = useCallback((newResult: AnalysisResult) => {
+      resultsBuffer.current.push(newResult);
 
-  useEffect(() => {
-    return () => {
+      if (animationFrameId.current === null) {
+        animationFrameId.current = requestAnimationFrame(flushBuffer);
+      }
+    }, [flushBuffer]);
+
+    const clearResults = useCallback(() => {
       if (animationFrameId.current !== null) {
         cancelAnimationFrame(animationFrameId.current);
+        animationFrameId.current = null;
       }
-    };
-  }, []);
+      
+      resultsBuffer.current = [];
+      setResults([]);
+      setIsComplete(false);
+      setBatchConfigState(null);
+    }, []);
 
-  const value = {
-    results,
-    isComplete,
-    batchConfig,
-    addResult,
-    clearResults,
-    markComplete,
-    setBatchConfig,
+    const markComplete = useCallback(() => {
+      if (animationFrameId.current !== null) {
+        cancelAnimationFrame(animationFrameId.current);
+        animationFrameId.current = null;
+      }
+      
+      flushBuffer();
+      setIsComplete(true);
+    }, [flushBuffer]);
+
+    const setBatchConfig = useCallback((config: BatchConfig) => {
+      setBatchConfigState(config);
+    }, []);
+
+    useEffect(() => {
+      return () => {
+        if (animationFrameId.current !== null) {
+          cancelAnimationFrame(animationFrameId.current);
+        }
+      };
+    }, []);
+
+    const value = useMemo(() => ({
+      results,
+      isComplete,
+      batchConfig,
+      addResult,
+      clearResults,
+      markComplete,
+      setBatchConfig,
+    }), [
+        results, 
+        isComplete, 
+        batchConfig, 
+        addResult, 
+        clearResults, 
+        markComplete, 
+        setBatchConfig
+    ]);
+
+    return <AnalysisContext.Provider value={value}>{children}</AnalysisContext.Provider>;
   };
 
-  return <AnalysisContext.Provider value={value}>{children}</AnalysisContext.Provider>;
-};
-
-export const useAnalysis = (): AnalysisContextType => {
-  const context = useContext(AnalysisContext);
-  if (context === undefined) {
-    throw new Error('useAnalysis must be used within an AnalysisContextProvider');
-  }
-  return context;
-};
+  export const useAnalysis = (): AnalysisContextType => {
+    const context = useContext(AnalysisContext);
+    if (context === undefined) {
+      throw new Error('useAnalysis must be used within an AnalysisContextProvider');
+    }
+    return context;
+  };

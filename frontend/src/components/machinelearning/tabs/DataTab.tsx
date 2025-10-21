@@ -88,7 +88,7 @@ const ParameterInput: React.FC<{
 
 
 // Define the available timeframes in a constant
-const timeframes = ['1m', '5m', '15m', '30m', '1H', '4H', '1D', '1W'];
+const timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'];
 
 
 export const DataTab: React.FC<DataTabProps> = ({ config, onChange, onFetch, onCalculate, displayData, displayInfo, isFetching, isCalculating }) => {
@@ -194,7 +194,6 @@ export const DataTab: React.FC<DataTabProps> = ({ config, onChange, onFetch, onC
                     <Paper variant='outlined' sx={{ flexGrow: 0, height: '300px', width: '100%' }}>
                         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, p: 2, height: '100%', width: '100%' }}>
                             {fetchError && <Alert severity="error" sx={{ width: '100%'}}>{fetchError}</Alert>}
-
                             <Autocomplete
                                 id="symbol-autocomplete"
                                 options={symbolList}
@@ -242,9 +241,9 @@ export const DataTab: React.FC<DataTabProps> = ({ config, onChange, onFetch, onC
                             </Button>
                         </Box>
                     </Paper>
-                    <Box sx={{ flexGrow: 1, height: '100%', width: '100%' }}>
+                    <Box sx={{ flexGrow: 1, height: '100%', width: '100%', overflow: 'auto' }}>
                         {/* Technical Indicators Panel */}
-                        <Paper variant="outlined" sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'hidden' }}>
+                        <Paper variant="outlined" sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column', flexGrow: 1, overflow: 'auto' }}>
                             <Typography variant="subtitle1" gutterBottom sx={{ textAlign: 'center', fontWeight: 'bold', pb: 1 }}>Technical Indicators</Typography>
                             <Autocomplete
                                 size="small"

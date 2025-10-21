@@ -5,7 +5,8 @@ import React, {
     useCallback,
     useContext,
     useRef,
-    useEffect
+    useEffect,
+    useMemo
 } from 'react';
 import type { ReactNode } from 'react';
 import {
@@ -24,41 +25,111 @@ import type {
 import { v4 as uuidv4 } from 'uuid';
 import { fetchAvailableSymbols } from '../../src/services/api';
 import { HYPERPARAMETER_CONFIG } from '../../src/components/pipeline/mlModels';
-import type { MLConfig } from '../components/machinelearning/types'; // Adjust path if needed
-import type { LabelingTemplate } from '../components/machinelearning/LabelingTemplates';
-import type { FETemplate } from '../components/machinelearning/FeatureEngineeringTemplates';
-import { INITIAL_LABELING_TEMPLATES } from '../components/machinelearning/LabelingTemplates';
-import { INITIAL_FEATURE_ENGINEERING_CODE } from '../components/machinelearning/FeatureEngineeringTemplates';
+import { INITIAL_LABELING_TEMPLATES } from '../components/pipeline/templates/LabelingTemplates';
+import { INITIAL_FEATURE_ENGINEERING_CODE } from '../components/pipeline/templates/FeaturesEngineeringTemplates';
 import { useTerminal } from './TerminalContext'; // We'll need this for running the pipeline
-
+import type { IndicatorSchema } from '../components/pipeline/types';
+import { TUNING_GRID_CONFIG } from '../components/pipeline/mlModels';
 
 // --- Constants and Initial State (Copied from MachineLearning.tsx) ---
 const API_URL = 'http://127.0.0.1:8000';
 
-const initialConfig: MLConfig = {
-    problemDefinition: { type: 'template', templateKey: 'triple_barrier', customCode: INITIAL_LABELING_TEMPLATES.triple_barrier.code },
-    dataSource: { symbol: 'ADAUSDT', timeframe: '15m', startDate: '2000-01-01', endDate: '2100-12-31' },
-    features: [],
-    model: { name: 'RandomForestClassifier', hyperparameters: {n_estimators: 100, max_depth: 10, min_samples_split: 2, min_samples_leaf: 1, class_weight: 'balanced'}, },
-    validation: { method: 'train_test_split', trainSplit: 70, walkForwardTrainWindow: 365, walkForwardTestWindow: 30 },
-    preprocessing: { scaler: 'none', removeCorrelated: false, correlationThreshold: 0.9, usePCA: false, pcaComponents: 5, featureType: 'template', featureTemplateKey: 'none', customFeatureCode: INITIAL_FEATURE_ENGINEERING_CODE.guide.code },
-    backtestSettings: { capital: 1000, risk: 1, commissionBps: 2.5, slippageBps: 1.0, tradeOnClose: true },
+
+
+// 1. Define the new structured data for the BacktesterNode
+export interface BacktesterNodeData {
+    label: string;
+    selectedTemplateKey?: string;
+    config: {
+        initialCapital: number;
+        riskPercent: number;
+        rr: number;
+        exitType: 'tp_sl' | 'single_condition' | 'time_based';
+        tradeDirection: 'long' | 'short' | 'hedge';
+        // Add more config fields here in the future
+    };
+    codeBlocks: {
+        indicators: string;
+        entryLogic: string;
+        exitLogic: string; // Only used if exitType is 'single_condition'
+    };
+}
+
+// 2. The template will now store a stringified version of BacktesterNodeData
+export interface BacktestTemplate {
+    name: string;
+    description: string;
+    code: string; // This will be JSON.stringify(BacktesterNodeData)
+    isDeletable: boolean;
+}
+
+// 3. Update the initial template to use the new structure
+const defaultBacktesterData: Omit<BacktesterNodeData, 'label' | 'selectedTemplateKey'> = {
+    config: {
+        initialCapital: 1000,
+        riskPercent: 1,
+        rr: 1,
+        exitType: 'tp_sl',
+        tradeDirection: 'hedge',
+    },
+    codeBlocks: {
+        indicators: `[
+    ('SMA', self.timeframe, (50,)),
+    ('SMA', self.timeframe, (200,)),
+]`,
+        entryLogic: `fast_sma = self.df[f'sma_50_{self.timeframe}'].values
+slow_sma = self.df[f'sma_200_{self.timeframe}'].values
+
+# Condition for long entry
+if fast_sma[i-1] < slow_sma[i-1] and fast_sma[i] > slow_sma[i]:
+    return True # Return True to signal a long entry
+
+return False`,
+        exitLogic: `# Example: Exit if price closes below the slow moving average
+slow_sma = self.df[f'sma_200_{self.timeframe}'].values
+current_price = self.close[i]
+
+if current_price < slow_sma[i]:
+    return True # Return True to signal an exit
+
+return False`
+    }
 };
 
-// --- Type Definitions (from PipelineEditor) ---
-interface IndicatorParamDef {
-    name: string;
-    displayName: string;
-    type: 'number' | 'string' | 'boolean';
-    defaultValue: number | string | boolean;
-    options?: string[];
-}
-interface IndicatorDefinition {
-    name: string;
-    params: IndicatorParamDef[];
-}
-type IndicatorSchema = { [key: string]: IndicatorDefinition };
+const INITIAL_BACKTEST_TEMPLATES: Record<string, BacktestTemplate> = {
+    'ma_crossover': {
+        name: 'MA Crossover Guide',
+        description: 'A simple moving average crossover strategy example.',
+        code: JSON.stringify({ // Store the structured data as a string
+            ...defaultBacktesterData,
+            label: 'MA Crossover Guide',
+        }),
+        isDeletable: false,
+    }
+};
 
+
+
+
+export interface FETemplate {
+    name: string;
+    description: string;
+    code: string;
+    isDeletable: boolean;
+}
+
+export interface LabelingTemplate {
+    name: string;
+    description: string;
+    code: string;
+    isDeletable: boolean;
+}
+
+// --- Type Definitions (from PipelineEditor) ---
+interface PipelineNodeData {
+  data: any[];
+  info: any | null;
+}
 
 // --- INITIAL STATE (Copied exactly from your original file) ---
 const initialNodes: Node[] = [
@@ -76,11 +147,8 @@ const initialNodes: Node[] = [
     }
 ];
 
-const initialEdges: Edge[] = [
-    { id: 'e1-2', source: '1', target: '2' },
-    { id: 'e2-3', source: '2', target: '3' },
-];
-
+// The initial pipeline has only one node, so it cannot have any edges.
+const initialEdges: Edge[] = []; 
 
 // --- CONTEXT TYPE DEFINITION ---
 interface PipelineContextType {
@@ -92,9 +160,18 @@ interface PipelineContextType {
     onEdgesChange: (changes: EdgeChange[]) => void;
     onConnect: (connection: Connection) => void;
     reactFlowWrapperRef: React.RefObject<HTMLDivElement>;
-    addNode: (nodeType: string, position: { x: number; y: number }, connectingNode?: { id: string; handleType: 'source' | 'target' }) => void;
+    addNode: (nodeType: string, position: { x: number; y: number }, connectingNode?: { id: string; handleType: 'source' | 'target' }, template?: { label: string; code: string; subType: 'feature_engineering' | 'labeling' }) => void;
     deleteElement: (id: string, type: 'node' | 'edge') => void;
     updateNodeData: (nodeId: string, data: any) => void;
+    feTemplates: Record<string, FETemplate>;
+    labelingTemplates: Record<string, LabelingTemplate>;
+    backtestTemplates: Record<string, BacktestTemplate>;
+    saveFeTemplate: (name: string, description: string, code: string) => Promise<void>;
+    saveLabelingTemplate: (name: string, description: string, code: string) => Promise<void>;
+    saveBacktestTemplate: (name: string, description: string, code: string) => Promise<string>;
+    deleteFeTemplate: (templateKey: string) => Promise<void>;
+    deleteLabelingTemplate: (templateKey: string) => Promise<void>;
+    deleteBacktestTemplate: (templateKey: string) => Promise<void>;
 
     // Add fetched data and its state to the context type
     symbolList: string[];
@@ -103,21 +180,25 @@ interface PipelineContextType {
     isLoadingSchema: boolean;
     fetchError: string | null;
 
-    config: MLConfig;
     workflowId: string | null;
-    displayData: { data: any[], info: any | null};
-    isFetching: boolean;
-    isCalculating: boolean;
-    isEngineering: boolean;
-    isValidating: boolean;
-    isRunning: boolean;
-    validationInfo: any | null;
-    handleConfigChange: (path: string, value: any) => void;
-    handleFetchData: () => Promise<void>;
-    handleCalculateFeatures: () => Promise<void>;
-    handleFeatureEngineering: () => Promise<void>;
-    handleValidation: () => Promise<void>;
-    handleRunPipeline: () => Promise<void>;
+    isProcessing: boolean; // A single global processing state
+    processingNodeId: string | null; // Which node is currently running?
+    selectedNodeId: string | null; // Which node is selected for viewing?
+    pipelineNodeCache: Record<string, PipelineNodeData>; // Cache for node outputs
+    selectNode: (nodeId: string | null) => void;
+    executePipelineUpToNode: (nodeId: string) => Promise<void>;
+    dataForDisplay: { data: any[], info: any | null};
+    
+    newWorkflow: () => Promise<void>;
+    currentWorkflowName: string | null;
+    savedWorkflows: string[];
+    saveWorkflow: (name: string) => Promise<void>;
+    loadWorkflow: (name: string) => Promise<void>;
+
+    clearBackendCache: () => Promise<void>;
+
+    editingNodeId: string | null;
+    setEditingNodeId: React.Dispatch<React.SetStateAction<string | null>>;
 }
 
 const PipelineContext = createContext<PipelineContextType | undefined>(undefined);
@@ -126,6 +207,7 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
     const [nodes, setNodes] = useState<Node[]>(initialNodes);
     const [edges, setEdges] = useState<Edge[]>(initialEdges);
     const reactFlowWrapperRef = useRef<HTMLDivElement>(null);
+    const [workflowId, setWorkflowId] = useState<string | null>(null);
 
     // --- State for fetched data (symbols, indicators) ---
     const [symbolList, setSymbolList] = useState<string[]>([]);
@@ -133,6 +215,24 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
     const [indicatorSchema, setIndicatorSchema] = useState<IndicatorSchema>({});
     const [isLoadingSchema, setIsLoadingSchema] = useState(true);
     const [fetchError, setFetchError] = useState<string | null>(null);
+
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [processingNodeId, setProcessingNodeId] = useState<string | null>(null);
+    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+    const [pipelineNodeCache, setPipelineNodeCache] = useState<Record<string, PipelineNodeData>>({});
+
+    const [feTemplates, setFeTemplates] = useState<Record<string, FETemplate>>(INITIAL_FEATURE_ENGINEERING_CODE);
+    const [labelingTemplates, setLabelingTemplates] = useState<Record<string, LabelingTemplate>>(INITIAL_LABELING_TEMPLATES);
+    const [backtestTemplates, setBacktestTemplates] = useState<Record<string, BacktestTemplate>>(INITIAL_BACKTEST_TEMPLATES);
+
+    const [savedWorkflows, setSavedWorkflows] = useState<string[]>([]);
+
+    const [currentWorkflowName, setCurrentWorkflowName] = useState<string | null>(null);
+
+    // Add the new state for tracking the editing node
+    const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+    
+    const { connectToBatch, toggleTerminal } = useTerminal();
 
     // --- Fetching Logic (moved here from PipelineEditor) ---
     useEffect(() => {
@@ -170,16 +270,262 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
         fetchSchema();
     }, []); // Empty dependency array ensures this runs only once
 
+    useEffect(() => {
+
+        const fetchTemplates = async () => {
+            try {
+                // Fetch Feature Engineering Templates
+                const feResponse = await fetch(`${API_URL}/api/ml/fe-templates`);
+                const savedFeTemplates = await feResponse.json();
+                // Merge initial (non-deletable) with saved (deletable)
+                setFeTemplates(prev => ({ ...prev, ...savedFeTemplates }));
+
+                // Fetch Labeling Templates
+                const labelingResponse = await fetch(`${API_URL}/api/ml/templates`);
+                const savedLabelingTemplates = await labelingResponse.json();
+                setLabelingTemplates(prev => ({ ...prev, ...savedLabelingTemplates }));
+
+                // 7. Fetch Backtest Templates
+                const btResponse = await fetch(`${API_URL}/api/ml/backtest-templates`);
+                const savedBtTemplates = await btResponse.json();
+                setBacktestTemplates(prev => ({ ...prev, ...savedBtTemplates }));
+
+            } catch (error) {
+                console.error("Failed to fetch custom templates:", error);
+            }
+        };
+
+        fetchTemplates();
+    }, []); // This runs once on mount
+
+    const fetchSavedWorkflows = useCallback(async () => {
+        try {
+            const response = await fetch(`${API_URL}/api/pipelines/list`);
+            if (!response.ok) throw new Error('Failed to fetch workflows');
+            const data = await response.json();
+            setSavedWorkflows(data.workflows || []);
+        } catch (error) {
+            console.error("Error fetching saved workflows:", error);
+            setSavedWorkflows([]);
+        }
+    }, [])
+
+    useEffect(() => {
+        fetchSavedWorkflows();
+    }, [fetchSavedWorkflows]);
+
+// --- Functions for Save/Load ---
+    const saveWorkflow = useCallback(async (name: string) => {
+        try {
+            // We only need to save nodes and edges for reconstruction
+            const workflow = { nodes, edges };
+            const response = await fetch(`${API_URL}/api/pipelines/save`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, workflow }),
+            });
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to save workflow');
+            }
+            await fetchSavedWorkflows(); // Refresh the list of saved workflows
+            setCurrentWorkflowName(name);
+        } catch (error) {
+            console.error("Error saving workflow:", error);
+            alert(`Error: Could not save workflow. ${error instanceof Error ? error.message : ''}`);
+        }
+    }, [nodes, edges, fetchSavedWorkflows]);
+
+    const loadWorkflow = useCallback(async (name: string) => {
+        try {
+            const response = await fetch(`${API_URL}/api/pipelines/load/${name}`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Failed to load workflow');
+            }
+            const workflow = await response.json();
+            if (workflow.nodes && workflow.edges) {
+                setCurrentWorkflowName(name);
+                setNodes(workflow.nodes);
+                setEdges(workflow.edges);
+                // Reset runtime state
+                setSelectedNodeId(null);
+                setPipelineNodeCache({});
+            } else {
+                throw new Error("Invalid workflow data received from server");
+            }
+        } catch (error) {
+            console.error("Error loading workflow:", error);
+            alert(`Error: Could not load workflow. ${error instanceof Error ? error.message : ''}`);
+        }
+    }, [setNodes, setEdges]);
+
+    // This function now handles overwriting and returns the key on success.
+    const saveFeTemplate = useCallback(async (name: string, description: string, code: string): Promise<string> => {
+        // Generate a predictable key from the name for easier lookups and updates
+        const newKey = name.toLowerCase().replace(/\s+/g, '_');
+        const newTemplate: FETemplate = { name, description, code, isDeletable: true };
+
+        // Check if a template with this key already exists
+        if (feTemplates[newKey]) {
+            if (!window.confirm(`A template named "${name}" already exists. Do you want to overwrite it?`)) {
+                // If the user cancels, throw an error to stop the process
+                throw new Error("Save operation cancelled by user.");
+            }
+        }
+
+        // API call to save/update. The backend should handle this as an "upsert".
+        await fetch(`${API_URL}/api/ml/fe-templates`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: newKey, ...newTemplate }),
+        });
+
+        // Update local state
+        setFeTemplates(prev => ({ ...prev, [newKey]: newTemplate }));
+        
+        // Return the key so the calling component can use it
+        return newKey;
+
+    }, [feTemplates]);
+    
+    const saveLabelingTemplate = useCallback(async (name: string, description: string, code: string) => {
+        const newKey = name.toLowerCase().replace(/\s+/g, '_') + `_${uuidv4().slice(0, 4)}`;
+        const newTemplate: LabelingTemplate = { name, description, code, isDeletable: true };
+
+        await fetch(`${API_URL}/api/ml/templates`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: newKey, ...newTemplate }),
+        });
+
+        setLabelingTemplates(prev => ({ ...prev, [newKey]: newTemplate }));
+        alert(`Template "${name}" saved successfully!`);
+    }, []);
+
     // --- Node Manipulation Functions ---
     const updateNodeData = useCallback((nodeId: string, data: any) => {
-        setNodes((nds) =>
-            nds.map((node) =>
+        setNodes((nds) => {
+            // Step 1: Apply the primary update to the target node
+            const newNds = nds.map((node) =>
                 node.id === nodeId
                     ? { ...node, data: { ...node.data, ...data } }
                     : node
-            )
-        );
-    }, [setNodes]);
+            );
+
+            // Step 2: Check if the updated node is a DataSource and if its timeframe changed.
+            const sourceNode = newNds.find(n => n.id === nodeId);
+            if (sourceNode?.type === 'dataSource' && 'timeframe' in data) {
+                const newTimeframe = data.timeframe;
+                
+                // Find all direct children of this node
+                const childEdges = edges.filter(e => e.source === nodeId);
+                const childIds = new Set(childEdges.map(e => e.target));
+
+                // Step 3: If so, propagate the new timeframe to any connected FeatureNode children.
+                return newNds.map(node => {
+                    if (childIds.has(node.id) && node.type === 'feature') {
+                        // This is a child FeatureNode, update its timeframe
+                        return {
+                            ...node,
+                            data: { ...node.data, timeframe: newTimeframe }
+                        };
+                    }
+                    // Otherwise, return the node as is
+                    return node;
+                });
+            }
+            
+            // If no propagation is needed, just return the result of the primary update
+            return newNds;
+        });
+    }, [setNodes, edges]); // IMPORTANT: Add `edges` as a dependency
+
+    const deleteFeTemplate = useCallback(async (templateKey: string) => {
+        if (!window.confirm(`Are you sure you want to delete the template "${feTemplates[templateKey]?.name}"?`)) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`${API_URL}/api/ml/fe-templates/${templateKey}`, {
+                method: 'DELETE',
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to delete template from server.');
+            }
+
+            // If successful, update the local state to remove the template
+            setFeTemplates(prev => {
+                const newTemplates = { ...prev };
+                delete newTemplates[templateKey];
+                return newTemplates;
+            });
+
+        } catch (error) {
+            console.error("Error deleting FE template:", error);
+            alert("Could not delete the template.");
+        }
+    }, [feTemplates]); // Depend on feTemplates to get the name for the confirm dialog
+
+    const deleteLabelingTemplate = useCallback(async (templateKey: string) => {
+        if (!window.confirm(`Are you sure you want to delete the template "${labelingTemplates[templateKey]?.name}"?`)) {
+            return;
+        }
+        
+        try {
+            const response = await fetch(`${API_URL}/api/ml/templates/${templateKey}`, {
+                method: 'DELETE',
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to delete template from server.');
+            }
+
+            // If successful, update the local state
+            setLabelingTemplates(prev => {
+                const newTemplates = { ...prev };
+                delete newTemplates[templateKey];
+                return newTemplates;
+            });
+
+        } catch (error) {
+            console.error("Error deleting Labeling template:", error);
+            alert("Could not delete the template.");
+        }
+    }, [labelingTemplates]);
+    
+    const newWorkflow = useCallback(async () => {
+        try {
+            const response = await fetch(`${API_URL}/api/ml/workflow/clear_cache`, {
+                method: 'POST',
+            });
+            if (!response.ok) throw new Error("Server failed to clear cache.");
+            
+            setNodes(initialNodes);
+            setEdges(initialEdges);
+            setSelectedNodeId(null);
+            setPipelineNodeCache({});
+            setCurrentWorkflowName(null);
+        } catch (error) {
+            console.error("Failed to clear backend cache:", error);
+            alert("Error: Could not clear backend cache.");
+        }
+    }, [setNodes, setEdges]);
+
+    const clearBackendCache = useCallback(async () => {
+        try {
+            const response = await fetch(`${API_URL}/api/ml/workflow/clear_cache`, {
+                method: 'POST',
+            });
+            if (!response.ok) throw new Error("Server failed to clear cache.");
+            const result = await response.json();
+            alert(result.message); // e.g., "Backend cache cleared successfully."
+        } catch (error) {
+            console.error("Failed to clear backend cache:", error);
+            alert("Error: Could not clear backend cache.");
+        }
+    }, []);
 
     // --- Core Callbacks ---
     const onNodesChange = useCallback((changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)), [setNodes]);
@@ -212,13 +558,52 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
         });
     }, [edges, nodes, setEdges, updateNodeData]); // Add dependencies
     
+    // Validation Function
+    const isValidConnection = (connection: Connection): boolean => {
+        const sourceNode = nodes.find(n => n.id === connection.source);
+        const targetNode = nodes.find(n => n.id === connection.target);
+
+        if (!sourceNode || !targetNode) return false;
+
+        // RULE 1: ClassImbalanceNode can only connect to the 'train' output of a DataValidationNode.
+        if (targetNode.type === 'classImbalance') {
+            if (sourceNode.type !== 'dataValidation' || connection.sourceHandle !== 'train') {
+                alert("Invalid Connection:\nThe Class Imbalance node can only be connected to the 'Train' output of a Data Validation node.");
+                return false;
+            }
+        }
+
+        // RULE 2: ModelTrainerNode's 'test' handle MUST connect to a DataValidationNode's 'test' output.
+        if (targetNode.type === 'modelTrainer' && connection.targetHandle === 'test') {
+            if (sourceNode.type !== 'dataValidation' || connection.sourceHandle !== 'test') {
+                alert("Invalid Connection:\nThe Model Trainer's 'Test Data' input must be connected to the 'Test' output of a Data Validation node.");
+                return false;
+            }
+        }
+
+        // Add more rules here in the future...
+
+        return true; // All checks passed
+    };
+
     const onConnect = useCallback((connection: Connection) => {
-        // Add the new edge to the state
+        // Call the validation function first
+        if (!isValidConnection(connection)) {
+            return; // Abort the connection if it's invalid
+        }
+
+        // This function will now ONLY handle connections between EXISTING nodes.
+        // The logic is still correct for that use case.
         setEdges((eds) => addEdge({ ...connection, animated: true }, eds));
 
         // Now, check the types of nodes being connected
         const sourceNode = nodes.find(n => n.id === connection.source);
         const targetNode = nodes.find(n => n.id === connection.target);
+
+        // If a DataSourceNode is connected to a FeatureNode, pass the timeframe
+        if (sourceNode?.type === 'dataSource' && targetNode?.type === 'feature') {
+            updateNodeData(targetNode.id, { timeframe: sourceNode.data.timeframe });
+        }
 
         // If a feature node is connected to a processIndicators node
         if (sourceNode?.type === 'feature' && targetNode?.type === 'processIndicators') {
@@ -231,25 +616,78 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
         }
     }, [nodes, setEdges, updateNodeData]); // Add dependencies
 
-    const addNode = useCallback((nodeType: string, position: { x: number, y: number }, connectingNode?: { id: string, handleType: 'source' | 'target' }) => {
+    
+    const saveBacktestTemplate = useCallback(async (name: string, description: string, code: string): Promise<string> => {
+        const newKey = name.toLowerCase().replace(/\s+/g, '_');
+        const newTemplate: BacktestTemplate = { name, description, code, isDeletable: true };
+
+        if (backtestTemplates[newKey]) {
+            if (!window.confirm(`A backtest template named "${name}" already exists. Overwrite?`)) {
+                throw new Error("Save operation cancelled by user.");
+            }
+        }
+
+        await fetch(`${API_URL}/api/ml/backtest-templates`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: newKey, ...newTemplate }),
+        });
+
+        setBacktestTemplates(prev => ({ ...prev, [newKey]: newTemplate }));
+        return newKey;
+    }, [backtestTemplates]);
+
+
+    const deleteBacktestTemplate = useCallback(async (templateKey: string) => {
+        if (!window.confirm(`Are you sure you want to delete the template "${backtestTemplates[templateKey]?.name}"?`)) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`${API_URL}/api/ml/backtest-templates/${templateKey}`, {
+                method: 'DELETE',
+            });
+            if (!response.ok) throw new Error('Failed to delete template from server.');
+
+            setBacktestTemplates(prev => {
+                const newTemplates = { ...prev };
+                delete newTemplates[templateKey];
+                return newTemplates;
+            });
+
+        } catch (error) {
+            console.error("Error deleting backtest template:", error);
+            alert("Could not delete the template.");
+        }
+    }, [backtestTemplates]);
+
+    const addNode = useCallback((
+        nodeType: string, 
+        position: { x: number, y: number }, 
+        connectingNode?: { id: string, handleType: 'source' | 'target' },
+        template?: { label: string; code: string; subType: 'feature_engineering' | 'labeling' }
+    ) => {
         let newNodeData: any;
 
-        // Define default code for the new node.
-        const defaultCode = `def process(data):
-    # 'data' is a pandas DataFrame from the previous node.
-    # Your custom logic here.
-    
-    print("Custom node received data with shape:", data.shape)
-    
-    # Example: Add a new column
-    # data['new_col'] = 1 
-    
-    return data
-`;
+        // If a template is provided for a customCode node, use it directly
+        if (nodeType === 'customCode' && template) {
+            newNodeData = {
+                label: template.label,
+                code: template.code,
+                subType: template.subType // Store the subtype!
+            };
 
+        } else if (nodeType === 'customLabeling' && template) {
+            newNodeData = {
+                label: template.label,
+                code: template.code,
+                subType: template.subType // Store the subtype!
+            };
+
+        } else {
         switch (nodeType) {
             case 'feature':
-            newNodeData = { label: 'Feature', feature: 'SMA', length: 20 };
+            newNodeData = { label: 'Feature', name: 'SMA', params: {'length': 20} };
 
                 break;
             case 'dataSource':
@@ -267,13 +705,77 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
                     selectedIndicators: {}, // Initialize with an empty object
                 };
                 break;
-            case 'customCode':
+            case 'merge': 
                 newNodeData = {
-                    label: 'Custom Code',
-                    code: defaultCode,
+                    label: 'Merge',
+                    mergeMethod: 'left', // Default merge strategy
                 };
                 break;
-            case 'mlModel': { // Use block scope to declare constants
+            case 'notes':
+                newNodeData = {
+                    label: 'Note Taking',
+                    noteContent: 'Type your notes here...'
+                };
+                break;
+            case 'customCode': { 
+                const defaultTemplate = INITIAL_FEATURE_ENGINEERING_CODE.guide;
+                newNodeData = {
+                    label: defaultTemplate.name,
+                    code: defaultTemplate.code,
+                    subType: 'feature_engineering',
+                    selectedTemplateKey: 'guide'
+                };
+                break;
+            }
+            case 'customLabeling': // This is the fallback for a blank custom node
+                newNodeData = {
+                    label: 'Custom Labeling',
+                    code: INITIAL_FEATURE_ENGINEERING_CODE.guide.code,
+                    subType: 'labeling'
+                };
+                break;
+            case 'dataScaling': // Add the new node type case
+                newNodeData = {
+                    label: 'Data Scaling',
+                    scaler: 'none',
+                    removeCorrelated: false,
+                    correlationThreshold: 0.9,
+                    usePCA: false,
+                    pcaComponents: 5,
+                };
+                break;
+            case 'classImbalance':
+                newNodeData = {
+                    label: 'Class Imbalance',
+                    method: 'SMOTE',
+                };
+                break;
+            case 'dataValidation': // Add the new node type case
+                newNodeData = {
+                    label: 'Data Validation',
+                    validationMethod: 'train_test_split',
+                    trainSplit: 70,
+                    walkForwardTrainWindow: 365,
+                    walkForwardTestWindow: 30,
+                };
+                break;
+            case 'featuresCorrelation':
+                newNodeData = {
+                    label: 'Feature Correlation',
+                    method: 'pearson',
+                    displayMode: 'matrix'
+                };
+                break;
+            case 'charting':
+                newNodeData = {
+                    label: 'Charting',
+                    chartType: 'scatter',
+                    xAxis: null,
+                    yAxis: null,
+                    groupBy: null,
+                };
+                break;
+            case 'modelTrainer': {
                 const defaultModelName = 'RandomForestClassifier';
                 const defaultConfig = HYPERPARAMETER_CONFIG[defaultModelName];
                 const defaultHyperparameters = defaultConfig.reduce((acc, param) => {
@@ -282,17 +784,50 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
                 }, {} as { [key: string]: any });
                 
                 newNodeData = {
-                    label: 'ML Model',
+                    label: 'Model Trainer',
                     modelName: defaultModelName,
                     hyperparameters: defaultHyperparameters,
+                    predictionThreshold: 0.5 // default threshold
                 };
                 break;
-            };
-            default:
-                newNodeData = { label: `New ${nodeType} Node` };
-                break;
-        }
+            }
+            case 'hyperparameterTuning': {
+                const defaultModelName = 'RandomForestClassifier';
+                const defaultConfig = TUNING_GRID_CONFIG[defaultModelName];
+                const defaultParamGrid = defaultConfig.reduce((acc, param) => {
+                    acc[param.name] = param.defaultValue;
+                    return acc;
+                }, {} as { [key: string]: string });
 
+                newNodeData = {
+                    label: 'Hyper Parameter Tuning',
+                    modelName: defaultModelName,
+                    searchStrategy: 'GridSearchCV',
+                    cvFolds: 5,
+                    scoringMetricBase: 'accuracy', // Simple default
+                    scoringMetricAvg: '',        // Empty by default
+                    scoringMetricClass: '',        // Empty by default
+                    paramGrid: defaultParamGrid,
+                };
+                break;
+            }
+            case 'modelPredictor':
+                newNodeData = {
+                    label: 'Model Predictor',
+                    trainerNodeId: null, // It starts unlinked
+                };
+                break;
+            case 'backtester': {
+                newNodeData = {
+                    label: 'MA Crossover Guide',
+                    selectedTemplateKey: 'ma_crossover',
+                    ...defaultBacktesterData
+                };
+                break;
+            }
+            }
+        }
+        
         const newNode: Node = {
             id: uuidv4(),
             type: nodeType,
@@ -300,19 +835,41 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
             data: newNodeData,
         };
 
-        setNodes((nds) => [...nds, newNode]);
-
         if (connectingNode) {
+            // This is the "create and connect" scenario.
             const newEdge: Edge = {
                 id: uuidv4(),
                 source: connectingNode.handleType === 'source' ? connectingNode.id : newNode.id,
                 target: connectingNode.handleType === 'source' ? newNode.id : connectingNode.id,
+                animated: true,
             };
             
-            // Manually call onConnect logic for edges created programmatically
-            onConnect(newEdge);
+            const sourceNode = nodes.find(n => n.id === newEdge.source);
+            
+            // --- Replicate ALL relevant onConnect logic here, before setting state ---
+            
+            // 1. Handle timeframe inheritance for Feature nodes
+            if (sourceNode?.type === 'dataSource' && newNode.type === 'feature') {
+                newNode.data.timeframe = sourceNode.data.timeframe;
+            }
+
+            // 2. Handle auto-selection for ProcessIndicator nodes
+            if (sourceNode?.type === 'feature' && newNode.type === 'processIndicators') {
+                newNode.data.selectedIndicators = {
+                    ...(newNode.data.selectedIndicators || {}),
+                    [sourceNode.id]: true, // Auto-check the box
+                };
+            }
+
+            // Set both nodes and edges state AT ONCE.
+            setNodes((nds) => [...nds, newNode]);
+            setEdges((eds) => addEdge(newEdge, eds));
+            
+        } else {
+            // This is the simple "drag from sidebar" scenario. Just add the node.
+            setNodes((nds) => [...nds, newNode]);
         }
-    }, [setNodes, setEdges, onConnect]); // IMPORTANT: Add onConnect here
+    }, [nodes, setNodes, setEdges, feTemplates]); // Add feTemplates to dependencies if needed
 
 
     const deleteElement = useCallback((id: string, type: 'node' | 'edge') => {
@@ -324,22 +881,6 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
             onEdgesChange([{ id, type: 'remove' }]);
         }
     }, [setNodes, setEdges, onEdgesChange]); // IMPORTANT: Add onEdgesChange here
-
-
-
-
-    const [config, setConfig] = useState<MLConfig>(initialConfig);
-    const [workflowId, setWorkflowId] = useState<string | null>(null);
-    const [displayData, setDisplayData] = useState<{ data: any[], info: any | null }>({ data: [], info: null });
-    const [isFetching, setIsFetching] = useState(false);
-    const [isCalculating, setIsCalculating] = useState(false);
-    const [isEngineering, setIsEngineering] = useState(false);
-    const [isValidating, setIsValidating] = useState(false);
-    const [isRunning, setIsRunning] = useState(false);
-    const [validationInfo, setValidationInfo] = useState<any | null>(null);
-
-    const { connectToBatch, toggleTerminal } = useTerminal();
-
 
     // All effects are also moved here
     useEffect(() => {
@@ -361,248 +902,107 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
         }
     }, [workflowId]); // Depend on workflowId to prevent re-running
 
-    useEffect(() => {
-        handleConfigChange('model.hyperparameters', {});
-    }, [config.model.name]);
+    // 1. Memoize selectNode
+    const selectNode = useCallback((nodeId: string | null) => {
+        setSelectedNodeId(nodeId);
+    }, []); // Empty dependency array is correct because setSelectedNodeId is stable
 
-    const handleConfigChange = (path: string, value: any) => {
-        setConfig(prev => {
-            const keys = path.split('.');
-            let tempState = { ...prev };
-            let current = tempState as any;
-            for (let i = 0; i < keys.length - 1; i++) {
-                current[keys[i]] = { ...current[keys[i]] };
-                current = current[keys[i]];
-            }
-            current[keys[keys.length - 1]] = value;
-            return tempState;
-        });
-    };
+    // 2. Memoize executePipelineUpToNode
+    const executePipelineUpToNode = useCallback(async (targetNodeId: string) => {
+        if (!workflowId) return alert("Workflow not initialized.");
+        if (isProcessing) return; // Prevent concurrent runs
 
-    const handleFetchData = async () => {
-        if (!workflowId) return alert("Workflow not initialized. Please wait or refresh.");
-        
-        setIsFetching(true);
-        // Clear previous data and info immediately for better user feedback
-        setDisplayData({ data: [], info: null });
-
-        try {
-            // NOTE: The backend endpoint should be designed to return data directly, not a batch_id.
-            // Let's assume the endpoint is `/api/ml/fetch-data`.
-            const response = await fetch(`${API_URL}/api/ml/workflow/${workflowId}/fetch-data`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                // It's good practice to send only the data the endpoint needs.
-                body: JSON.stringify(config.dataSource),
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ detail: 'An unknown server error occurred while fetching data.' }));
-                throw new Error(errorData.detail);
-            }
-
-            // Expect the backend to return a structure like: { data: [...], info: {...} }
-            const result = await response.json();
-
-            if (result.data && result.info) {
-                // Update the state with the fetched data, which will re-render the child components
-                setDisplayData({ data: result.data, info: result.info });
-            } else {
-                throw new Error("Received an invalid data structure from the server.");
-            }
-
-        } catch (error) {
-            // Handle any errors during the fetch
-            console.error("Failed to fetch OHLCV data:", error);
-            const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
-            alert(`Error fetching data: ${errorMessage}`);
-            // You can also set an error message in the info panel
-            setDisplayData({ data: [], info: { error: errorMessage } });
-        } finally {
-            // CRUCIAL: Always set the loading state to false in the finally block
-            setIsFetching(false);
-        }
-    };
-
-    const handleCalculateFeatures = async () => {
-        if (!workflowId) return alert("Workflow not initialized. Please wait or refresh.");
-        
-        setIsCalculating(true);
-
-        try {
-            // The payload must include the data source, the list of features, and preprocessing steps.
-            const payload = {
-                dataSource: config.dataSource,
-                features: config.features,
-            };
-
-            const response = await fetch(`${API_URL}/api/ml/workflow/${workflowId}/calculate-features`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(payload), // Send the complete payload
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ detail: 'Server error during feature calculation.' }));
-                throw new Error(errorData.detail);
-            }
-
-            const result = await response.json();
-            if (result.data && result.info) {
-                setDisplayData({ data: result.data, info: result.info });
-            } else {
-                throw new Error("Invalid data structure received for features.");
-            }
-
-        } catch (error) {
-            console.error("Failed to calculate features:", error);
-            const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
-            alert(`Error calculating features: ${errorMessage}`);
-            setDisplayData({ data: [], info: { error: errorMessage } });
-        } finally {
-            setIsCalculating(false);
-        }
-    };
-
-    const handleFeatureEngineering = async () => {
-        if (!workflowId) return alert("Workflow not initialized. Please wait or refresh.");
-
-        setIsEngineering(true);
-
-        try {
-            // The payload must include the data source, the list of features, and preprocessing steps.
-            const payload = {
-                dataSource: config.dataSource,
-                features: config.features,
-                preprocessing: config.preprocessing
-            };
-
-            const response = await fetch(`${API_URL}/api/ml/workflow/${workflowId}/feature-engineering`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(payload), // Send the complete payload
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ detail: 'Server error during feature engineering.' }));
-                throw new Error(errorData.detail);
-            }
-
-            const result = await response.json();
-            if (result.data && result.info) {
-                setDisplayData({ data: result.data, info: result.info });
-            } else {
-                throw new Error("Invalid data structure received for features.");
-            }
-
-        } catch (error) {
-            console.error("Failed to feature engineer:", error);
-            const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
-            alert(`Error feature engineering: ${errorMessage}`);
-            setDisplayData({ data: [], info: { error: errorMessage } });
-        } finally {
-            setIsEngineering(false);
-        }
-    };
-
-
-    const handleValidation = async () => {
-        if (!workflowId) return alert("Workflow not initialized. Please wait or refresh.");
-
-        setIsValidating(true);
-        setValidationInfo(null); // Clear previous results
-
-        try {
-            // The payload must include the data source, the list of features, and preprocessing steps.
-            const payload = {
-                dataSource: config.dataSource,
-                features: config.features,
-                preprocessing: config.preprocessing,
-                validation: config.validation,
-                problemDefinition: config.problemDefinition
-            };
-
-            const response = await fetch(`${API_URL}/api/ml/workflow/${workflowId}/data-validation`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(payload), // Send the complete payload
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ detail: 'Server error during data validation.' }));
-                throw new Error(errorData.detail);
-            }
-
-            const result = await response.json();
-
-            if (result.data && result.info) {
-                // We update both the main display and the specific validation info
-                setDisplayData({ data: result.data, info: result.info });
-                if (result.info.validation_info) {
-                    setValidationInfo(result.info.validation_info);
-                }
-            } else {
-                throw new Error("Invalid data structure received for features.");
-            }
-
-        } catch (error) {
-            console.error("Failed to validate data:", error);
-            const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
-            alert(`Error validating data: ${errorMessage}`);
-            setValidationInfo({ error: errorMessage });
-        } finally {
-            setIsValidating(false);
-        }
-    };
-
-    const handleRunPipeline = async () => {
-        if (!workflowId) return alert("Workflow not initialized. Please wait or refresh.");
-
-        setIsRunning(true);
-        toggleTerminal(true);
-        console.log("Submitting ML Pipeline with config:", JSON.stringify(config, null, 2));
+        setIsProcessing(true);
+        setProcessingNodeId(targetNodeId);
         
         try {
-            // --- CALL THE NEW, STATEFUL ENDPOINT ---
-            const response = await fetch(`${API_URL}/api/ml/workflow/${workflowId}/run`, {
+            const payload = {
+                // Pass the current state of nodes and edges
+                nodes: nodes.map(n => ({ id: n.id, type: n.type, data: n.data })),
+                edges,
+                targetNodeId,
+            };
+
+            const response = await fetch(`${API_URL}/api/ml/workflow/${workflowId}/execute`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(config), // Send the final config
+                body: JSON.stringify(payload),
             });
 
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({ detail: 'An unknown server error occurred.' }));
-                throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
+                throw new Error(errorData.detail);
             }
 
-            const result: { batch_id: string } = await response.json();
-            
-            if (result.batch_id) {
-                connectToBatch(result.batch_id);
-                // navigate('/analysis');
-            } else {
-                throw new Error("Submission was successful, but no batch ID was returned.");
-            }
+            const result = await response.json();
+
+            setPipelineNodeCache(prevCache => ({
+                ...prevCache,
+                ...result // Directly merge the entire results object into the cache
+            }));
+            selectNode(targetNodeId);
 
         } catch (error) {
-            console.error("Failed to run ML Pipeline:", error);
-            alert(`Error submitting pipeline: ${error instanceof Error ? error.message : 'An unknown error occurred.'}`);
-            setIsRunning(false);
+            const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
+            alert(`Pipeline Error: ${errorMessage}`);
+            setPipelineNodeCache(prevCache => ({
+                ...prevCache,
+                [targetNodeId]: { data: [], info: { error: errorMessage } }
+            }));
+            selectNode(targetNodeId);
         } finally {
-            setIsRunning(false)
+            setIsProcessing(false);
+            setProcessingNodeId(null);
         }
-    };
+    }, [
+        workflowId, 
+        isProcessing, 
+        nodes, // Add nodes and edges here
+        edges, 
+        selectNode, // This is now a stable dependency
+        // State setters are stable and don't need to be in the array, but it's good practice
+        setPipelineNodeCache, 
+        setIsProcessing, 
+        setProcessingNodeId
+    ]);
 
+    const dataForDisplay = useMemo(() => {
+        const emptyDisplayData = { data: [], info: null };
 
+        // If a node is explicitly selected, prioritize its data.
+        if (selectedNodeId) {
+            return pipelineNodeCache[selectedNodeId] || emptyDisplayData;
+        }
 
+        // If no node is selected, find the "last" node(s) in the graph.
+        if (nodes.length > 0) {
+            // Find all node IDs that are used as a source for an edge.
+            const sourceNodeIds = new Set(edges.map(edge => edge.source));
+            
+            // A terminal node is one that is NOT a source for any edge.
+            const terminalNodes = nodes.filter(node => !sourceNodeIds.has(node.id));
+
+            let lastNodeId: string | null = null;
+
+            if (terminalNodes.length > 0) {
+                // If we have one or more terminal nodes, pick the first one.
+                lastNodeId = terminalNodes[0].id;
+            } else {
+                // Fallback for single-node graphs or graphs with cycles.
+                // Just use the first node in the list.
+                lastNodeId = nodes[0].id;
+            }
+
+            // Return the cached data for the determined "last node".
+            if (lastNodeId) {
+                return pipelineNodeCache[lastNodeId] || emptyDisplayData;
+            }
+        }
+
+        // If there are no nodes at all, return the empty state.
+        return emptyDisplayData;
+
+    }, [selectedNodeId, nodes, edges, pipelineNodeCache]); // This memo re-runs only when these dependencies change
 
     const value = {
         nodes,
@@ -616,26 +1016,38 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
         addNode,
         deleteElement,
         updateNodeData,
+
+        feTemplates,
+        labelingTemplates,
+        saveFeTemplate,
+        saveLabelingTemplate,
+        deleteFeTemplate,
+        deleteLabelingTemplate,
+
         symbolList,
         isFetchingSymbols,
         indicatorSchema,
         isLoadingSchema,
         fetchError,
-        config,
         workflowId,
-        displayData,
-        isFetching,
-        isCalculating,
-        isEngineering,
-        isValidating,
-        isRunning,
-        validationInfo,
-        handleConfigChange,
-        handleFetchData,
-        handleCalculateFeatures,
-        handleFeatureEngineering,
-        handleValidation,
-        handleRunPipeline,
+        isProcessing,
+        processingNodeId,
+        selectedNodeId,
+        pipelineNodeCache,
+        selectNode,
+        executePipelineUpToNode,
+        dataForDisplay,
+        newWorkflow,
+        currentWorkflowName,
+        savedWorkflows,
+        saveWorkflow,
+        loadWorkflow,
+        clearBackendCache,
+        editingNodeId,
+        setEditingNodeId,
+        backtestTemplates,
+        saveBacktestTemplate,
+        deleteBacktestTemplate,
     };
 
     return (

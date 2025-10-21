@@ -1,9 +1,10 @@
 import React, { useMemo } from 'react';
-import { Handle, Position } from 'reactflow';
+import { Handle, Position, getIncomers } from 'reactflow';
 import type { NodeProps } from 'reactflow';
-import { Paper, Typography, Box, FormGroup, FormControlLabel, Checkbox, IconButton } from '@mui/material';
+import { Paper, Typography, Box, FormGroup, FormControlLabel, Checkbox, IconButton, CircularProgress } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { usePipeline } from '../../../context/PipelineContext';
+import { NodeHeader } from './NodeHeader'; // Import the new header
 
 /**
  * Data structure for the ProcessIndicatorsNode.
@@ -15,26 +16,34 @@ interface ProcessIndicatorsNodeData {
 }
 
 export const ProcessIndicatorsNode = ({ id, data }: NodeProps<ProcessIndicatorsNodeData>) => {
-    // Access global state (nodes, edges, schema) from the context
-    const { nodes, edges, indicatorSchema, updateNodeData } = usePipeline();
+    // 1. Pull from context
+    const { nodes, edges, indicatorSchema, updateNodeData, executePipelineUpToNode, isProcessing, processingNodeId } = usePipeline();
+    
+    // 2. Determine processing state
+    const amIProcessing = isProcessing && processingNodeId === id;
 
     // Memoized calculation to find connected predecessor feature nodes.
-    // This will only re-run when the relevant dependencies (id, nodes, edges) change.
+    // This is now much cleaner and more reliable using getIncomers.
     const predecessorFeatures = useMemo(() => {
-        // Find all edges that connect TO this node
-        const parentIds = edges
-            .filter(edge => edge.target === id)
-            .map(edge => edge.source);
+        // Find the current node object from the full list of nodes
+        const currentNode = nodes.find(node => node.id === id);
+        if (!currentNode) {
+            return [];
+        }
 
-        // From the parent IDs, find the actual node objects that are of type 'feature'
-        return nodes
-            .filter(node => parentIds.includes(node.id) && node.type === 'feature')
+        // Use React Flow's getIncomers helper to get all direct parent nodes
+        const incomers = getIncomers(currentNode, nodes, edges);
+        
+        // Filter the parents to only include nodes of type 'feature'
+        return incomers
+            .filter(node => node.type === 'feature')
             .map(node => ({
                 id: node.id,
-                indicatorKey: node.data.indicator,
+                indicatorKey: node.data.name,
                 // Get the user-friendly name from the schema, or fall back to the key
-                displayName: indicatorSchema[node.data.indicator]?.name || node.data.indicator || 'Unknown Indicator',
+                displayName: indicatorSchema[node.data.name]?.name || node.data.name || 'Unknown Indicator',
             }));
+    // The dependencies remain the same, as we still rely on the same source data
     }, [id, nodes, edges, indicatorSchema]);
 
     // Handler for when a checkbox is toggled
@@ -60,17 +69,36 @@ export const ProcessIndicatorsNode = ({ id, data }: NodeProps<ProcessIndicatorsN
 
     return (
         <Paper elevation={3} sx={{ borderRadius: 2, width: '300px', border: '1px solid #555' }}>
-            <Handle type="target" position={Position.Left} style={handleStyle} isConnectable={true} />
+            <Handle type="target" position={Position.Left} style={{ ...handleStyle, backgroundColor: '#555' }} isConnectable={true} />
 
             {/* Header */}
-            <Box sx={{ bgcolor: '#41a336ff', p: 1, borderTopLeftRadius: 'inherit', borderTopRightRadius: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+
+            <NodeHeader nodeId={id} title={data.label} color="#41a336ff">
+                <IconButton 
+                    size="small" 
+                    sx={{ color: 'white' }} 
+                    aria-label="run" 
+                    onClick={() => executePipelineUpToNode(id)}
+                    disabled={amIProcessing}
+                >
+                    {amIProcessing ? <CircularProgress size={24} color="inherit" /> : <PlayArrowIcon fontSize="medium" />}
+                </IconButton>
+            </NodeHeader>
+
+            {/* <Box sx={{ bgcolor: '#41a336ff', p: 1, borderTopLeftRadius: 'inherit', borderTopRightRadius: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Typography variant="subtitle2" sx={{ color: 'primary.contrastText', pl: 1 }}>
                     {data.label || 'Process Indicators'}
                 </Typography>
-                <IconButton size="small" sx={{ color: 'white' }} aria-label="run">
-                    <PlayArrowIcon />
+                <IconButton 
+                    size="small" 
+                    sx={{ color: 'white' }} 
+                    aria-label="run"
+                    onClick={() => executePipelineUpToNode(id)}
+                    disabled={amIProcessing}
+                >
+                    {amIProcessing ? <CircularProgress size={24} color="inherit" /> : <PlayArrowIcon />}
                 </IconButton>
-            </Box>
+            </Box> */}
 
             {/* Content Body */}
             <Box
@@ -106,7 +134,7 @@ export const ProcessIndicatorsNode = ({ id, data }: NodeProps<ProcessIndicatorsN
                 </FormGroup>
             </Box>
             
-            <Handle type="source" position={Position.Right} style={handleStyle} />
+            <Handle type="source" position={Position.Right} style={{ ...handleStyle, backgroundColor: '#555'}} />
         </Paper>
     );
 };

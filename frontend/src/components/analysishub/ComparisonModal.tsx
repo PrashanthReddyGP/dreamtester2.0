@@ -20,6 +20,7 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import ReactECharts from 'echarts-for-react';
 import type { StrategyResult } from '../../services/api';
+import { Tooltip } from '@mui/material';
 
 interface ComparisonModalProps {
   open: boolean;
@@ -172,7 +173,7 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
   const availableChoices = results.filter(r => r.strategy_name !== 'Portfolio');
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xl" PaperProps={{ sx: { height: '90vh' } }}>
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xll" PaperProps={{ sx: { height: '90vh' } }}>
       <DialogTitle sx={{ m: 0, p: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         Select Strategies to Compare
         <IconButton aria-label="close" onClick={onClose}><CloseIcon /></IconButton>
@@ -194,21 +195,23 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
                 const isDisabled = !isSelected && selectedIds.length >= MAX_COMPARISON_COUNT;
 
                 return (
-                  <ListItem key={result.strategy_name} disablePadding>
-                    <ListItemButton role={undefined} onClick={handleToggle(result.strategy_name)} dense disabled={isDisabled}>
-                      <ListItemIcon>
-                        <Checkbox
-                          edge="start"
-                          checked={isSelected}
-                          tabIndex={-1}
-                          disableRipple
-                          inputProps={{ 'aria-labelledby': labelId }}
-                          disabled={isDisabled}
-                        />
-                      </ListItemIcon>
-                      <ListItemText id={labelId} primary={result.strategy_name} primaryTypographyProps={{sx: {textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap'}}}/>
-                    </ListItemButton>
-                  </ListItem>
+                  <Tooltip title={result.strategy_name} placement="right" key={result.strategy_name}>
+                    <ListItem disablePadding>
+                      <ListItemButton role={undefined} onClick={handleToggle(result.strategy_name)} dense disabled={isDisabled}>
+                        <ListItemIcon>
+                          <Checkbox
+                            edge="start"
+                            checked={isSelected}
+                            tabIndex={-1}
+                            disableRipple
+                            inputProps={{ 'aria-labelledby': labelId }}
+                            disabled={isDisabled}
+                          />
+                        </ListItemIcon>
+                        <ListItemText id={labelId} primary={result.strategy_name} primaryTypographyProps={{sx: {textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap'}}}/>
+                      </ListItemButton>
+                    </ListItem>
+                  </Tooltip>
                 );
               })}
             </List>

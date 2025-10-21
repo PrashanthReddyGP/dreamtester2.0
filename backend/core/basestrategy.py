@@ -8,14 +8,20 @@ class BaseStrategy:
         
         self.optim_number = optim_number
         
+        # self.ticks = False
+        # self.ticks_df = pd.DataFrame()
+        
+        self.sub_timeframes = []
+        self.dataframes = {}
+        
         self.symbol = symbol
         self.timeframe = timeframe
         self.start_date = start_date
         self.end_date = end_date
-
+        
         # Indicators as a dictionary, specifying the indicator type and parameters
         self.indicators = [
-            ('ATR', '1m', (100, 8))
+            ('ATR', '1m', (14, 3))
         ]
         
         self.exit_type = 'TP and SL'
@@ -48,9 +54,17 @@ class BaseStrategy:
             self.exit_time = np.zeros(len(self.close))
             self.open_trades = np.zeros(len(self.close))
             self.signals = np.zeros(len(self.close))
-            
-            self.df = df
-            
+        
+        # if self.ticks_df is not None and not self.ticks_df.empty:
+        #     self.ticks_open = self.ticks_df['open'].values
+        #     self.ticks_high = self.ticks_df['high'].values
+        #     self.ticks_low = self.ticks_df['low'].values
+        #     self.ticks_close = self.ticks_df['close'].values
+        #     self.ticks_volume = self.ticks_df['volume'].values
+        
+        #     self.ticks_df['timestamp'] = self.ticks_df['timestamp'].astype(np.int64) // 10**6 
+        #     self.ticks_timestamp = self.ticks_df['timestamp'].values
+    
     # def entry_condition(self, i):
     #     """Override this method in specific strategy class to define exit conditions."""
     #     raise NotImplementedError
@@ -77,9 +91,8 @@ class BaseStrategy:
         else:
             # Assumes your process_indicators creates columns like 'sma_50', 'sma_200'
             length = int(params[0]) 
-            return f'sma_{length}'
+            return f'sma_{length}_{timeframe}'
     
-    # --- THIS IS THE NEW, CENTRALIZED LOGIC ---
     def _get_indicator_args(self):
         """
         Iterates through self.indicators and builds the list of numpy arrays
@@ -97,7 +110,6 @@ class BaseStrategy:
                 args.append(self.df[column_name].values)
                 
         return args
-
     
     def optimized_run(self):
         pass
@@ -323,7 +335,227 @@ class BaseStrategy:
         
     #     return portfolio_equity, open_trade_count
 
+    # def portfolio(self,
+    #             timestamps,
+    #             entry_trade_ids_list,
+    #             entry_directions_list,
+    #             entry_prices_list,
+    #             entry_sls_list,
+    #             entry_tps_list,
+    #             entry_risks_list,
+    #             exit_trade_ids_list,
+    #             exit_results_list):
+    #     """
+    #     A realistic, event-driven portfolio simulator that now also returns a
+    #     log of closed trades with their final, accurate P/L.
+    #     """
+    #     capital = self.initial_capital
+    #     portfolio_equity = np.zeros(len(timestamps), dtype=np.float64)
+    #     open_trade_count = np.zeros(len(timestamps), dtype=np.int32)
+        
+    #     risk_percent = 1
+    #     fee_rate = 0.001
+        
+    #     if len(timestamps) > 0:
+    #         portfolio_equity[0] = capital
+        
+    #     open_trades = {}
+    #     closed_trades_log = []
+        
+    #     for i in range(1, len(timestamps)):
+    #         capital = portfolio_equity[i-1]
+            
+    #         # --- Step 1: Process Entries (No changes here) ---
+    #         if isinstance(entry_trade_ids_list[i], list):
+                
+    #             for idx, entry_id in enumerate(entry_trade_ids_list[i]):
+                    
+    #                 risk_percent_for_trade = entry_risks_list[i][idx]
+                    
+    #                 entry_price = entry_prices_list[i][idx]
+    #                 stop_loss = entry_sls_list[i][idx]
+    #                 risk_per_unit = abs(entry_price - stop_loss)
+                    
+    #                 if risk_per_unit > 1e-9:
+    #                     cash_at_risk = capital * (risk_percent_for_trade / 100)
+    #                     position_size = cash_at_risk / risk_per_unit
+    #                     open_trades[int(entry_id)] = {
+    #                         'direction': entry_directions_list[i][idx],
+    #                         'entry_price': entry_price,
+    #                         'stop_loss': stop_loss,
+    #                         'take_profit': entry_tps_list[i][idx],
+    #                         'position_size': position_size
+    #                     }
 
+    #         # --- Step 2: Process Exits ---
+    #         total_return_this_bar = 0.0
+    #         if isinstance(exit_trade_ids_list[i], list):
+    #             for idx, exit_id in enumerate(exit_trade_ids_list[i]):
+    #                 if int(exit_id) in open_trades:
+    #                     trade = open_trades[int(exit_id)]
+    #                     result = exit_results_list[i][idx]
+    #                     exit_price = trade['take_profit'] if result == 1 else trade['stop_loss']
+                        
+    #                     if trade['direction'] == 1: # Long
+    #                         gross_return = (exit_price - trade['entry_price']) * trade['position_size']
+    #                     else: # Short
+    #                         gross_return = (trade['entry_price'] - exit_price) * trade['position_size']
+                            
+    #                     entry_value = trade['entry_price'] * trade['position_size']
+    #                     exit_value = exit_price * trade['position_size']
+    #                     total_fee = (entry_value) * fee_rate
+    #                     net_return = gross_return - total_fee
+                        
+    #                     total_return_this_bar += net_return
+                        
+    #                     # <<< Log the closed trade details >>>
+    #                     closed_trades_log.append({
+    #                         'trade_id': int(exit_id),
+    #                         'final_gross_return': gross_return,
+    #                         'final_net_return': net_return
+    #                     })
+                        
+    #                     del open_trades[int(exit_id)]
+            
+    #         # --- Step 3: Apply net P/L and store state ---
+    #         capital += total_return_this_bar
+    #         portfolio_equity[i] = capital
+    #         open_trade_count[i] = len(open_trades)
+        
+    #     return portfolio_equity, open_trade_count, closed_trades_log
+    
+    # def portfolio(self,
+    #             timestamps,
+    #             entry_trade_ids_list,
+    #             entry_directions_list,
+    #             entry_prices_list,
+    #             entry_sls_list,
+    #             entry_tps_list,
+    #             entry_risks_list,
+    #             exit_trade_ids_list,
+    #             exit_results_list):
+    #     """
+    #     A realistic, event-driven portfolio simulator that now also returns a
+    #     log of closed trades with their final, accurate P/L.
+    #     """
+    #     capital = self.initial_capital
+    #     portfolio_equity = np.zeros(len(timestamps), dtype=np.float64)
+    #     open_trade_count = np.zeros(len(timestamps), dtype=np.int32)
+        
+    #     risk_percent = 1
+    #     fee_rate = 0.001
+        
+    #     open_trades = {}
+    #     closed_trades_log = []
+        
+    #     # --- Risk Management and Constants ---
+    #     DRAWDOWN_LIMIT_PERCENT = 100.0
+        
+    #     # --- State Tracking Variables for BOTH portfolios ---
+    #     # 'Fake' portfolio runs the raw strategy
+    #     fake_capital = self.initial_capital
+    #     fake_portfolio_equity = np.zeros(len(timestamps), dtype=np.float64)
+    #     fake_peak_equity = self.initial_capital
+        
+    #     # 'Real' portfolio is the one we report, which is subject to the freeze rule
+    #     real_portfolio_equity = np.zeros(len(timestamps), dtype=np.float64)
+        
+    #     # Shared state variables
+    #     is_frozen = False # The switch that controls the real portfolio
+        
+    #     if len(timestamps) > 0:
+    #         fake_portfolio_equity[0] = self.initial_capital
+    #         real_portfolio_equity[0] = self.initial_capital
+        
+    #     for i in range(1, len(timestamps)):
+    #         # The entire simulation is driven by the 'fake' portfolio's capital
+    #         fake_capital = fake_portfolio_equity[i-1]
+            
+    #         # --- Step 1 & 2: Simulate the Unrestricted 'Fake' Portfolio for one bar ---
+    #         # All trade logic (position sizing, P/L) is based on the fake portfolio.
+            
+    #         # --- Process Entries ---
+    #         if isinstance(entry_trade_ids_list[i], list):
+                
+    #             for idx, entry_id in enumerate(entry_trade_ids_list[i]):
+                    
+    #                 risk_percent_for_trade = entry_risks_list[i][idx]
+                    
+    #                 entry_price = entry_prices_list[i][idx]
+    #                 stop_loss = entry_sls_list[i][idx]
+    #                 risk_per_unit = abs(entry_price - stop_loss)
+                    
+    #                 if risk_per_unit > 1e-9:
+    #                     cash_at_risk = fake_capital * (risk_percent_for_trade / 100)
+    #                     position_size = cash_at_risk / risk_per_unit
+    #                     open_trades[int(entry_id)] = {
+    #                         'direction': entry_directions_list[i][idx],
+    #                         'entry_price': entry_price,
+    #                         'stop_loss': stop_loss,
+    #                         'take_profit': entry_tps_list[i][idx],
+    #                         'position_size': position_size
+    #                     }
+            
+    #         # --- Step 2: Process Exits ---
+    #         total_return_this_bar = 0.0
+    #         if isinstance(exit_trade_ids_list[i], list):
+    #             for idx, exit_id in enumerate(exit_trade_ids_list[i]):
+    #                 if int(exit_id) in open_trades:
+    #                     trade = open_trades[int(exit_id)]
+    #                     result = exit_results_list[i][idx]
+    #                     exit_price = trade['take_profit'] if result == 1 else trade['stop_loss']
+                        
+    #                     if trade['direction'] == 1: # Long
+    #                         gross_return = (exit_price - trade['entry_price']) * trade['position_size']
+    #                     else: # Short
+    #                         gross_return = (trade['entry_price'] - exit_price) * trade['position_size']
+                            
+    #                     entry_value = trade['entry_price'] * trade['position_size']
+    #                     exit_value = exit_price * trade['position_size']
+    #                     total_fee = (entry_value) * fee_rate
+    #                     net_return = gross_return - total_fee
+                        
+    #                     total_return_this_bar += net_return
+                        
+    #                     # <<< Log the closed trade details >>>
+    #                     closed_trades_log.append({
+    #                         'trade_id': int(exit_id),
+    #                         'final_gross_return': gross_return,
+    #                         'final_net_return': net_return
+    #                     })
+                        
+    #                     del open_trades[int(exit_id)]
+            
+    #         # Update and store the fake portfolio's state
+    #         fake_capital += total_return_this_bar
+    #         fake_portfolio_equity[i] = fake_capital
+            
+    #         # --- Step 3: Check 'Fake' Portfolio's Drawdown to Set the Freeze Switch ---
+    #         fake_peak_equity = max(fake_peak_equity, fake_portfolio_equity[i])
+    #         current_fake_drawdown = 0.0
+    #         if fake_peak_equity > 0:
+    #             current_fake_drawdown = (fake_peak_equity - fake_portfolio_equity[i]) / fake_peak_equity * 100
+            
+    #         if current_fake_drawdown > DRAWDOWN_LIMIT_PERCENT:
+    #             is_frozen = True
+    #         elif current_fake_drawdown < DRAWDOWN_LIMIT_PERCENT:
+    #             is_frozen = False
+            
+    #         # --- Step 4: Update the 'Real' Portfolio Based on the Freeze Rule ---
+    #         if is_frozen:
+    #             # If frozen, the real equity does not change. It carries over the last known good value.
+    #             real_portfolio_equity[i] = real_portfolio_equity[i-1]
+    #         else:
+    #             # If not frozen, the real equity tracks the fake equity perfectly.
+    #             real_portfolio_equity[i] = fake_portfolio_equity[i]
+            
+    #         # --- Step 3: Apply net P/L and store state ---
+    #         capital += total_return_this_bar
+    #         portfolio_equity[i] = capital
+    #         open_trade_count[i] = len(open_trades)
+        
+    #     return real_portfolio_equity, open_trade_count, closed_trades_log
+    
     def portfolio(self,
                 timestamps,
                 entry_trade_ids_list,
@@ -336,13 +568,19 @@ class BaseStrategy:
                 exit_results_list):
         """
         A realistic, event-driven portfolio simulator that now also returns a
-        log of closed trades with their final, accurate P/L.
+        log of closed trades and enforces portfolio-level risk limits.
+        
+        Portfolio Risk:
+        - max_longs: The maximum number of long positions allowed to be open at any time.
+        - max_shorts: The maximum number of short positions allowed to be open at any time.
         """
         capital = self.initial_capital
         portfolio_equity = np.zeros(len(timestamps), dtype=np.float64)
         open_trade_count = np.zeros(len(timestamps), dtype=np.int32)
         
-        risk_percent = 1
+        # --- Portfolio Risk Parameters ---
+        max_longs = 50
+        max_shorts = 50
         fee_rate = 0.001
         
         if len(timestamps) > 0:
@@ -354,11 +592,26 @@ class BaseStrategy:
         for i in range(1, len(timestamps)):
             capital = portfolio_equity[i-1]
             
-            # --- Step 1: Process Entries (No changes here) ---
+            # --- Step 1: Process Entries (Modified for Portfolio Risk) ---
             if isinstance(entry_trade_ids_list[i], list):
                 
+                # <<< NEW: Count existing open positions before processing new entries for this bar >>>
+                current_longs = sum(1 for trade in open_trades.values() if trade['direction'] == 1)
+                current_shorts = len(open_trades) - current_longs
+
                 for idx, entry_id in enumerate(entry_trade_ids_list[i]):
                     
+                    direction = entry_directions_list[i][idx]
+
+                    # <<< NEW: Check portfolio risk limits before entering a trade >>>
+                    if direction == 1: # Proposed trade is a Long
+                        if current_longs >= max_longs:
+                            continue # Skip this trade, max longs reached for this bar
+                    else: # Proposed trade is a Short
+                        if current_shorts >= max_shorts:
+                            continue # Skip this trade, max shorts reached for this bar
+
+                    # If the code reaches here, the trade is allowed by portfolio risk rules.
                     risk_percent_for_trade = entry_risks_list[i][idx]
                     
                     entry_price = entry_prices_list[i][idx]
@@ -369,14 +622,21 @@ class BaseStrategy:
                         cash_at_risk = capital * (risk_percent_for_trade / 100)
                         position_size = cash_at_risk / risk_per_unit
                         open_trades[int(entry_id)] = {
-                            'direction': entry_directions_list[i][idx],
+                            'direction': direction,
                             'entry_price': entry_price,
                             'stop_loss': stop_loss,
                             'take_profit': entry_tps_list[i][idx],
                             'position_size': position_size
                         }
+                        
+                        # <<< NEW: Increment the relevant counter for this bar after opening the trade >>>
+                        # This ensures subsequent signals in the SAME bar are checked against the new count.
+                        if direction == 1:
+                            current_longs += 1
+                        else:
+                            current_shorts += 1
 
-            # --- Step 2: Process Exits ---
+            # --- Step 2: Process Exits (No changes here) ---
             total_return_this_bar = 0.0
             if isinstance(exit_trade_ids_list[i], list):
                 for idx, exit_id in enumerate(exit_trade_ids_list[i]):
@@ -391,13 +651,14 @@ class BaseStrategy:
                             gross_return = (trade['entry_price'] - exit_price) * trade['position_size']
                             
                         entry_value = trade['entry_price'] * trade['position_size']
-                        exit_value = exit_price * trade['position_size']
-                        total_fee = (entry_value) * fee_rate
+                        # The fee for closing the trade is on the exit_value, but for simplicity
+                        # and common practice, many just double the entry fee. Let's assume a
+                        # simple fee on the entry notional value for this example.
+                        total_fee = (entry_value) * fee_rate 
                         net_return = gross_return - total_fee
                         
                         total_return_this_bar += net_return
                         
-                        # <<< Log the closed trade details >>>
                         closed_trades_log.append({
                             'trade_id': int(exit_id),
                             'final_gross_return': gross_return,
@@ -406,7 +667,7 @@ class BaseStrategy:
                         
                         del open_trades[int(exit_id)]
             
-            # --- Step 3: Apply net P/L and store state ---
+            # --- Step 3: Apply net P/L and store state (No changes here) ---
             capital += total_return_this_bar
             portfolio_equity[i] = capital
             open_trade_count[i] = len(open_trades)

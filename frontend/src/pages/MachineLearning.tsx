@@ -197,7 +197,7 @@ export const MachineLearning: React.FC = () => {
     };
 
     return (
-        <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)', width: '100vw' }}>
+        <Box sx={{ display: 'flex', height: 'calc(100vh - 88px)', width: '100vw' }}>
             <MlSidebar activeTab={activeTab} setActiveTab={setActiveTab} />
             <Box component="main" sx={{ flexGrow: 1, overflowY: 'auto', height: '100%' }}>
                 {renderActiveTab()}

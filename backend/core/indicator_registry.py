@@ -35,8 +35,8 @@ INDICATOR_REGISTRY = {
         'display_name': 'Hull Moving Average (HMA)'
     },
     'SMA_SLOPE': {
-        'function': idk.calculate_sma_slope,
-        'params': ['length', 'smoothbars', 'hlineheight'],
+        'function': idk.calculate_sma_slope_normalized,
+        'params': ['ma_period', 'slope_period', 'atr_period'],
         'display_name': 'SMA Slope'
     },
     'VWAP': {
@@ -133,6 +133,16 @@ INDICATOR_REGISTRY = {
         'params': ['conversion_line', 'base_line', 'lagging_span_b', 'lagging_span'],
         'display_name': 'Ichimoku Cloud'
     },
+    'SPIKE': {
+        'function': idk.calculate_spike,
+        'params': ['lookback'],
+        'display_name': 'Spike'
+    },
+    'CONSOLIDATION': {
+        'function': idk.calculate_consolidation,
+        'params': ['change'],
+        'display_name': 'Consolidation'
+    },
 
     # --- Volume ---
     'OBV': {
@@ -195,6 +205,12 @@ INDICATOR_REGISTRY = {
         'function': idk.calculate_stop_loss,
         'params': ['length', 'multiplier', 'index'],
         'display_name': 'ATR Stop Loss Calculator'
+    },
+    
+    'STANDARD_DEVIATION': {
+        'function': idk.calculate_standard_deviation,
+        'params': ['timeframe'],
+        'display_name': 'Standard Deviation'
     }
 }
 
@@ -217,12 +233,17 @@ def get_indicator_schema():
         'smoothbars': 3, 'hlineheight': 10,
         'af_initial': 0.02, 'af_step': 0.02, 'af_max': 0.2,
         'conversion_line': 9, 'base_line': 26, 'lagging_span_b': 52, 'lagging_span': 26,
+        'ma_period': 50, 'slope_period': 5, 'atr_period': 14, 'timeframe': 15, 'change': 5
     }
 
     schema = {}
+    
     for key, details in INDICATOR_REGISTRY.items():
+        
         params_schema = []
+        
         for param_name in details['params']:
+            
             # Handle special cases for non-numeric parameters
             if param_name == 'smoothing':
                 param_info = {"name": param_name, "type": "string", "defaultValue": "sma", "options": ["sma", "ema", "rma"]}
@@ -238,9 +259,10 @@ def get_indicator_schema():
                     "defaultValue": default_values.get(param_name, 10) # Default to 10 if not found
                 }
             params_schema.append(param_info)
-
+        
         schema[key] = {
             "name": details['display_name'],
             "params": params_schema
         }
+    
     return schema

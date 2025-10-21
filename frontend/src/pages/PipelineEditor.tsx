@@ -1,18 +1,17 @@
 // PipelineEditor.tsx
 import React, { useState, useCallback, useRef, useMemo } from 'react';
-import { Box, Menu, MenuItem } from '@mui/material';
+import { Box, Menu, MenuItem, IconButton, ListItemText } from '@mui/material';
+import DeleteIcon from '@mui/icons-material/Delete'; // Import the delete icon
 import ReactFlow, {
     Controls as ReactFlowControls, // Import with an alias
     Background,
     ReactFlowProvider,
     useReactFlow,
 } from 'reactflow';
-import type {
-    Node,
-    Edge,
-} from 'reactflow'
+import type { Node, Edge } from 'reactflow'; // Add Node, Edge here
 import 'reactflow/dist/style.css';
 import { styled } from '@mui/material/styles'; // Import styled
+import NestedMenuItem from '../components/common/NestedMenuItem'; // Adjust path if necessary
 
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
@@ -20,6 +19,7 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { DataSourceNode } from '../components/pipeline/nodes/DataSourceNode';
 import { FeatureNode } from '../components/pipeline/nodes/FeatureNode';
 import { usePipeline } from '../context/PipelineContext';
+import { SaveTemplateDialog } from '../components/common/SaveTemplateDialog'; // 1. Import the new dialog
 
 import {
     Panel,
@@ -29,7 +29,22 @@ import {
 import { SidePanel, CollapsedPanelHandle } from '../components/pipeline/SidePanel';
 import { ProcessIndicatorsNode } from '../components/pipeline/nodes/ProcessIndicatorsNode';
 import { EditorNode } from '../components/pipeline/nodes/EditorNode';
-import { MLModelNode } from '../components/pipeline/nodes/MLModelNode';
+import { NotesNode } from '../components/pipeline/nodes/NotesNode';
+import { LabelingNode } from '../components/pipeline/nodes/LabelingNode';
+import { ModelTrainerNode } from '../components/pipeline/nodes/ModelTrainerNode';
+import { ModelPredictorNode } from '../components/pipeline/nodes/ModelPredictorNode';
+import type { FETemplate, LabelingTemplate  } from '../context/PipelineContext';
+import { DataScalingNode } from '../components/pipeline/nodes/DataScalingNode';
+import { DataValidationNode } from '../components/pipeline/nodes/DataValidationNode';
+import { ChartingNode } from '../components/pipeline/nodes/ChartingNode';
+import { PipelineControls } from '../components/pipeline/PipelineControls';
+import { MergeNode } from '../components/pipeline/nodes/MergeNode';
+import { HyperparameterTuningNode } from '../components/pipeline/nodes/HyperparameterTuningNode';
+import { ClassImbalanceNode } from '../components/pipeline/nodes/ClassImbalanceNode';
+import { BacktesterNode } from '../components/pipeline/nodes/BacktesterNode';
+
+import EditIcon from '@mui/icons-material/Edit';
+import { FeaturesCorrelationNode } from '../components/pipeline/nodes/FeaturesCorrelationNode';
 
 const StyledControls = styled(ReactFlowControls)(({ theme }) => ({
     backgroundColor: 'theme.palette.background.paper',
@@ -71,25 +86,26 @@ const PipelineEditorContent: React.FC = () => {
         isFetchingSymbols,
         indicatorSchema,
         isLoadingSchema,
-        fetchError,
-        config,
-        workflowId,
-        displayData,
-        isFetching,
-        isCalculating,
-        isEngineering,
-        isValidating,
-        isRunning,
-        validationInfo,
-        handleConfigChange,
-        handleFetchData,
-        handleCalculateFeatures,
-        handleFeatureEngineering,
-        handleValidation,
-        handleRunPipeline,
+        selectNode,
+        selectedNodeId,
+        pipelineNodeCache,
+        isProcessing,
+        processingNodeId,
+        executePipelineUpToNode,
+        dataForDisplay,
+        feTemplates,
+        labelingTemplates,
+        saveFeTemplate,
+        saveLabelingTemplate,
+        deleteFeTemplate,
+        deleteLabelingTemplate,
+        editingNodeId,
+        setEditingNodeId,
     } = usePipeline();
 
     const { project } = useReactFlow();
+
+    const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
 
     const [menu, setMenu] = useState<{
         id: string | null;
@@ -104,7 +120,7 @@ const PipelineEditorContent: React.FC = () => {
     const connectingHandleType = useRef<string | null>(null);
 
     const [isPanelOpen, setIsPanelOpen] = useState(true);
-    const [panelPosition, setPanelPosition] = useState<'left' | 'right' | 'top' | 'bottom'>('bottom');
+    const [panelPosition, setPanelPosition] = useState<'left' | 'right' | 'top' | 'bottom'>('right');
 
     const onConnectStart = useCallback((_, { nodeId, handleType }) => {
         connectingNodeId.current = nodeId;
@@ -170,22 +186,27 @@ const PipelineEditorContent: React.FC = () => {
         addNode(nodeType, position, connectingNode);
     };
 
-    const handleDeleteElement = () => {
-        if (!menu || !menu.id || (menu.type !== 'node' && menu.type !== 'edge')) return;
+    const handleRenameNode = () => {
+        if (!menu || !menu.id || menu.type !== 'node') return;
+
+        // 1. Set the editing state in the context.
+        setEditingNodeId(menu.id);
+        // 2. Set the selected state. This will change the `selected` prop
+        //    on the node, busting the React.memo cache and forcing a re-render.
+        selectNode(menu.id);
+
         handleClose();
-        deleteElement(menu.id, menu.type);
     };
 
-    // This `useMemo` now correctly depends on data from the context.
-    // It will re-evaluate when the data finishes loading.
+    // We memoize the nodeTypes object to prevent it from being recreated on every render.
+    // The dependency array is stable because the lists and schemas only load once.
+    // This allows us to pass the necessary props down to each node type.
     const nodeTypes = useMemo(() => ({
         dataSource: (props: any) => (
             <DataSourceNode
                 {...props}
                 symbolList={symbolList}
                 isFetchingSymbols={isFetchingSymbols}
-                onFetch={handleFetchData}
-                isFetching={isFetching}
             />
         ),
         feature: (props: any) => (
@@ -195,11 +216,95 @@ const PipelineEditorContent: React.FC = () => {
                 isLoadingSchema={isLoadingSchema}
             />
         ),
+        // Simple nodes don't need extra props
         processIndicators: ProcessIndicatorsNode,
+        merge: MergeNode,
+        notes: NotesNode,
         customCode: EditorNode,
-        mlModel: MLModelNode,
-    }), [symbolList, isFetchingSymbols, indicatorSchema, isLoadingSchema]);
+        customLabeling: LabelingNode,
+        dataScaling: DataScalingNode,
+        dataValidation: DataValidationNode,
+        classImbalance: ClassImbalanceNode,
+        charting: ChartingNode,
+        featuresCorrelation: FeaturesCorrelationNode,
+        modelTrainer: ModelTrainerNode,
+        hyperparameterTuning: HyperparameterTuningNode, 
+        modelPredictor: ModelPredictorNode,
+        backtester: BacktesterNode,
+    }), [symbolList, isFetchingSymbols, indicatorSchema, isLoadingSchema]); // Stable dependencies
+
+
+    const handleDeleteElement = () => {
+        if (!menu || !menu.id || (menu.type !== 'node' && menu.type !== 'edge')) return;
+        handleClose();
+        deleteElement(menu.id, menu.type);
+    };
+
+    const nodesWithControlledSelection = useMemo(() => {
+        return nodes.map(node => ({
+            ...node,
+            selected: node.id === selectedNodeId,
+        }));
+    }, [nodes, selectedNodeId]);
+
+
+    const handleAddNodeFromTemplate = (
+        template: FETemplate | LabelingTemplate, 
+        subType: 'feature_engineering' | 'labeling'
+    ) => {
+        if (!menu) return;
+        const menuState = { ...menu };
+        handleClose();
+
+        const position = project({ x: menuState.left, y: menuState.top });
+        const connectingNode = menuState.type === 'connect-end' && menuState.connectingNodeId && menuState.connectingHandleType
+            ? { id: menuState.connectingNodeId, handleType: menuState.connectingHandleType }
+            : undefined;
+        
+        if (subType === 'feature_engineering') {
+            // Call the modified addNode with the template data
+            addNode('customCode', position, connectingNode, {
+                label: template.name,
+                code: template.code,
+                subType: subType
+            }); 
+        } else if (subType === 'labeling') {
+            // Call the modified addNode with the template data
+            addNode('customLabeling', position, connectingNode, {
+                label: template.name,
+                code: template.code,
+                subType: subType
+            });
+        }
+    };
+
+    // This function now just OPENS the dialog.
+    const handleSaveTemplate = () => {
+        if (!menu?.id) return;
+        const nodeToSave = nodes.find(n => n.id === menu.id);
+        // Only allow saving templates for custom code or labeling nodes
+        if (!nodeToSave || (nodeToSave.type !== 'customCode' && nodeToSave.type !== 'customLabeling')) return;
+        
+        setIsSaveDialogOpen(true); // Open the dialog
+    };
     
+    // --- 4. CREATE A NEW HANDLER FOR THE DIALOG'S "SAVE" ACTION ---
+    const handleConfirmSave = (templateName: string, description: string) => {
+        if (!menu?.id) return;
+        const nodeToSave = nodes.find(n => n.id === menu.id);
+        if (!nodeToSave) return; // Should not happen if dialog was opened
+        
+        const { code, subType } = nodeToSave.data;
+        
+        if (subType === 'feature_engineering') {
+            saveFeTemplate(templateName, description, code);
+        } else if (subType === 'labeling') {
+            saveLabelingTemplate(templateName, description, code);
+        }
+        
+        handleClose(); // Close the right-click menu
+    };
+
     const handleCollapse = () => { setIsPanelOpen(false); };
     const handleExpand = () => { setIsPanelOpen(true); };
     const togglePanel = () => {
@@ -213,7 +318,7 @@ const PipelineEditorContent: React.FC = () => {
             // The ref is no longer passed
             collapsible={true}
             collapsedSize={0}
-            defaultSize={45}
+            defaultSize={38}
             minSize={15}
             onCollapse={handleCollapse}
             onExpand={handleExpand}
@@ -223,17 +328,18 @@ const PipelineEditorContent: React.FC = () => {
                 panelPosition={panelPosition}
                 setPanelPosition={setPanelPosition}
                 togglePanel={togglePanel}
-                displayData={displayData.data}
-                displayInfo={displayData.info}
+                displayData={dataForDisplay.data}
+                displayInfo={dataForDisplay.info}
+                selectedNode={nodes.find(n => n.id === selectedNodeId)} // Pass the selected node itself
             />
         </Panel>
     );
 
     const reactFlowComponent = (
-        <Panel defaultSize={75} minSize={30}>
+        <Panel defaultSize={62} minSize={30}>
             <Box sx={{ width: '100%', height: '100%' }} ref={reactFlowWrapperRef}>
                 <ReactFlow
-                    nodes={nodes}
+                    nodes={nodesWithControlledSelection}
                     edges={edges}
                     onNodesChange={onNodesChange}
                     onEdgesChange={onEdgesChange}
@@ -241,7 +347,16 @@ const PipelineEditorContent: React.FC = () => {
                     onConnectStart={onConnectStart}
                     onConnectEnd={onConnectEnd}
                     nodeTypes={nodeTypes}
-                    
+                    onNodeClick={(_, node) => {
+                        // Clicking another node should select it and exit rename mode
+                        selectNode(node.id);
+                        setEditingNodeId(null);
+                    }}
+                    onPaneClick={() => {
+                        // Clicking the background should deselect and exit rename mode
+                        selectNode(null);
+                        setEditingNodeId(null);
+                    }}
                     onPaneContextMenu={(e) => onContextMenu(e)}
                     onNodeContextMenu={(e, node) => onContextMenu(e, node)}
                     onEdgeContextMenu={(e, edge) => onContextMenu(e, edge)}
@@ -272,7 +387,8 @@ const PipelineEditorContent: React.FC = () => {
     );
 
     return (
-        <Box sx={{ width: '100vw', height: 'calc(100vh - 85px)', position: 'relative' }}>
+        <Box sx={{ width: '100vw', height: 'calc(100vh - 88px)', position: 'relative' }}>
+            <PipelineControls />
             {isPanelOpen ? (
                 <PanelGroup direction={isHorizontal ? 'horizontal' : 'vertical'}>
                     {(panelPosition === 'left' || panelPosition === 'top') && panelComponent}
@@ -289,7 +405,7 @@ const PipelineEditorContent: React.FC = () => {
                 <>
                     <Box sx={{ width: '100%', height: '100%', overflow: 'hidden' }} ref={reactFlowWrapperRef}>
                         <ReactFlow
-                            nodes={nodes}
+                            nodes={nodesWithControlledSelection}
                             edges={edges}
                             onNodesChange={onNodesChange}
                             onEdgesChange={onEdgesChange}
@@ -297,7 +413,16 @@ const PipelineEditorContent: React.FC = () => {
                             onConnectStart={onConnectStart}
                             onConnectEnd={onConnectEnd}
                             nodeTypes={nodeTypes}
-                            
+                            onNodeClick={(_, node) => {
+                                // Clicking another node should select it and exit rename mode
+                                selectNode(node.id);
+                                setEditingNodeId(null);
+                            }}
+                            onPaneClick={() => {
+                                // Clicking the background should deselect and exit rename mode
+                                selectNode(null);
+                                setEditingNodeId(null);
+                            }}
                             onPaneContextMenu={(e) => onContextMenu(e)}
                             onNodeContextMenu={(e, node) => onContextMenu(e, node)}
                             onEdgeContextMenu={(e, edge) => onContextMenu(e, edge)}
@@ -327,6 +452,15 @@ const PipelineEditorContent: React.FC = () => {
                     <CollapsedPanelHandle position={panelPosition} onToggle={togglePanel} />
                 </>
             )}
+            <SaveTemplateDialog
+                open={isSaveDialogOpen}
+                onClose={() => {
+                    setIsSaveDialogOpen(false);
+                    handleClose(); // Also close the context menu
+                }}
+                onSave={handleConfirmSave}
+                title="Save Node as Template"
+            />
             <Menu
                 open={menu !== null}
                 onClose={handleClose}
@@ -339,12 +473,110 @@ const PipelineEditorContent: React.FC = () => {
                     <MenuItem key="add-ds" onClick={() => handleAddNode('dataSource')}>Add Data Source</MenuItem>,
                     <MenuItem key="add-feat" onClick={() => handleAddNode('feature')}>Add Feature</MenuItem>,
                     <MenuItem key="add-proc" onClick={() => handleAddNode('processIndicators')}>Add Indicator Processor</MenuItem>,
-                    <MenuItem key="add-code" onClick={() => handleAddNode('customCode')}>Add Custom Code</MenuItem>,
-                    <MenuItem key="add-ml" onClick={() => handleAddNode('mlModel')}>Add ML Model</MenuItem>,
+                    <MenuItem key="add-merge" onClick={() => handleAddNode('merge')}>Add Merge Node</MenuItem>,
+                    <MenuItem key="add-notes" onClick={() => handleAddNode('notes')}>Add Notes</MenuItem>,
+                    <MenuItem key="add-editor" onClick={() => handleAddNode('customCode')}>Add Editor Node</MenuItem>,
+                    <NestedMenuItem
+                        key="fe-templates"
+                        label="Feature Engineering"
+                        parentMenuOpen={!!menu}
+                    >
+                        {Object.entries(feTemplates).map(([key, template]) => (
+                            <MenuItem 
+                                key={`fe-${key}`} 
+                                // We stop the event propagation on the delete button,
+                                // so clicking it won't trigger this onClick for the whole item.
+                                onClick={() => {
+                                    handleAddNodeFromTemplate(template, 'feature_engineering');
+                                    handleClose();
+                                }}
+                                sx={{ display: 'flex', justifyContent: 'space-between' }}
+                            >
+                                <ListItemText>{template.name}</ListItemText>
+                                {template.isDeletable && (
+                                    <IconButton
+                                        size="small"
+                                        onClick={(e) => {
+                                            e.stopPropagation(); // Stop the click from bubbling up to the MenuItem
+                                            deleteFeTemplate(key);
+                                            handleClose(); // Close menu after deletion
+                                        }}
+                                        aria-label={`delete ${template.name}`}
+                                    >
+                                        <DeleteIcon fontSize="small" />
+                                    </IconButton>
+                                )}
+                            </MenuItem>
+                        ))}
+                    </NestedMenuItem>,
+
+                    <NestedMenuItem
+                        key="label-templates"
+                        label="Labeling"
+                        parentMenuOpen={!!menu}
+                    >
+                        {Object.entries(labelingTemplates).map(([key, template]) => (
+                            <MenuItem 
+                                key={`label-${key}`} 
+                                onClick={() => {
+                                    handleAddNodeFromTemplate(template, 'labeling');
+                                    handleClose();
+                                }}
+                                sx={{ display: 'flex', justifyContent: 'space-between' }}
+                            >
+                                <ListItemText>{template.name}</ListItemText>
+                                {template.isDeletable && (
+                                    <IconButton
+                                        size="small"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            deleteLabelingTemplate(key);
+                                            handleClose();
+                                        }}
+                                        aria-label={`delete ${template.name}`}
+                                    >
+                                        <DeleteIcon fontSize="small" />
+                                    </IconButton>
+                                )}
+                            </MenuItem>
+                        ))}
+                    </NestedMenuItem>,
+                    <MenuItem key="add-scaling" onClick={() => handleAddNode('dataScaling')}>Add Data Scaling</MenuItem>,
+                    <MenuItem key="add-validation" onClick={() => handleAddNode('dataValidation')}>Add Data Validation</MenuItem>,
+                    <MenuItem key="add-charting" onClick={() => handleAddNode('charting')}>Add Charting Node</MenuItem>,
+                    <MenuItem key="add-featcorr" onClick={() => handleAddNode('featuresCorrelation')}>Add Features Correlation Node</MenuItem>,
+                    <MenuItem key="add-trainer" onClick={() => handleAddNode('modelTrainer')}>Add ML Trainer</MenuItem>,
+                    <MenuItem key="add-imbalance" onClick={() => handleAddNode('classImbalance')}>Add Class Imbalancer</MenuItem>,
+                    <MenuItem key="add-hp-tuning" onClick={() => handleAddNode('hyperparameterTuning')}>Add Hyperparameter Tuning</MenuItem>,
+                    <MenuItem key="add-predictor" onClick={() => handleAddNode('modelPredictor')}>Add ML Predictor</MenuItem>,
+                    <MenuItem key="add-backtester" onClick={() => handleAddNode('backtester')}>Add Backtester</MenuItem>,
                 ]}
-                {(menu?.type === 'node' || menu?.type === 'edge') && (
-                    <MenuItem onClick={handleDeleteElement}>Delete</MenuItem>
+                {/* --- MENU FOR EDITING EXISTING ELEMENTS --- */}
+                {menu?.type === 'node' && (
+                    // Use a fragment to group node-specific actions
+                    [
+                        <MenuItem key="rename" onClick={handleRenameNode}>
+                            <EditIcon fontSize="small" sx={{ mr: 1.5 }} />
+                            Rename
+                        </MenuItem>,
+                        <MenuItem key="delete" onClick={handleDeleteElement}>
+                            <DeleteIcon fontSize="small" sx={{ mr: 1.5 }} />
+                            Delete
+                        </MenuItem>
+                    ]
                 )}
+                {menu?.type === 'edge' && (
+                    <MenuItem onClick={handleDeleteElement}>
+                        <DeleteIcon fontSize="small" sx={{ mr: 1.5 }} />
+                        Delete
+                    </MenuItem>
+                )}
+                
+                {/* --- SAVE OPTION FOR CUSTOM CODE NODES --- */}
+                {menu?.type === 'node' && (nodes.find(n => n.id === menu.id)?.type === 'customCode' || nodes.find(n => n.id === menu.id)?.type === 'labeling') && (
+                    <MenuItem onClick={handleSaveTemplate}>Save as Template</MenuItem>
+                )}
+
             </Menu>
         </Box>
     );

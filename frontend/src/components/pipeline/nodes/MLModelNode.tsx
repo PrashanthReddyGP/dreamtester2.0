@@ -1,7 +1,7 @@
 import React from 'react';
 import { Handle, Position } from 'reactflow';
 import type { NodeProps } from 'reactflow';
-import { Paper, Typography, Box, IconButton, Autocomplete, TextField, Select, MenuItem, FormControl, InputLabel, Stack } from '@mui/material';
+import { Paper, Typography, Box, IconButton, Autocomplete, TextField, Select, MenuItem, FormControl, InputLabel, Stack, CircularProgress } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 
 import { usePipeline } from '../../../context/PipelineContext';
@@ -56,10 +56,14 @@ const HyperparameterInput: React.FC<{ paramDef: ParamDef; value: any; onChange: 
 };
 
 export const MLModelNode = ({ id, data }: NodeProps<MLModelNodeData>) => {
-    const { updateNodeData } = usePipeline();
+    // 1. PULL THE REQUIRED FUNCTIONS AND STATE FROM THE CONTEXT
+    const { updateNodeData, executePipelineUpToNode, isProcessing, processingNodeId } = usePipeline();
     const modelOptions = Object.keys(HYPERPARAMETER_CONFIG);
     const currentModelConfig = HYPERPARAMETER_CONFIG[data.modelName] || [];
-
+    
+    // 2. DETERMINE THE PROCESSING STATE FOR THIS SPECIFIC NODE
+    const amIProcessing = isProcessing && processingNodeId === id;
+    
     const handleModelChange = (event: any, newModelName: string | null) => {
         if (!newModelName || !HYPERPARAMETER_CONFIG[newModelName]) return;
 
@@ -100,8 +104,14 @@ export const MLModelNode = ({ id, data }: NodeProps<MLModelNodeData>) => {
                 <Typography variant="subtitle2" sx={{ color: 'primary.contrastText', pl: 1 }}>
                     {data.label || 'ML Model'}
                 </Typography>
-                <IconButton size="small" sx={{ color: 'white' }} aria-label="run">
-                    <PlayArrowIcon />
+                <IconButton
+                    size="small"
+                    sx={{ color: 'white' }}
+                    aria-label="run"
+                    onClick={() => executePipelineUpToNode(id)}
+                    disabled={amIProcessing}
+                >
+                    {amIProcessing ? <CircularProgress size={24} color="inherit" /> : <PlayArrowIcon />}
                 </IconButton>
             </Box>
 

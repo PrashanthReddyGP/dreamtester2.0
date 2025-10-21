@@ -111,8 +111,9 @@ export interface BacktestResultPayload {
 }
 
 export interface BatchSubmitPayload {
-  strategies: StrategyFilePayload[];
-  use_training_set: boolean;
+    strategies: StrategyFilePayload[];
+    use_training_set: boolean;
+    portfolio_code?: string;
 }
 export interface BatchSubmitResponse {
     message: string;
@@ -205,8 +206,8 @@ export const submitBatchBacktest = async (payload: BatchSubmitPayload[]): Promis
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'An unknown error occurred.' }));
-      throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
+        const errorData = await response.json().catch(() => ({ detail: 'An unknown error occurred.' }));
+        throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
     }
 
     return response.json();
@@ -229,6 +230,43 @@ export const fetchAvailableSymbols = async (exchange: string): Promise<string[]>
     }
 };
 
+
+export const uploadCsvData = async (symbol: string, timeframe: string, source: string, file: File): Promise<any> => {
+    const formData = new FormData();
+    formData.append('symbol', symbol);
+    formData.append('timeframe', timeframe);
+    formData.append('source', source);
+    formData.append('file', file); // 'file' must match the backend parameter name
+
+    try {
+        const response = await fetch(`${API_URL}/api/data/import-csv`, {
+            method: 'POST',
+            // IMPORTANT: When using FormData with fetch, do NOT set the 'Content-Type' header.
+            // The browser will automatically set it to 'multipart/form-data' and, critically,
+            // add the required 'boundary' parameter. Manually setting it will break the request.
+            body: formData,
+        });
+
+        // Unlike axios, fetch does not throw an error on bad HTTP status codes (like 4xx or 5xx).
+        // We need to check the 'ok' status and handle the error manually.
+        if (!response.ok) {
+            // Try to parse the error response from the backend for a more detailed message.
+            const errorData = await response.json().catch(() => {
+                // If the error response isn't valid JSON, create a fallback message.
+                return { detail: `Server responded with status: ${response.status}` };
+            });
+            throw new Error(errorData.detail || 'An unknown error occurred during file upload.');
+        }
+
+        // If the request was successful, parse the JSON response.
+        return response.json();
+
+    } catch (error: any) {
+        // This will catch network errors (e.g., server is down) or the error we threw above.
+        // Re-throw the error so the component that called this function can handle it.
+        throw new Error(error.message || 'Network error or server is down.');
+    }
+};
 
 export const clearOhlcvCache = async (): Promise<{ status: string; message: string }> => {
   const response = await fetch(`${API_URL}/api/data/cache`, {

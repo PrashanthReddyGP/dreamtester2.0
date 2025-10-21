@@ -1,13 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { ThemeProvider } from '@mui/material/styles';
-import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter as Router } from 'react-router-dom';
 import { getAppTheme } from './theme/theme';
 import { MainLayout } from './layouts/MainLayout';
-import { StrategyLab } from './pages/StrategyLab';
-import { AnalysisHub } from './pages/AnalysisHub';
-import { MachineLearning } from './pages/MachineLearning';
-import { AnimatedPage } from './components/common/AnimatedPage';
-import { PipelineEditor } from './pages/PipelineEditor';
 import { loader } from '@monaco-editor/react';
 
 import AppContext from './context/AppContext';
@@ -17,7 +12,7 @@ import { AnalysisContextProvider, useAnalysis } from './context/AnalysisContext'
 import { websocketService } from './services/websocketService';
 import { MLProvider } from './context/MLContext';
 import { PipelineContextProvider } from './context/PipelineContext';
-
+import { ChartContextProvider } from './context/ChartContext';
 
 // --- 1. THE WebSocketManager COMPONENT ---
 // This component does not render any UI. Its sole purpose is to listen
@@ -173,21 +168,14 @@ function App() {
         <TerminalContextProvider>
           <MLProvider>
           <PipelineContextProvider>
-          <WebSocketManager />
-              <ThemeProvider theme={theme}>
-                <Router>
-                  <Routes>
-                    <Route element={<MainLayout mode={mode} toggleTheme={toggleTheme} />}>
-                      <Route path="/" element={<Navigate to="/lab" replace />} />
-                      <Route path="/lab" element={<AnimatedPage><StrategyLab /></AnimatedPage>} />
-                      <Route path="/pipeline" element={<AnimatedPage><PipelineEditor /></AnimatedPage>} />
-                      <Route path="/machinelearning" element={<AnimatedPage><MachineLearning /></AnimatedPage>} />
-                      <Route path="/analysis" element={<AnimatedPage><AnalysisHub /></AnimatedPage>} />
-                      <Route path="/automation" element={<div style={{display:'flex', justifyContent:'center', alignItems:'center', width:'100%'}}><AnimatedPage>Automation Page</AnimatedPage></div>} />
-                    </Route>
-                  </Routes>
-                </Router>
-            </ThemeProvider>
+            <ChartContextProvider>
+              <WebSocketManager />
+                <ThemeProvider theme={theme}>
+                  <Router>
+                    <MainLayout mode={mode} toggleTheme={toggleTheme} />
+                  </Router>
+              </ThemeProvider>
+            </ChartContextProvider>
           </PipelineContextProvider>
           </MLProvider>
         </TerminalContextProvider>

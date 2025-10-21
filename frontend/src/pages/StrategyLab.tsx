@@ -11,84 +11,76 @@ import { ExplorerPanel } from '../components/strategylab/ExplorerPanel';
 import type { FileSystemItem } from '../components/strategylab/ExplorerPanel';
 import { EditorPanel } from '../components/strategylab/EditorPanel';
 import { SettingsPanel } from '../components/strategylab/SettingsPanel';
+import type { DataSourceConfig, PortfolioConfig } from '../components/strategylab/SettingsPanel';
 import { NameInputDialog  } from '../components/strategylab/NameItemDialog';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import type { DragEndEvent } from '@dnd-kit/core';
 import { ConfirmationDialog } from '../components/common/ConfirmationDialog';
 
 import {  submitBatchBacktest } from '../services/api';
-import type { StrategyFilePayload, BatchSubmitPayload, BatchSubmitResponse } from '../services/api';
+import type { StrategyFilePayload, BatchSubmitPayload } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useTerminal } from '../context/TerminalContext';
 import { useAnalysis } from '../context/AnalysisContext';
 
 import { OptimizeModal } from '../components/strategylab/OptimizeModal';
-import type { OptimizationConfig, TestSubmissionConfig, SuperOptimizationConfig } from '../components/strategylab/OptimizeModal';
+import type { SuperOptimizationConfig } from '../components/strategylab/OptimizeModal';
 
 import { DurabilityModal } from '../components/strategylab/DurabilityModal';
 import type { DurabilitySubmissionConfig } from '../components/strategylab/DurabilityModal';
 
 import { HedgeModal } from '../components/strategylab/HedgeModal';
 import type { HedgeOptimizationConfig } from '../components/strategylab/HedgeModal';
+import { useDebounce } from '../hooks/useDebounce'; 
+import { useChart } from '../context/ChartContext';
+import type { IndicatorDataPoint } from '../context/ChartContext';
 
 const API_URL = 'http://127.0.0.1:8000';
+
+// --- Define a constant for the special folder name ---
+const PORTFOLIO_FOLDER_NAME = 'PORTFOLIO';
+
+// Helper to find a folder by name at the root level
+const findFolderByName = (nodes: FileSystemItem[], name: string): FileSystemItem | null => {
+    return nodes.find(node => node.type === 'folder' && node.name === name && !node.parentId) || null;
+}
 
 interface ImportedFile {
   name: string;
   content: string;
 }
 
+export interface CSVDataPayload {
+    ohlcv: [number, number, number, number, number, number][]; // [timestamp, o, h, l, c, v]
+    indicators: Record<string, IndicatorDataPoint[]>; 
+    strategy_name: string;
+}
+
 // A styled resize handle that is more visible on hover for better UX
 const ResizeHandle = () => {
-  return (
-    <PanelResizeHandle
-      style={{
-        width: '4px',
-        background: 'transparent',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-      }}
-    >
-        <Box sx={{
-          width: '4px',
-          height: '40px',
-          borderRadius: '2px',
-          backgroundColor: 'action.hover',
-          transition: 'background-color 0.2s ease-in-out',
-          '&:hover': {
-            backgroundColor: 'divider'
-          }
-        }} />
-    </PanelResizeHandle>
-  );
+    return (
+        <PanelResizeHandle
+        style={{
+            width: '4px',
+            background: 'transparent',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+        }}
+        >
+            <Box sx={{
+            width: '4px',
+            height: '40px',
+            borderRadius: '2px',
+            backgroundColor: 'action.hover',
+            transition: 'background-color 0.2s ease-in-out',
+            '&:hover': {
+                backgroundColor: 'divider'
+            }
+            }} />
+        </PanelResizeHandle>
+    );
 };
-
-// --- 1. LIFTED STATE: Define the initial file system with content here ---
-const rsiMomentumCode = `print("This is the RSI Momentum strategy template code.")`;
-
-const initialFileSystem: FileSystemItem[] = [
-  {
-    id: uuidv4(),
-    name: 'Templates',
-    type: 'folder',
-    children: [
-      { id: 'rsi-momentum-id', name: 'RSI_Momentum.py', type: 'file', content: rsiMomentumCode },
-    ],
-  }
-];
-
-// Helper function to find a file by ID in the tree
-const findFileById = (nodes: FileSystemItem[], id: string): FileSystemItem | null => {
-    for (const node of nodes) {
-        if (node.type === 'file' && node.id === id) return node;
-        if (node.children) {
-            const found = findFileById(node.children, id);
-            if (found) return found;
-        }
-    }
-    return null;
-}
 
 const findFirstFile = (nodes: FileSystemItem[]): FileSystemItem | null => {
     for (const node of nodes) {
@@ -121,7 +113,8 @@ const getAllFiles = (nodes: FileSystemItem[]): FileSystemItem[] => {
 
 export const StrategyLab: React.FC = () => {
     const { connectToBatch, toggleTerminal } = useTerminal();
-    const { clearResults } = useAnalysis();
+    const { clearResults} = useAnalysis();
+    const { fetchChartData, clearChartData } = useChart();
 
     const [fileSystem, setFileSystem] = useState<FileSystemItem[]>([]);
     const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
@@ -143,9 +136,64 @@ export const StrategyLab: React.FC = () => {
     const [localCsvFile, setLocalCsvFile] = useState<File | null>(null);
     const [localCsvData, setLocalCsvData] = useState<string | null>(null);
 
+    const [isCSVDataLoading, setIsCSVDataLoading] = useState<boolean>(false);
+
     const handleClearCsv = () => {
         setLocalCsvFile(null);
         setLocalCsvData(null);
+    };
+
+    const [portfolioConfig, setPortfolioConfig] = useState<PortfolioConfig>({
+        id: '', // ID of the selected portfolio file
+        code: '', // Code content of that file
+    });
+
+    // --- NEW: Memoized list of portfolio templates ---
+    const portfolioTemplates = useMemo<FileSystemItem[]>(() => {
+        const portfolioFolder = findFolderByName(fileSystem, PORTFOLIO_FOLDER_NAME);
+        if (portfolioFolder && portfolioFolder.children) {
+            // Filter to ensure we only list files
+            return portfolioFolder.children.filter(item => item.type === 'file');
+        }
+        return [];
+    }, [fileSystem]);
+
+
+    // --- NEW: Effect to select a default portfolio template on load ---
+    useEffect(() => {
+        // Run only when templates are loaded and no portfolio is currently selected
+        if (portfolioTemplates.length > 0 && !portfolioConfig.id) {
+            const firstTemplate = portfolioTemplates[0];
+            // Set the first template as the default
+            setPortfolioConfig({
+                id: firstTemplate.id,
+                code: firstTemplate.content || '',
+            });
+        }
+        // If the currently selected portfolio was deleted, reset
+        else if (portfolioTemplates.length > 0 && !portfolioTemplates.find(t => t.id === portfolioConfig.id)) {
+                const firstTemplate = portfolioTemplates[0];
+                setPortfolioConfig({
+                    id: firstTemplate.id,
+                    code: firstTemplate.content || '',
+            });
+        }
+        // If there are no templates, clear the config
+        else if (portfolioTemplates.length === 0) {
+            setPortfolioConfig({ id: '', code: '' });
+        }
+    }, [portfolioTemplates, portfolioConfig.id]);
+
+
+    // --- MODIFIED: Handler for portfolio changes ---
+    const handlePortfolioChange = (portfolioFileId: string) => {
+        const selectedTemplate = portfolioTemplates.find(t => t.id === portfolioFileId);
+        if (selectedTemplate) {
+            setPortfolioConfig({
+                id: selectedTemplate.id,
+                code: selectedTemplate.content || '',
+            });
+        }
     };
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -180,6 +228,7 @@ export const StrategyLab: React.FC = () => {
                 strategy_code: currentEditorCode,
                 strategy_name: findFileById(fileSystem, selectedFileId)?.name || 'local_run',
                 csv_data: localCsvData,
+                portfolio_code: portfolioConfig.code, // Include portfolio code if set
             };
 
             // This will be a new API call
@@ -206,6 +255,67 @@ export const StrategyLab: React.FC = () => {
             setIsBacktestRunning(false);
         }
     };
+
+    const handleDownloadCSV = useCallback(async (strategyCode: string, dataSourceConfig: DataSourceConfig) => {
+
+        setIsCSVDataLoading(true);
+
+        try {
+            const response = await fetch(`${API_URL}/api/download-csv`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    code: strategyCode, // Use the fresh code passed as an argument
+                    config: dataSourceConfig,
+                }),
+            });
+                if (!response.ok) {
+                    // Try to get a meaningful error from the server's JSON response
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
+                }
+
+                // 3. Get the filename from the Content-Disposition header (more robust)
+                const disposition = response.headers.get('Content-Disposition');
+
+                let filename = 'exported_data.csv'; // Default filename
+                
+                console.log(response)
+
+                if (disposition && disposition.indexOf('attachment') !== -1) {
+                    const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
+                    const matches = filenameRegex.exec(disposition);
+                    if (matches != null && matches[1]) {
+                        filename = matches[1].replace(/['"]/g, '');
+                    }
+                }
+                
+                // 4. Get the response as a Blob (file-like data)
+                const blob = await response.blob();
+                
+                // 5. Create a temporary URL for the Blob
+                const downloadUrl = window.URL.createObjectURL(blob);
+                
+                // 6. Create a temporary link element to trigger the download
+                const link = document.createElement('a');
+                link.href = downloadUrl;
+                link.setAttribute('download', filename); // Use the extracted filename
+                document.body.appendChild(link);
+                
+                // 7. Programmatically click the link
+                link.click();
+                
+                // 8. Clean up
+                link.remove();
+                window.URL.revokeObjectURL(downloadUrl);
+        
+        } catch (error) {
+            console.error("Error fetching data:", error);
+            alert(`Error preparing data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        } finally {
+            setIsCSVDataLoading(false);
+        }
+    }, []);
 
     const [deleteConfirmState, setDeleteConfirmState] = useState<{ open: boolean; itemId: string | null }>({
         open: false,
@@ -311,29 +421,6 @@ export const StrategyLab: React.FC = () => {
         }
     };
     
-    const handleNewItem = async (type: 'file' | 'folder', parentId?: string) => {
-        const name = prompt(`Enter name for new ${type}:`, type === 'file' ? 'new_strategy.py' : 'New_Folder');
-        if (!name) return;
-
-        const newItem = {
-            id: uuidv4(),
-            name,
-            type,
-            parentId: parentId,
-        };
-
-        try {
-            await fetch(`${API_URL}/api/strategies`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(newItem),
-            });
-            await loadStrategies(); // Re-fetch the tree to show the new item
-        } catch (error) {
-            console.error(`Failed to create ${type}:`, error);
-        }
-    };
-
     const handleConfirmDelete = async () => {
         const { itemId } = deleteConfirmState;
         if (!itemId) return; // Safety check
@@ -346,21 +433,6 @@ export const StrategyLab: React.FC = () => {
             await loadStrategies(); // Re-fetch to update UI
         } catch (error) {
             console.error("Failed to delete item:", error);
-        }
-    };
-
-    const handleRename = async (itemId: string, oldName: string) => {
-        const newName = prompt("Enter new name:", oldName);
-        if (!newName || newName === oldName) return;
-        try {
-            await fetch(`${API_URL}/api/strategies/${itemId}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: newName }),
-            });
-            await loadStrategies();
-        } catch (error) {
-            console.error("Failed to rename item:", error);
         }
     };
 
@@ -416,29 +488,6 @@ export const StrategyLab: React.FC = () => {
             await loadStrategies();
         } catch (error) {
             console.error("Failed to rename item:", error);
-        }
-    };
-
-    const handleImportFile = async (name: string, content: string) => {
-        // We'll create the new file at the root level for simplicity
-        const newItem = {
-            id: uuidv4(),
-            name,
-            type: 'file' as 'file',
-            content, 
-            parentId: undefined,
-        };
-
-        try {
-            await fetch(`${API_URL}/api/strategies`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(newItem),
-            });
-            await loadStrategies(); // Refresh the explorer to show the new file
-        } catch (error) {
-            console.error(`Failed to import file:`, error);
-            alert("Error: Could not import the strategy file.");
         }
     };
 
@@ -536,6 +585,35 @@ export const StrategyLab: React.FC = () => {
         }
     };
 
+    const handleCharting = () => {
+        if (!currentEditorCode || currentEditorCode.trim().length < 10) {
+            alert("There is no strategy code to analyze for charting.");
+            return;
+        }
+
+        console.log("Requesting chart data and navigating...");
+        
+        clearChartData();
+        
+        // 1. Start the data fetching process in the background (no need to await)
+        fetchChartData(currentEditorCode, dataSourceConfig);
+
+        // 2. Immediately navigate the user to the charting page
+        navigate('/charting');
+    };
+
+    const handleCSVDownload = () => {
+        if (!currentEditorCode || currentEditorCode.trim().length < 10) {
+            alert("There is no strategy code to generate data from.");
+            return;
+        }
+
+        console.log("Requesting data to download...");
+        
+        // Start the data fetching process in the background (no need to await)
+        handleDownloadCSV(currentEditorCode, dataSourceConfig);
+    };
+
     const handleRunBacktest = async (useTrainingSet: boolean) => {
 
         if (!selectedFileId) {
@@ -575,6 +653,7 @@ export const StrategyLab: React.FC = () => {
             const payload: BatchSubmitPayload = {
                 strategies: rootFiles,
                 use_training_set: useTrainingSet,
+                portfolio_code: portfolioConfig.code, // <-- Include portfolio code if set
             };
             
             // Call the API service with the filtered list of root files
@@ -643,6 +722,7 @@ export const StrategyLab: React.FC = () => {
             const payload: BatchSubmitPayload = {
                 strategies: [fileToBacktest],
                 use_training_set: true, // Defaulting to true for context-menu runs
+                portfolio_code: portfolioConfig.code, // Include portfolio code if set
             };
 
             const result = await submitBatchBacktest(payload);
@@ -897,9 +977,117 @@ export const StrategyLab: React.FC = () => {
 
     const allAvailableFiles = useMemo(() => getAllFiles(fileSystem), [fileSystem]);
 
+    // --- State for the data source configuration ---
+    const [dataSourceConfig, setDataSourceConfig] = useState<DataSourceConfig>({
+        symbol: 'BTCUSDT',
+        timeframe: '15m',
+        startDate: '2000-01-01',
+        endDate: new Date().toISOString().split('T')[0],
+    });
+
+    // --- NEW: useEffect to parse code and update settings ---
+    useEffect(() => {
+        // Debounce mechanism: Wait for 750ms after the user stops typing
+        const handler = setTimeout(() => {
+            if (currentEditorCode && currentEditorCode.trim().length > 10) { // Avoid parsing empty/trivial code
+                
+                const parseCodeAndSetConfig = async () => {
+                    try {
+                        const response = await fetch(`${API_URL}/api/strategies/parse-settings-from-code`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'text/plain', // Send as raw text
+                            },
+                            body: currentEditorCode,
+                        });
+
+                        if (!response.ok) {
+                            // Don't update UI if parsing fails (e.g., syntax error)
+                            console.error("Failed to parse strategy settings from code.");
+                            return;
+                        }
+
+                        const settings = await response.json();
+                        
+                        // Update the dataSourceConfig state only with values that
+                        // were successfully parsed from the code.
+                        setDataSourceConfig(prevConfig => ({
+                            symbol: settings.symbol || prevConfig.symbol,
+                            timeframe: settings.timeframe || prevConfig.timeframe,
+                            startDate: settings.startDate || prevConfig.startDate,
+                            endDate: settings.endDate || prevConfig.endDate,
+                        }));
+
+                    } catch (error) {
+                        console.error("Error calling parse settings API:", error);
+                    }
+                };
+                
+                parseCodeAndSetConfig();
+            }
+        }, 750); // 750ms delay
+
+        // Cleanup function to cancel the timeout if the user types again
+        return () => {
+            clearTimeout(handler);
+        };
+    }, [currentEditorCode]); // This effect runs whenever the editor code changes
+
+    // --- Debounce the dataSourceConfig state ---
+    const debouncedDataSourceConfig = useDebounce(dataSourceConfig, 1000); // 1 second delay
+
+    // --- Handler to update the local state immediately ---
+    const handleDataSourceChange = (field: keyof DataSourceConfig, value: any) => {
+        // This updates the UI instantly for a responsive feel
+        setDataSourceConfig(prevConfig => ({
+            ...prevConfig,
+            [field]: value,
+        }));
+    };
+
+    // // --- useEffect to update the code when debounced config changes ---
+    // useEffect(() => {
+    //     // This function will only run after the user has stopped changing the UI for 1 second
+    //     const updateCode = async () => {
+    //         // Don't run if there's no code or the code is just a placeholder
+    //         if (!currentEditorCode || currentEditorCode.trim().length < 10) {
+    //             return;
+    //         }
+
+    //         try {
+    //             const response = await fetch(`${API_URL}/api/strategies/update-code-from-settings`, {
+    //                 method: 'POST',
+    //                 headers: { 'Content-Type': 'application/json' },
+    //                 body: JSON.stringify({
+    //                     code: currentEditorCode,
+    //                     newSettings: debouncedDataSourceConfig, // Send the debounced settings
+    //                 }),
+    //             });
+
+    //             if (!response.ok) {
+    //                 const error = await response.json();
+    //                 console.error("Failed to update code:", error.detail);
+    //                 return;
+    //             }
+
+    //             const data = await response.json();
+    
+    //             // Update the editor's content with the modified code from the backend
+    //             setCurrentEditorCode(data.updatedCode);
+
+    //         } catch (error) {
+    //             console.error("Error updating code from settings:", error);
+    //         }
+    //     };
+
+    //     updateCode();
+    // // We listen to the DEBOUNCED value, not the original one.
+    // // We also add currentEditorCode as a dependency so it doesn't run with stale code.
+    // }, [debouncedDataSourceConfig]);
+
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <Box sx={{ height: '100%', width: '100vw' }}>
+        <Box sx={{ height: `calc(100vh - 88px)`, width: '100vw' }}>
             <PanelGroup direction="horizontal">
                 <Panel defaultSize={15} minSize={15}>
                     <ExplorerPanel
@@ -913,6 +1101,8 @@ export const StrategyLab: React.FC = () => {
                         onRename={handleOpenRenameDialog}
                         onImportFiles={handleImportFiles}
                         onClearAll={handleOpenClearConfirm}
+                        // Pass the constant so Explorer knows which folder is special
+                        specialFolderName={PORTFOLIO_FOLDER_NAME}
                     />
                 </Panel>
                 <ResizeHandle />
@@ -924,19 +1114,26 @@ export const StrategyLab: React.FC = () => {
                     />
                 </Panel>
                 <ResizeHandle />
-                <Panel defaultSize={16} minSize={16}>
+                <Panel defaultSize={15} minSize={15}>
                     <SettingsPanel 
+                        dataSourceConfig={dataSourceConfig}
+                        onDataSourceChange={handleDataSourceChange}
                         onSave={handleSaveContent}
                         isSaveDisabled={!selectedFileId}
                         onRunBacktest={handleRunBacktest}
-                        onRunBacktestWithCsv={handleRunBacktestWithCsv}
+                        onDownloadCSV={handleCSVDownload}
                         onOptimizeStrategy={handleOpenOptimizeModal}
+                        onCharting={handleCharting}
                         onDurabilityTests={handlOpenDurabilityModal}
                         onHedgeOptimize={handleOpenHedgeModal}
                         isBacktestRunning={isBacktestRunning}
                         onFileChange={handleFileChange}
                         onClearCsv={handleClearCsv}
                         selectedCsvFile={localCsvFile}
+                        portfolioConfig={portfolioConfig}
+                        onPortfolioChange={handlePortfolioChange}
+                        // Pass the derived list of templates for the dropdown
+                        portfolioTemplates={portfolioTemplates} 
                     />
                 </Panel>
             </PanelGroup>

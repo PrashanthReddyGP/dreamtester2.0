@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Box, Typography, IconButton, Tooltip, Tabs, Tab } from '@mui/material'; // Import Tabs and Tab
 import {
     ChevronLeft,
@@ -11,7 +11,12 @@ import {
     ExpandMore, // For collapsing bottom panel
 } from '@mui/icons-material';
 import { styled } from '@mui/material/styles'; // Import styled if you are putting the handle here
-import { DataGridDisplay } from '../../components/pipeline/DataDisplays';
+import { DataGridDisplay, DataInfoDisplay, DataInfoDisplayHorizontal } from './DataDisplays'; // Assuming it's in the same folder now
+import type { Node } from 'reactflow'; // Import the Node type if you want to keep the prop
+import { ModelAnalysisDisplay } from './ModelAnalysisDisplay'; 
+import { ChartingNodeProperties } from './SidePanel/ChartingNodeProperties'; // Import the properties panel
+import { GenericChartDisplay } from './analysis/GenericChartDisplay'; // We'll create this next
+import { CorrelationDisplay } from './analysis/CorrelationDisplay';
 
 // Define the types for the props
 type PanelPosition = 'left' | 'right' | 'top' | 'bottom';
@@ -23,6 +28,7 @@ interface SidePanelProps {
     setPanelPosition: (position: PanelPosition) => void;
     displayData: any[];
     displayInfo: any;
+    selectedNode: Node | undefined; // Receive the full selected node object
 }
 
 interface CollapsedPanelHandleProps {
@@ -116,13 +122,31 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     setPanelPosition,
     displayData,
     displayInfo,
+    selectedNode,
 }) => {
-    // State to manage the active tab. 0 = Properties, 1 = Dataset, 2 = Charts
-    const [activeTab, setActiveTab] = useState(1); // Default to "Dataset" tab
+
+    
+    const showModelAnalysisTab = selectedNode?.type === 'modelTrainer' && displayInfo?.model_analysis;
+    const isChartingNodeSelected = selectedNode?.type === 'charting';
+
+    // 2. Add a new condition to check for the correlation node and its data
+    // The backend stores the result in displayInfo.correlation_info
+    const isCorrelationNodeSelected = selectedNode?.type === 'featuresCorrelation' && displayInfo?.correlation_info;
+
+    // Adjust the default active tab based on what's available
+    const [activeTab, setActiveTab] = useState(showModelAnalysisTab ? 3 : 0);
 
     const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
         setActiveTab(newValue);
     };
+
+    // Effect to switch tab if analysis becomes available
+    useEffect(() => {
+        if (showModelAnalysisTab) {
+            setActiveTab(3); // Switch to the analysis tab
+        }
+    }, [showModelAnalysisTab]);
+
 
     // This now correctly chooses the icon based on all four positions
     const getCollapseIcon = () => {
@@ -139,17 +163,22 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                 return <ChevronLeft />;
         }
     };
+    
+    // This boolean makes our JSX cleaner and more readable.
+    const isHorizontalLayout = panelPosition === 'top' || panelPosition === 'bottom';
 
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', p: 1, backgroundColor: 'background.paper' }}>
-            {/* Your panel content goes here */}
             {/* Header with Tabs and Controls */}
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider' }}>
                 {/* Tab Navigation */}
                 <Tabs value={activeTab} onChange={handleTabChange} aria-label="side panel tabs" sx={{ flexGrow: 1 }}>
-                    <Tab label="Properties" {...a11yProps(0)} />
+                    <Tab label="Properties" {...a11yProps(0)} disabled={!selectedNode} />
                     <Tab label="Dataset" {...a11yProps(1)} />
                     <Tab label="Charts" {...a11yProps(2)} />
+                    {showModelAnalysisTab && (
+                        <Tab label="Model Analysis" {...a11yProps(3)} />
+                    )}
                 </Tabs>
 
                 {/* Docking and Collapse Controls */}
@@ -165,20 +194,50 @@ export const SidePanel: React.FC<SidePanelProps> = ({
             {/* Tab Content Panels */}
             <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
                 <TabPanel value={activeTab} index={0}>
-                    <Typography>Properties content for the selected node will be displayed here.</Typography>
+                    {isChartingNodeSelected && selectedNode ? (
+                        <ChartingNodeProperties node={selectedNode} />
+                    ) : (
+                        isHorizontalLayout ? <DataInfoDisplayHorizontal info={displayInfo} /> : <DataInfoDisplay info={displayInfo} />
+                    )}
                 </TabPanel>
                 <TabPanel value={activeTab} index={1} noPadding>
-                    {/* The DataGridDisplay now lives inside this tab panel */}
                     <DataGridDisplay
-                        key={displayInfo?.["Data Points"]} 
                         data={displayData}
                         info={displayInfo} 
-                        title="Features Data"
+                        title="Node Output Data"
                     />
                 </TabPanel>
                 <TabPanel value={activeTab} index={2}>
-                    <Typography>Charts and visualizations will be displayed here.</Typography>
+                    {isChartingNodeSelected && displayInfo?.chart_data ? (
+                        <GenericChartDisplay
+                            chartType={displayInfo.chart_config.chartType}
+                            data={displayInfo.chart_data}
+                            config={displayInfo.chart_config}
+                        />
+                    ) : isCorrelationNodeSelected ? (
+                        // Render our new component here!
+                        <CorrelationDisplay
+                            // Pass the data from the backend result (displayInfo)
+                            correlationData={displayInfo.correlation_info.correlation_data}
+                            // Pass the configuration from the node's settings (selectedNode)
+                            displayMode={selectedNode.data.displayMode}
+                            method={selectedNode.data.method}
+                        />
+                    ) : (
+                        // Fallback to cluster plot or default message
+                        displayInfo?.model_analysis?.scatter_plot_data ? 
+                        <ClusterScatterPlot data={displayInfo.model_analysis.scatter_plot_data} /> : 
+                        <Typography>No chart to display. Select a node and run it.</Typography>
+                    )}
                 </TabPanel>
+                {showModelAnalysisTab && (
+                    <TabPanel value={activeTab} index={3} noPadding>
+                        <ModelAnalysisDisplay 
+                            analysisData={displayInfo.model_analysis}
+                            panelPosition={panelPosition} 
+                        />
+                    </TabPanel>
+                )}
             </Box>
         </Box>
     );

@@ -1,4 +1,18 @@
 // src/components/machinelearning/types.ts
+export interface IndicatorParamDef {
+    name: string;
+    displayName: string;
+    type: 'number' | 'string' | 'boolean';
+    defaultValue: number | string | boolean;
+    options?: string[];
+}
+export interface IndicatorDefinition {
+    name: string;
+    timeframe: string;
+    params: IndicatorParamDef[];
+}
+
+export type IndicatorSchema = { [key: string]: IndicatorDefinition };
 
 // Represents a single parameter for an indicator
 export interface IndicatorParam {
@@ -9,6 +23,7 @@ export interface IndicatorParam {
 export interface IndicatorConfig {
     id: string;
     name: string;
+    timeframe: string;
     params: IndicatorParam;
 }
 

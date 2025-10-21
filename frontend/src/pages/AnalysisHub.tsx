@@ -43,7 +43,7 @@ export const AnalysisHub: React.FC = () => {
   // When you receive the batch data or first result, check for a tell-tale sign.
   // For example, if the batch job details from your DB include the `test_type`.
   useEffect(() => {
-    if (batchConfig && batchConfig.test_type === 'data_segmentation') {
+    if (batchConfig && (batchConfig.test_type === 'data_segmentation' || (batchConfig.test_type === 'hedge_optimization' && batchConfig.final_analysis.type === 'data_segmentation'))) {
       setIsDataSegmentationMode(true);
     } else {
       setIsDataSegmentationMode(false);
@@ -77,7 +77,7 @@ export const AnalysisHub: React.FC = () => {
 
   return (
     <>
-      <Box sx={{ height: '100%', width: '100vw'}}>
+      <Box sx={{ height: `calc(100vh - 88px)`, width: '100vw'}}>
 
         <PanelGroup direction='horizontal' style={{display:'flex', flexDirection:'row', flexWrap:'nowrap', width:'100vw'}}>
 

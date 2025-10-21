@@ -111,7 +111,7 @@ export const StrategyListPanel: FC<StrategyListPanelProps> = ({ results, selecte
                 </ListItemIcon>
                 {/* --- Clean up the name for display --- */}
                 <ListItemText 
-                  primary={result.name.replace(' [Validation]', '').replace(' [Testing]', '')} 
+                  primary={result.name.replace(' [Training]', '').replace(' [Validation]', '').replace(' [Testing]', '')} 
                 />
               </ListItemButton>
             ))}

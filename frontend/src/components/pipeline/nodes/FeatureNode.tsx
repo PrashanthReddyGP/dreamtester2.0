@@ -1,25 +1,12 @@
 import React, { memo } from 'react';
 import { Handle, Position } from 'reactflow';
 import type { NodeProps } from 'reactflow';
-import { Paper, Typography, Box, Select, MenuItem, FormControl, InputLabel, TextField, IconButton, Autocomplete, Stack, CircularProgress, FormControlLabel, Checkbox } from '@mui/material';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import { Paper, Typography, Box, Select, MenuItem, FormControl, InputLabel, TextField, Autocomplete, Stack, CircularProgress, FormControlLabel, Checkbox } from '@mui/material';
 import { usePipeline } from '../../../context/PipelineContext';
+import type { IndicatorSchema, IndicatorParamDef } from '../types';
+import { NodeHeader } from './NodeHeader'; // Import the new header
 
-// --- Type Definitions (copied from DataTab/PipelineContext) ---
-interface IndicatorParamDef {
-    name: string;
-    displayName: string;
-    type: 'number' | 'string' | 'boolean';
-    defaultValue: number | string | boolean;
-    options?: string[];
-}
-interface IndicatorDefinition {
-    name: string;
-    params: IndicatorParamDef[];
-}
-type IndicatorSchema = { [key: string]: IndicatorDefinition };
-
-// --- Sub-component for rendering parameter inputs (copied from DataTab) ---
+// --- Sub-component for rendering parameter inputs ---
 const ParameterInput: React.FC<{
     paramDef: IndicatorParamDef;
     value: any;
@@ -30,14 +17,15 @@ const ParameterInput: React.FC<{
             return (
                 <FormControlLabel
                     control={<Checkbox checked={!!value} onChange={onChange} />}
-                    label={paramDef.name}
+                    label={paramDef.displayName || paramDef.name}
                     sx={{ textTransform: 'capitalize' }}
                 />
             );
         case 'string':
             return (
                 <FormControl fullWidth size="small">
-                    <Select label={paramDef.name} value={value} onChange={onChange}>
+                    <InputLabel>{paramDef.displayName || paramDef.name}</InputLabel>
+                    <Select label={paramDef.displayName || paramDef.name} value={value || ''} onChange={onChange}>
                         {paramDef.options?.map(opt => <MenuItem key={opt} value={opt}>{opt}</MenuItem>)}
                     </Select>
                 </FormControl>
@@ -49,7 +37,7 @@ const ParameterInput: React.FC<{
                     type="number"
                     size="small"
                     variant="outlined"
-                    label={paramDef.name}
+                    label={paramDef.displayName || paramDef.name}
                     value={value}
                     onChange={onChange}
                     sx={{ width: '265px' }}
@@ -60,7 +48,8 @@ const ParameterInput: React.FC<{
 
 interface FeatureNodeData {
     label: string;
-    indicator: string; // Renamed from 'feature' for clarity
+    name: string;
+    timeframe: string;
     params: { [key: string]: any };
 }
 
@@ -72,12 +61,13 @@ interface FeatureNodeProps extends NodeProps<FeatureNodeData> {
 export const FeatureNode = memo(({ id, data, indicatorSchema, isLoadingSchema }: FeatureNodeProps) => {
 
     const { updateNodeData } = usePipeline();
-    const indicatorDef = indicatorSchema[data.indicator];
+    const indicatorDef = indicatorSchema[data.name];
 
     const handleIndicatorChange = (newIndicatorKey: string | null) => {
         if (!newIndicatorKey || !indicatorSchema[newIndicatorKey]) return;
 
         const definition = indicatorSchema[newIndicatorKey];
+
         // When changing the indicator, reset its parameters to their defaults
         const defaultParams = definition.params.reduce((acc, param) => {
             acc[param.name] = param.defaultValue;
@@ -85,7 +75,7 @@ export const FeatureNode = memo(({ id, data, indicatorSchema, isLoadingSchema }:
         }, {} as { [key: string]: any });
 
         updateNodeData(id, {
-            indicator: newIndicatorKey,
+            name: newIndicatorKey,
             params: defaultParams,
         });
     };
@@ -108,15 +98,12 @@ export const FeatureNode = memo(({ id, data, indicatorSchema, isLoadingSchema }:
     };
 
     return (
-        <Paper elevation={3} sx={{ borderRadius: 2, width: '300px', border: '1px solid #555' /* Light blue border */ }}>
+        <Paper elevation={3} sx={{ borderRadius: 2, width: '300px', border: '1px solid #555' }}>
             {/* Input Handle (to receive data) */}
-            <Handle type="target" position={Position.Left} style={handleStyle} />
+            <Handle type="target" position={Position.Left} style={{ ...handleStyle, backgroundColor: '#555'}} />
 
-            <Box sx={{ bgcolor: '#4641daff', p: 1, borderTopLeftRadius: 'inherit', borderTopRightRadius: 'inherit', display: 'flex', justifyContent: 'space-between', alignContent: 'center', height: '50px'  }}>
-                <Typography variant="subtitle2" sx={{ color: 'primary.contrastText', pl: 1, alignSelf: 'center' }}>
-                    {data.label}
-                </Typography>
-            </Box>
+            <NodeHeader nodeId={id} title={data.label} color="#4641daff">
+            </NodeHeader>
 
             <Box
                 sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 2 }}
@@ -127,7 +114,7 @@ export const FeatureNode = memo(({ id, data, indicatorSchema, isLoadingSchema }:
                     size="small"
                     options={Object.keys(indicatorSchema)}
                     getOptionLabel={(optionKey) => indicatorSchema[optionKey]?.name || 'Loading...'}
-                    value={data.indicator || null}
+                    value={data.name || null}
                     onChange={(event, value) => handleIndicatorChange(value)}
                     isOptionEqualToValue={(option, value) => option === value}
                     disabled={isLoadingSchema}
@@ -174,7 +161,7 @@ export const FeatureNode = memo(({ id, data, indicatorSchema, isLoadingSchema }:
             </Box>
             
             {/* Output Handle (to pass data along) */}
-            <Handle type="source" position={Position.Right} style={handleStyle} />
+            <Handle type="source" position={Position.Right} style={{ ...handleStyle, backgroundColor: '#555'}} />
         </Paper>
     );
 });

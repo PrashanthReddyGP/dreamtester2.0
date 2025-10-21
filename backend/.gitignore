@@ -6,3 +6,6 @@ dist/*
 ohlcv_data/*
 stocks/*
 temp_strategies/*
+monte_carlo_sims/*
+params_distribution/*
+.pipeline_cache/*

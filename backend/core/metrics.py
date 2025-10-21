@@ -86,22 +86,111 @@ def calculate_metrics(strategy_data, initialCapital, commission):
 
     profitFactor = calculate_profit_factor(equity)
 
-    # Sharpe Ratio Calculation
-    def calculate_sharpe_ratio(equity):
+    # # Sharpe Ratio Calculation
+    # def calculate_sharpe_ratio(equity):
         
-        minute_returns = np.diff(equity) / equity[:-1]
-        avg_minute_return = np.mean(minute_returns)
-        minute_std_dev = np.std(minute_returns)
+    #     minute_returns = np.diff(equity) / equity[:-1]
+    #     avg_minute_return = np.mean(minute_returns)
+    #     minute_std_dev = np.std(minute_returns)
         
-        annual_return = (1 + avg_minute_return) ** 525600 - 1
+    #     annual_return = (1 + avg_minute_return) ** 525600 - 1
         
-        annual_std_dev = minute_std_dev * np.sqrt(525600)
+    #     annual_std_dev = minute_std_dev * np.sqrt(525600)
         
-        risk_free_rate_annual = 0.02 # 2%
+    #     risk_free_rate_annual = 0.02 # 2%
         
-        return (annual_return - risk_free_rate_annual) / annual_std_dev if annual_std_dev > 0 else 0
+    #     return (annual_return - risk_free_rate_annual) / annual_std_dev if annual_std_dev > 0 else 0
     
-    sharpeRatio = calculate_sharpe_ratio(equity)
+    # sharpeRatio = calculate_sharpe_ratio(equity)
+    
+    # def calculate_sharpe_ratio(equity, timeframe='15m', risk_free_rate_annual=0.02):
+    #     """
+    #     Calculate annualized Sharpe ratio dynamically for any crypto timeframe.
+        
+    #     Parameters:
+    #         equity (np.ndarray): equity curve array
+    #         timeframe (str): timeframe string e.g. '1m', '5m', '15m', '1h', '4h', '1d'
+    #         risk_free_rate_annual (float): annual risk-free rate (default 2%)
+    #     """
+    #     if len(equity) < 2:
+    #         return 0.0
+        
+    #     # Simple returns per bar
+    #     returns = np.diff(equity) / equity[:-1]
+    #     mean_ret = np.mean(returns)
+    #     std_ret = np.std(returns)
+        
+    #     # Annualization factors (24/7 crypto)
+    #     periods_per_year = {
+    #         '1m': 525600,
+    #         '3m': 175200,
+    #         '5m': 105120,
+    #         '15m': 35040,
+    #         '30m': 17520,
+    #         '1h': 8760,
+    #         '4h': 2190,
+    #         '6h': 1460,
+    #         '12h': 730,
+    #         '1d': 365,
+    #         '1w': 52,
+    #         '1mo': 12
+    #     }
+        
+    #     N = periods_per_year.get(timeframe.lower(), 525600)  # default 1-minute
+        
+    #     # Convert annual risk-free rate to per-bar equivalent
+    #     rf_per_bar = (1 + risk_free_rate_annual)**(1 / N) - 1
+        
+    #     # Annualized Sharpe
+    #     sharpe = (mean_ret - rf_per_bar) / std_ret * np.sqrt(N) if std_ret > 0 else 0
+        
+    #     return sharpe
+    
+    # sharpeRatio = calculate_sharpe_ratio(equity, timeframe=timeframe)
+        
+    def calculate_sharpe_ratio(
+        equity_series,  # Expects a pandas Series with a DatetimeIndex
+        risk_free_rate_annual=0.02
+    ):
+        """
+        Calculates the annualized Sharpe ratio from a pandas Series of equity values.
+        The standard and correct method is to use daily returns.
+        """
+        if len(equity_series) < 2:
+            return 0.0
+
+        # 1. Resample to daily frequency, getting the last value of each day.
+        daily_equity = equity_series.resample('D').last()
+
+        # 2. Calculate daily returns.
+        # The .pct_change() method is perfect for this.
+        daily_returns = daily_equity.pct_change().dropna()
+        
+        if len(daily_returns) < 2:
+            return 0.0
+
+        # 3. Calculate mean and std of DAILY returns.
+        mean_daily_return = daily_returns.mean()
+        std_daily_return = daily_returns.std()
+        
+        if std_daily_return == 0:
+            return 0.0
+
+        # 4. Annualize. The annualization factor for daily returns is sqrt(365) for crypto.
+        # We also need to calculate the daily risk-free rate.
+        # Note: For daily returns, it's often acceptable to simplify and use (annual_return - rfr) / annual_stdev
+        # but we will stick to the more precise method.
+        
+        daily_risk_free_rate = (1 + risk_free_rate_annual)**(1/365) - 1
+        
+        excess_return = mean_daily_return - daily_risk_free_rate
+        
+        # The annualization factor is sqrt(number of periods in a year)
+        sharpe_ratio = (excess_return / std_daily_return) * np.sqrt(365)
+        
+        return sharpe_ratio
+    
+    sharpeRatio = calculate_sharpe_ratio(equity_series=pd.Series(equity, index=df['timestamp']), risk_free_rate_annual=0.02)
     
     @njit
     def calculate_consecutive_wins_losses(results):

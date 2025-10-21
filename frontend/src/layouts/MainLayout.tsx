@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Outlet, NavLink } from 'react-router-dom';
+import { Navigate, NavLink, useLocation } from 'react-router-dom';
 import { Box, CssBaseline, AppBar, Toolbar, Typography, IconButton, Button, useTheme, Paper } from '@mui/material';
 import ScienceIcon from '@mui/icons-material/Science';
 import TerminalIcon from '@mui/icons-material/Terminal';
@@ -15,47 +15,47 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { TerminalPanel } from '../components/common/TerminalPanel';
 import { useTerminal } from '../context/TerminalContext';
 import DesignServicesIcon from '@mui/icons-material/DesignServices';
+import CandlestickChartIcon from '@mui/icons-material/CandlestickChart';
+import { AnimatedPage } from '../components/common/AnimatedPage';
+import { StrategyLab } from '../pages/StrategyLab';
+import { ChartingView } from '../pages/ChartingView';
+import { PipelineEditor } from '../pages/PipelineEditor';
+import { MachineLearning } from '../pages/MachineLearning';
+import { AnalysisHub } from '../pages/AnalysisHub';
 
 interface MainLayoutProps {
   mode: 'light' | 'dark';
   toggleTheme: () => void;
 }
 
-const navItems = [
-  { text: 'Strategy Lab', icon: <ScienceIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/lab' },
-  { text: 'Pipeline Editor', icon: <DesignServicesIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/pipeline' },
-  { text: 'Machine Learning', icon: <PrecisionManufacturingIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/machinelearning' },
-  { text: 'Analysis Hub', icon: <BarChartIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/analysis' },
-  { text: 'Automation', icon: <AutoAwesomeIcon sx={{ mr: 1, fontSize: '1.25rem' }} />, path: '/automation' },
+// --- DEFINE YOUR PAGES HERE ---
+const pages = [
+  { path: '/lab', element: <StrategyLab />, nav: { text: 'Strategy Lab', icon: <ScienceIcon sx={{ mr: 1, fontSize: '1.25rem' }} /> } },
+  { path: '/charting', element: <ChartingView />, nav: { text: 'Charting View', icon: <CandlestickChartIcon sx={{ mr: 1, fontSize: '1.25rem' }} /> } },
+  { path: '/pipeline', element: <PipelineEditor />, nav: { text: 'Pipeline Editor', icon: <DesignServicesIcon sx={{ mr: 1, fontSize: '1.25rem' }} /> } },
+  { path: '/machinelearning', element: <MachineLearning />, nav: { text: 'Machine Learning', icon: <PrecisionManufacturingIcon sx={{ mr: 1, fontSize: '1.25rem' }} /> } },
+  { path: '/analysis', element: <AnalysisHub />, nav: { text: 'Analysis Hub', icon: <BarChartIcon sx={{ mr: 1, fontSize: '1.25rem' }} /> } },
+  { path: '/automation', element: <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, textAlign: 'center', justifyContent: 'center' }}>Automation Page</div>, nav: { text: 'Automation', icon: <AutoAwesomeIcon sx={{ mr: 1, fontSize: '1.25rem' }} /> } },
 ];
+
+
 
 export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => {
   const theme = useTheme();
+  const location = useLocation(); 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { isTerminalOpen, toggleTerminal } = useTerminal();
-
-  const STATUS_BAR_HEIGHT = 24;
-  const [statusMessage, setStatusMessage] = useState('Ready'); // Placeholder state for the message
-
-  // Style for active NavLink
-  const activeLinkStyle = {
-    backgroundColor: theme.palette.action.hover,
-    color: theme.palette.text.primary,
-  };
+  const [statusMessage] = useState('Ready'); // Placeholder state for the message
   
+  const STATUS_BAR_HEIGHT = 24;
 
-  // const handleToggleTerminal = () => {
-  //   setIsTerminalOpen(prevState => !prevState);
-  // };
+  // If the user lands on the root path, render ONLY the Navigate component.
+  if (location.pathname === '/') {
+    return <Navigate to="/lab" replace />;
+  }
 
-  const handleSettingsClick = () => {
-    setSettingsOpen(true);
-  };
-
-  // A simple vertical resize handle
-  const VerticalResizeHandle = () => (
-    <PanelResizeHandle style={{ height: '1px', background: theme.palette.divider }} />
-  );
+  const handleSettingsClick = () => setSettingsOpen(true);
+  const VerticalResizeHandle = () => <PanelResizeHandle style={{ height: '1px', background: theme.palette.divider }} />;
 
   return (
     <>
@@ -75,21 +75,15 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
               Dreamtester 2.0
             </Typography>
             <Box sx={{ flexGrow: 1, display: 'flex', justifyContent: 'center', gap: 1 }}>
-              {navItems.map((item) => (
+              {pages.filter(p => p.nav).map((page) => (
                 <Button
-                  key={item.text}
+                  key={page.path}
                   component={NavLink}
-                  to={item.path}
-                  sx={{
-                    color: 'text.secondary',
-                    fontWeight: 500,
-                    px: 2,
-                    py: 1,
-                    '&:hover': { backgroundColor: theme.palette.action.hover }
-                  }}
-                  startIcon={item.icon}
+                  to={page.path}
+                  sx={{ color: 'text.secondary', fontWeight: 500, px: 2, py: 1, '&:hover': { backgroundColor: theme.palette.action.hover } }}
+                  startIcon={page.nav!.icon}
                 >
-                  {item.text}
+                  {page.nav!.text}
                 </Button>
               ))}
             </Box>
@@ -119,7 +113,18 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ mode, toggleTheme }) => 
             <PanelGroup direction="vertical">
           
               <Panel id='main-content' order={1} style={{display:'flex'}}>
-                <Outlet />
+                {pages.map(page => (
+                    <Box 
+                        key={page.path} 
+                        style={{ 
+                            display: location.pathname === page.path ? 'flex' : 'none',
+                            flexDirection: 'column',
+                            flexGrow: 1,
+                        }}
+                    >
+                        <AnimatedPage>{page.element}</AnimatedPage>
+                    </Box>
+                ))}
               </Panel>
 
               {/* Conditionally Render the Terminal Panel and its Handle */}

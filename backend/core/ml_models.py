@@ -26,6 +26,15 @@ from sklearn.svm import OneClassSVM
 # Preprocessing
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
+UNSUPERVISED_MODELS = [
+    'KMeans',
+    'DBSCAN',
+    'AgglomerativeClustering',
+    'PCA',
+    'IsolationForest',
+    'OneClassSVM'
+]
+
 def get_model(model_name: str, params: dict = None):
     """
     Returns an unfitted instance of a model based on its name,
@@ -33,7 +42,12 @@ def get_model(model_name: str, params: dict = None):
     """
     if params is None:
         params = {}
-
+        
+    # Convert the string 'none' from the UI into Python's None object.
+    # This is a common requirement when interfacing with web frontends.
+    if params.get('class_weight') == 'none':
+        params['class_weight'] = None
+    
     # --- Classification Models ---
     if model_name == 'LogisticRegression':
         # Default params for stability and reproducibility
@@ -41,15 +55,15 @@ def get_model(model_name: str, params: dict = None):
         return LogisticRegression(**{**default_params, **params})
         
     elif model_name == 'RandomForestClassifier':
-        default_params = {'n_estimators': 100, 'class_weight': 'balanced', 'random_state': 42, 'n_jobs': -1}
+        default_params = {'n_estimators': 100, 'class_weight': 'none', 'random_state': 42, 'n_jobs': -1}
         return RandomForestClassifier(**{**default_params, **params})
 
     elif model_name == 'LightGBMClassifier':
-        default_params = {'objective': 'multiclass', 'random_state': 42}
+        default_params = {'random_state': 42}
         return lgb.LGBMClassifier(**{**default_params, **params})
 
     elif model_name == 'XGBoostClassifier':
-        default_params = {'objective': 'multi:softprob', 'use_label_encoder': False, 'eval_metric': 'mlogloss', 'random_state': 42}
+        default_params = {'use_label_encoder': False, 'eval_metric': 'mlogloss', 'random_state': 42}
         return xgb.XGBClassifier(**{**default_params, **params})
 
     elif model_name == 'SVC':

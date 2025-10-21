@@ -1,10 +1,10 @@
 import React, { useState, useRef, forwardRef } from 'react';
-import type { MouseEvent, FC } from 'react';
+import type { MouseEvent } from 'react';
 import { Box, Button, Collapse, Divider, List, ListItemButton, ListItemIcon, ListItemText, Typography, Menu, MenuItem } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
-import { Folder as FolderIcon, FolderOpen, File, Trash, DownloadIcon, Archive } from 'lucide-react';
+import { Folder as FolderIcon, FolderOpen, File, Trash, Archive, Edit, PlayCircle } from 'lucide-react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import JSZip from 'jszip';
 
@@ -15,6 +15,7 @@ export interface FileSystemItem {
   type: 'folder' | 'file';
   children?: FileSystemItem[];
   content?: string;
+  parentId?: string | null;
 }
 
 interface ImportedFile {
@@ -36,7 +37,9 @@ const FileSystemTreeItem = forwardRef<HTMLDivElement, {
     onContextMenu: (event: MouseEvent, item: FileSystemItem) => void;
     onFileSelect: (fileId: string) => void;
     selectedFileId: string | null;
-}>(({ item, onContextMenu, onFileSelect, selectedFileId }, ref ) => {
+    specialFolderName?: string;
+    isRootItem?: boolean;
+}>(({ item, onContextMenu, onFileSelect, selectedFileId, specialFolderName, isRootItem }, ref ) => {
 
     const [open, setOpen] = useState(true);
 
@@ -50,11 +53,15 @@ const FileSystemTreeItem = forwardRef<HTMLDivElement, {
 
     const isSelected = item.type === 'file' && item.id === selectedFileId;
 
+    // CHANGED: Determine if this specific item is the special folder
+    const isThisItemSpecial = isRootItem && item.type === 'folder' && item.name === specialFolderName;
+
     const { attributes, listeners, setNodeRef: setDraggableRef, transform } = useDraggable({
         id: item.id,
         data: { 
             type: item.type,
-        }
+        },
+        disabled: isThisItemSpecial, // Disable dragging if this is the special folder
     });
 
     const { isOver, setNodeRef: setDroppableRef } = useDroppable({
@@ -62,7 +69,7 @@ const FileSystemTreeItem = forwardRef<HTMLDivElement, {
         data: {
             type: 'folder'
         },
-        disabled: item.type !== 'folder',
+        disabled: item.type !== 'folder' || isThisItemSpecial, // Disable dropping if not a folder or if this is the special folder
     });
     
     const style = transform ? {
@@ -84,12 +91,14 @@ const FileSystemTreeItem = forwardRef<HTMLDivElement, {
                 sx={{ 
                   pl: 1, 
                   height:30,
+                  color: isThisItemSpecial ? 'primary.main' : 'text.primary',
+                  fontWeight: isThisItemSpecial ? 'bold' : 'normal',
                   backgroundColor: isOver ? 'action-focus' : 'transparent',
                   transition: 'background-color 0.2s ease-in-out',
                 }}
                 selected={isSelected}
               >
-                <ListItemIcon sx={{ minWidth: '24px', color: 'text.secondary' }}>
+                <ListItemIcon sx={{ minWidth: '24px', color: isThisItemSpecial ? 'primary.main' : 'text.secondary' }}>
                     {item.type === 'folder' ? (open ? <FolderOpen size={16} /> : <FolderIcon size={16} />) : (<File size={16} />)}
                 </ListItemIcon>
                 
@@ -107,6 +116,8 @@ const FileSystemTreeItem = forwardRef<HTMLDivElement, {
                                 onContextMenu={onContextMenu}
                                 onFileSelect={onFileSelect}
                                 selectedFileId={selectedFileId}
+                                specialFolderName={specialFolderName}
+                                isRootItem={false}
                             />
                         ))}
                     </List>
@@ -127,234 +138,235 @@ export const ExplorerPanel: React.FC<{
       onImportFiles: (files: ImportedFile[]) => void;
       onClearAll: () => void;
       onBacktestFile: (file: FileSystemItem) => void;
-  }> = ({ fileSystem, onFileSelect, selectedFileId, onNewFile, onNewFolder, onDelete, onRename, onImportFiles, onClearAll, onBacktestFile }) => {
-  
-  const { setNodeRef: setRootDroppableRef } = useDroppable({
-      id: 'root-droppable-area',
-      data: {
-          type: 'root-droppable',
-      }
-  });
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleImportClick = () => {
-    fileInputRef.current?.click();
-    handleClose();
-  };
-
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) {
-      return;
-    }
-
-    // FileReader is async, so we need to wrap it in a Promise
-    // to handle multiple files correctly.
-    const readAsText = (file: File): Promise<ImportedFile> => {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          resolve({ name: file.name, content: reader.result as string });
-        };
-        reader.onerror = reject;
-        reader.readAsText(file);
-      });
-    };
-
-    // Create an array of promises, one for each file
-    const promises = Array.from(files).map(readAsText);
-
-    // Promise.all waits for all files to be read
-    Promise.all(promises)
-      .then(importedFiles => {
-        // Then calls the parent handler with the complete array of results
-        onImportFiles(importedFiles);
-      })
-      .catch(error => {
-        console.error("Error reading one or more files:", error);
-        alert("Failed to read one or more of the selected files.");
-      });
-
-    // Reset the input so the onChange event fires again for the same file(s)
-    event.target.value = '';
-  };
-
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  
-  const handleContainerContextMenu = (event: MouseEvent<HTMLDivElement>) => {
-    if (event.target !== event.currentTarget) {
-        return;
-    }
-    event.preventDefault();
-    setContextMenu({
-        mouseX: event.clientX - 2,
-        mouseY: event.clientY - 4,
-        type: 'container', 
-    });
-  };
-
-  // --- UPDATED: Context menu handler for specific items ---
-  const handleItemContextMenu = (event: MouseEvent, item: FileSystemItem) => {
-    event.preventDefault();
-    event.stopPropagation(); // Stop the event from bubbling up to the container
-    setContextMenu({
-        mouseX: event.clientX - 2,
-        mouseY: event.clientY - 4,
-        type: 'item', // Set the type to 'item'
-        item: item,
-    });
-  };
-
-  const handleClose = () => {
-    setContextMenu(null);
-  };
-
-  const handleBacktest = () => {
-      if(contextMenu?.item) {
-          onBacktestFile(contextMenu.item);
-      }
-      handleClose();
-  };
-
-  const handleNewFile = () => {
-    // If the menu was opened on a folder, pass its ID as the parent. Otherwise, it's root level (undefined).
-    const parentId = (contextMenu?.type === 'item' && contextMenu.item?.type === 'folder') 
-      ? contextMenu.item.id 
-      : undefined;
-    onNewFile(parentId);
-    handleClose();
-  };
-  
-  const handleNewFolder = () => {
-    const parentId = (contextMenu?.type === 'item' && contextMenu.item?.type === 'folder') 
-      ? contextMenu.item.id 
-      : undefined;
-    onNewFolder(parentId);
-    handleClose();
-  };
-
-  const handleDelete = () => {
-      if(contextMenu?.item) {
-          onDelete(contextMenu.item.id);
-      }
-      handleClose();
-  };
-
-  const handleRename = () => {
-      if(contextMenu?.item) {
-          onRename(contextMenu.item.id, contextMenu.item.name);
-      }
-      handleClose();
-  };
-
-  const handleExport = () => {
-    if (!contextMenu?.item) return;
-
-    const itemToExport = contextMenu.item;
+      specialFolderName?: string;
+  }> = ({ fileSystem, onFileSelect, selectedFileId, onNewFile, onNewFolder, onDelete, onRename, onImportFiles, onClearAll, onBacktestFile, specialFolderName }) => {
     
-    if (itemToExport.type === 'file') {
-        // --- Handle single file export ---
-        if (typeof itemToExport.content !== 'string') {
-            alert("File has no content to export.");
-            return;
+    const { setNodeRef: setRootDroppableRef } = useDroppable({
+        id: 'root-droppable-area',
+        data: {
+            type: 'root-droppable',
         }
-        
-        // Create a blob from the file content
-        const blob = new Blob([itemToExport.content], { type: 'text/plain;charset=utf-8' });
-        
-        // Create a temporary link element to trigger the download
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = itemToExport.name; // Set the download filename
-        
-        document.body.appendChild(link); // Required for Firefox
-        link.click();
-        document.body.removeChild(link); // Clean up
-        URL.revokeObjectURL(link.href); // Free up memory
+    });
 
-    } else if (itemToExport.type === 'folder') {
-        // --- Handle folder export using jszip ---
-        const zip = new JSZip();
-        
-        // A recursive function to add files and folders to the zip
-        const addFolderToZip = (folder: FileSystemItem, currentZipFolder: JSZip) => {
-            folder.children?.forEach(child => {
-                if (child.type === 'file' && typeof child.content === 'string') {
-                    currentZipFolder.file(child.name, child.content);
-                } else if (child.type === 'folder') {
-                    const newFolder = currentZipFolder.folder(child.name);
-                    if (newFolder) {
-                        addFolderToZip(child, newFolder);
-                    }
-                }
-            });
-        };
-        
-        // Start the zipping process from the selected folder
-        addFolderToZip(itemToExport, zip);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
-        // Generate the zip file blob and trigger the download
-        zip.generateAsync({ type: 'blob' }).then(content => {
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(content);
-            link.download = `${itemToExport.name}.zip`;
-            
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(link.href);
-        });
-    }
-
-    handleClose(); // Close the context menu
-  };
-
-  const handleExportAll = () => {
-    const zip = new JSZip();
-
-    // The recursive helper function is the same as before
-    const addFolderToZip = (folder: FileSystemItem, currentZipFolder: JSZip) => {
-        folder.children?.forEach(child => {
-            if (child.type === 'file' && typeof child.content === 'string') {
-                currentZipFolder.file(child.name, child.content);
-            } else if (child.type === 'folder') {
-                const newFolder = currentZipFolder.folder(child.name);
-                if (newFolder) {
-                    addFolderToZip(child, newFolder);
-                }
-            }
-        });
+    const handleImportClick = () => {
+      fileInputRef.current?.click();
+      handleClose();
     };
 
-    // We iterate over the top-level `fileSystem` array
-    fileSystem.forEach(item => {
-        if (item.type === 'file' && typeof item.content === 'string') {
-            zip.file(item.name, item.content);
-        } else if (item.type === 'folder') {
-            const newFolder = zip.folder(item.name);
-            if (newFolder) {
-                addFolderToZip(item, newFolder);
-            }
+    const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+      if (!files || files.length === 0) {
+        return;
+      }
+
+      // FileReader is async, so we need to wrap it in a Promise
+      // to handle multiple files correctly.
+      const readAsText = (file: File): Promise<ImportedFile> => {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            resolve({ name: file.name, content: reader.result as string });
+          };
+          reader.onerror = reject;
+          reader.readAsText(file);
+        });
+      };
+
+      // Create an array of promises, one for each file
+      const promises = Array.from(files).map(readAsText);
+
+      // Promise.all waits for all files to be read
+      Promise.all(promises)
+        .then(importedFiles => {
+          // Then calls the parent handler with the complete array of results
+          onImportFiles(importedFiles);
+        })
+        .catch(error => {
+          console.error("Error reading one or more files:", error);
+          alert("Failed to read one or more of the selected files.");
+        });
+
+      // Reset the input so the onChange event fires again for the same file(s)
+      event.target.value = '';
+    };
+
+    const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+    
+    const handleContainerContextMenu = (event: MouseEvent<HTMLDivElement>) => {
+      if (event.target !== event.currentTarget) {
+          return;
+      }
+      event.preventDefault();
+      setContextMenu({
+          mouseX: event.clientX - 2,
+          mouseY: event.clientY - 4,
+          type: 'container', 
+      });
+    };
+
+    // --- UPDATED: Context menu handler for specific items ---
+    const handleItemContextMenu = (event: MouseEvent, item: FileSystemItem) => {
+      event.preventDefault();
+      event.stopPropagation(); // Stop the event from bubbling up to the container
+      setContextMenu({
+          mouseX: event.clientX - 2,
+          mouseY: event.clientY - 4,
+          type: 'item', // Set the type to 'item'
+          item: item,
+      });
+    };
+
+    const handleClose = () => {
+      setContextMenu(null);
+    };
+
+    const handleBacktest = () => {
+        if(contextMenu?.item) {
+            onBacktestFile(contextMenu.item);
         }
-    });
+        handleClose();
+    };
 
-    // Generate the zip file and trigger the download
-    zip.generateAsync({ type: 'blob' }).then(content => {
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(content);
-        // Give it a generic name, e.g., based on the current date
-        const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-        link.download = `dreamtester_strategies_${date}.zip`;
-        
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(link.href);
-    });
+    const handleNewFile = () => {
+      // If the menu was opened on a folder, pass its ID as the parent. Otherwise, it's root level (undefined).
+      const parentId = (contextMenu?.type === 'item' && contextMenu.item?.type === 'folder') 
+        ? contextMenu.item.id 
+        : undefined;
+      onNewFile(parentId);
+      handleClose();
+    };
+    
+    const handleNewFolder = () => {
+      const parentId = (contextMenu?.type === 'item' && contextMenu.item?.type === 'folder') 
+        ? contextMenu.item.id 
+        : undefined;
+      onNewFolder(parentId);
+      handleClose();
+    };
 
-    handleClose(); // Close the context menu
-  };
+    const handleDelete = () => {
+        if(contextMenu?.item) {
+            onDelete(contextMenu.item.id);
+        }
+        handleClose();
+    };
+
+    const handleRename = () => {
+        if(contextMenu?.item) {
+            onRename(contextMenu.item.id, contextMenu.item.name);
+        }
+        handleClose();
+    };
+
+    const handleExport = () => {
+      if (!contextMenu?.item) return;
+
+      const itemToExport = contextMenu.item;
+      
+      if (itemToExport.type === 'file') {
+          // --- Handle single file export ---
+          if (typeof itemToExport.content !== 'string') {
+              alert("File has no content to export.");
+              return;
+          }
+          
+          // Create a blob from the file content
+          const blob = new Blob([itemToExport.content], { type: 'text/plain;charset=utf-8' });
+          
+          // Create a temporary link element to trigger the download
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(blob);
+          link.download = itemToExport.name; // Set the download filename
+          
+          document.body.appendChild(link); // Required for Firefox
+          link.click();
+          document.body.removeChild(link); // Clean up
+          URL.revokeObjectURL(link.href); // Free up memory
+
+      } else if (itemToExport.type === 'folder') {
+          // --- Handle folder export using jszip ---
+          const zip = new JSZip();
+          
+          // A recursive function to add files and folders to the zip
+          const addFolderToZip = (folder: FileSystemItem, currentZipFolder: JSZip) => {
+              folder.children?.forEach(child => {
+                  if (child.type === 'file' && typeof child.content === 'string') {
+                      currentZipFolder.file(child.name, child.content);
+                  } else if (child.type === 'folder') {
+                      const newFolder = currentZipFolder.folder(child.name);
+                      if (newFolder) {
+                          addFolderToZip(child, newFolder);
+                      }
+                  }
+              });
+          };
+          
+          // Start the zipping process from the selected folder
+          addFolderToZip(itemToExport, zip);
+
+          // Generate the zip file blob and trigger the download
+          zip.generateAsync({ type: 'blob' }).then(content => {
+              const link = document.createElement('a');
+              link.href = URL.createObjectURL(content);
+              link.download = `${itemToExport.name}.zip`;
+              
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(link.href);
+          });
+      }
+
+      handleClose(); // Close the context menu
+    };
+
+    const handleExportAll = () => {
+      const zip = new JSZip();
+
+      // The recursive helper function is the same as before
+      const addFolderToZip = (folder: FileSystemItem, currentZipFolder: JSZip) => {
+          folder.children?.forEach(child => {
+              if (child.type === 'file' && typeof child.content === 'string') {
+                  currentZipFolder.file(child.name, child.content);
+              } else if (child.type === 'folder') {
+                  const newFolder = currentZipFolder.folder(child.name);
+                  if (newFolder) {
+                      addFolderToZip(child, newFolder);
+                  }
+              }
+          });
+      };
+
+      // We iterate over the top-level `fileSystem` array
+      fileSystem.forEach(item => {
+          if (item.type === 'file' && typeof item.content === 'string') {
+              zip.file(item.name, item.content);
+          } else if (item.type === 'folder') {
+              const newFolder = zip.folder(item.name);
+              if (newFolder) {
+                  addFolderToZip(item, newFolder);
+              }
+          }
+      });
+
+      // Generate the zip file and trigger the download
+      zip.generateAsync({ type: 'blob' }).then(content => {
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(content);
+          // Give it a generic name, e.g., based on the current date
+          const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+          link.download = `dreamtester_strategies_${date}.zip`;
+          
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(link.href);
+      });
+
+      handleClose(); // Close the context menu
+    };
 
   return (
     <Box sx={{ height: '100%', bgcolor: 'background.paper', p: 2, display: 'flex', flexDirection: 'column' }}>
@@ -387,12 +399,14 @@ export const ExplorerPanel: React.FC<{
       >
         <List component="nav" dense>
             {fileSystem.map(item => (
-               <FileSystemTreeItem
+              <FileSystemTreeItem
                     key={item.id}
                     item={item}
                     onContextMenu={handleItemContextMenu}
                     onFileSelect={onFileSelect}
                     selectedFileId={selectedFileId}
+                    specialFolderName={specialFolderName}
+                    isRootItem={true}
                 />
               ))}
         </List>
@@ -430,21 +444,57 @@ export const ExplorerPanel: React.FC<{
                 <ListItemText>Clear All</ListItemText>
             </MenuItem>
         ]}
-        {contextMenu?.type === 'item' && contextMenu.item?.type === 'folder' && [
-            <MenuItem key="new-file" onClick={handleNewFile}>New File</MenuItem>,
-            <MenuItem key="new-folder" onClick={handleNewFolder}>New Folder</MenuItem>,
-            <Divider key="divider" />,
-        ]}
-        {contextMenu?.type === 'item' && [
-             <MenuItem key="rename" onClick={handleRename}>Rename</MenuItem>,
-             <MenuItem key="export" onClick={handleExport}>
-                <ListItemText>Export</ListItemText>
-             </MenuItem>,
-             <MenuItem key="backtest" onClick={handleBacktest}>
-                <ListItemText>Backtest</ListItemText>
-             </MenuItem>,
-             <MenuItem key="delete" onClick={handleDelete} sx={{ color: 'error.main' }}>Delete</MenuItem>
-        ]}
+        {/* Combined menu for right-clicking on ANY item (file or folder) */}
+        {contextMenu?.type === 'item' && contextMenu.item && (() => {
+            const item = contextMenu.item;
+            // The check is the same: must be a folder, have the special name, and be a root item.
+            const isItemSpecial = item.type === 'folder' && item.name === specialFolderName && !item.parentId;
+
+            const menuItems = [];
+
+            // Add "New File" and "New Folder" only if the item is a folder
+            if (item.type === 'folder') {
+                menuItems.push(<MenuItem key="new-file-in-folder" onClick={handleNewFile}><ListItemIcon><NoteAddIcon fontSize="small"/></ListItemIcon><ListItemText>New File</ListItemText></MenuItem>);
+                menuItems.push(<MenuItem key="new-folder-in-folder" onClick={handleNewFolder}><ListItemIcon><CreateNewFolderIcon fontSize="small"/></ListItemIcon><ListItemText>New Folder</ListItemText></MenuItem>);
+                menuItems.push(<Divider key="folder-divider" />);
+            }
+
+            // Add common actions for all items
+            menuItems.push(
+                // Add the 'disabled' prop here
+                <MenuItem key="rename" onClick={handleRename} disabled={isItemSpecial}>
+                    <ListItemIcon><Edit size={16}/></ListItemIcon>
+                    <ListItemText>Rename</ListItemText>
+                </MenuItem>
+            );
+
+            menuItems.push(
+                <MenuItem key="export" onClick={handleExport}>
+                    <ListItemIcon><Archive size={16}/></ListItemIcon>
+                    <ListItemText>Export</ListItemText>
+                </MenuItem>
+            );
+
+            // Add "Backtest" only for files
+            if (item.type === 'file') {
+                menuItems.push(
+                    <MenuItem key="backtest" onClick={handleBacktest}>
+                        <ListItemIcon><PlayCircle size={16}/></ListItemIcon>
+                        <ListItemText>Backtest</ListItemText>
+                    </MenuItem>
+                );
+            }
+
+            // Add "Delete" at the end, also with the 'disabled' prop
+            menuItems.push(
+                <MenuItem key="delete" onClick={handleDelete} sx={{ color: 'error.main' }} disabled={isItemSpecial}>
+                    <ListItemIcon sx={{color: 'error.main'}}><Trash size={16}/></ListItemIcon>
+                    <ListItemText>Delete</ListItemText>
+                </MenuItem>
+            );
+
+            return menuItems;
+        })()}
       </Menu>
     </Box>
   );

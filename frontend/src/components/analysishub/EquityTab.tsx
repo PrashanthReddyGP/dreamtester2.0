@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useMemo, useState } from 'react';
+import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import { Box, IconButton, Typography, Tooltip, useTheme } from '@mui/material';
 import ReactECharts from 'echarts-for-react';
 import type { EquityCurvePoint } from '../../services/api';
@@ -32,41 +32,40 @@ export const EquityTab: React.FC<{
   const echartsRef = useRef<ReactECharts>(null);
   const [isCopied, setIsCopied] = useState(false);
 
-  // The prop `equityCurve` directly replaces `generateMockEquityData()`
-  let equityDataForChart = equity.map(point => [
-    point[0] * 1000,
-    point[1]
-  ]); 
-
-  const drawdownData = calculateDrawdown(equityDataForChart);
-  
-  equityDataForChart = equity.map(point => [
+  // 1. Memoize all data derivations in a single, efficient block.
+  // This entire block only re-runs if `equity` or `initialCapital` props change.
+  const { pnlEquityData, drawdownData, minEquityPnl } = useMemo(() => {
+    // First, convert to the format needed by ECharts and for drawdown calculation
+    const rawEquityCurve = equity.map(point => [
       point[0] * 1000,
-      point[1] - initialCapital
+      point[1]
     ]); 
-  
-  const equityData = equityDataForChart.map(p => p[1])
-  let minEquityPnl = Infinity; // Start with the largest possible number
 
-  for (let i = 0; i < equityData.length; i++) {
-    if (equityData[i] < minEquityPnl) {
-      minEquityPnl = equityData[i];
-    }
-  }
+    // Calculate drawdown from the raw equity values
+    const drawdownData = calculateDrawdown(rawEquityCurve);
+    
+    // Calculate P&L by subtracting initial capital for the main series
+    const pnlEquityData = rawEquityCurve.map(point => [
+        point[0],
+        point[1] - initialCapital
+    ]); 
+
+    // Find the minimum P&L for setting the Y-axis scale
+    // Using reduce is a concise way to find the minimum value in the derived P&L data
+    const minEquityPnl = pnlEquityData.reduce(
+        (min, point) => (point[1] < min ? point[1] : min),
+        Infinity
+    );
+    
+    return { pnlEquityData, drawdownData, minEquityPnl };
+  }, [equity, initialCapital]);
 
   useEffect(() => {
-    // This is a trick to ensure the resize happens after the DOM has settled.
-    // The resizable panel needs a render cycle to get its final size.
     const resizeTimer = setTimeout(() => {
-      const chartInstance = echartsRef.current?.getEchartsInstance();
-      if (chartInstance) {
-        chartInstance.resize();
-      }
-    }, 10); // A tiny delay is often more reliable than 0
-
-    // Cleanup the timer if the component unmounts
+      echartsRef.current?.getEchartsInstance()?.resize();
+    }, 10);
     return () => clearTimeout(resizeTimer);
-  }, []); // The empty array [] means this effect runs only once on mount
+  }, []);
 
   const chartOption = useMemo(() => ({
     tooltip: {
@@ -181,7 +180,7 @@ export const EquityTab: React.FC<{
         yAxisIndex: 0,
         showSymbol: false,
         smooth: true,
-        data: equityDataForChart,
+        data: pnlEquityData,
         lineStyle: {
           color: theme.palette.primary.main,
           width: 2,
@@ -210,97 +209,57 @@ export const EquityTab: React.FC<{
     textStyle: {
         color: theme.palette.text.secondary
     }
-  }), [theme, equityDataForChart, drawdownData]);
+  }), [theme, pnlEquityData, drawdownData, minEquityPnl, isPortfolio]);
 
-  const handleResetZoom = () => {
-    // Get the ECharts instance from the ref
+  // 2. Memoize event handlers with useCallback to give them a stable identity.
+  const handleResetZoom = useCallback(() => {
+    echartsRef.current?.getEchartsInstance()?.dispatchAction({
+      type: 'dataZoom',
+      start: 0,
+      end: 100,
+    });
+  }, []); // No dependencies, will be created only once.
+
+  const handleDownloadChart = useCallback(() => {
     const chartInstance = echartsRef.current?.getEchartsInstance();
     if (chartInstance) {
-      // Dispatch a 'dataZoom' action to reset the zoom
-      chartInstance.dispatchAction({
-        type: 'dataZoom',
-        // Specify the start and end percentages
-        start: 0,
-        end: 100,
-      });
-    }
-  };
-  const handleDownloadChart = () => {
-    const chartInstance = echartsRef.current?.getEchartsInstance();
-    if (chartInstance) {
-      // Get the chart data as a high-resolution base64 encoded PNG
-      const dataUrl = chartInstance.getDataURL({
-        type: 'png',
-        pixelRatio: 2, // Export at 2x resolution for crispness
-        backgroundColor: theme.palette.background.default, // Use the theme's background color
-        excludeComponents: ['dataZoom']
-      });
-
-      // Create a temporary link element to trigger the download
-      const link = document.createElement('a');
-
-      const baseName = strategy_name;
-      const nameWithoutExtension = baseName.replace(/\.py$/i, '');
-      const sanitizedName = nameWithoutExtension.replace(/[^a-z0-9_.-]/gi, '_').substring(0, 50);
-      const fileName = `${sanitizedName}.png`;
-      
-      link.download = fileName;
-      link.href = dataUrl;
-      
-      // Append, click, and remove the link to trigger the download
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    } else {
-      console.error("ECharts instance not available for download.");
-      alert("Could not download chart. Please try again.");
-    }
-  };
-
-    const handleCopyChart = async () => {
-    const chartInstance = echartsRef.current?.getEchartsInstance();
-    if (!chartInstance) {
-      console.error("ECharts instance not available to copy.");
-      alert("Error: Could not copy chart.");
-      return;
-    }
-    
-    // Check for clipboard API availability
-    if (!navigator.clipboard?.write) {
-        alert("Your browser does not support copying images to the clipboard.");
-        return;
-    }
-
-    try {
-      // 1. Get the chart data as a base64 string
       const dataUrl = chartInstance.getDataURL({
         type: 'png',
         pixelRatio: 2,
-        backgroundColor: '#131313ff', // Use a white background for better pasting into docs
+        backgroundColor: theme.palette.background.default,
         excludeComponents: ['dataZoom']
       });
+      const link = document.createElement('a');
+      const sanitizedName = strategy_name.replace(/\.py$/i, '').replace(/[^a-z0-9_.-]/gi, '_').substring(0, 50);
+      link.download = `${sanitizedName}.png`;
+      link.href = dataUrl;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  }, [theme, strategy_name]); // Depends on theme and strategy_name
 
-      // 2. Convert the base64 data URL to a Blob
+  const handleCopyChart = useCallback(async () => {
+    const chartInstance = echartsRef.current?.getEchartsInstance();
+    if (!chartInstance || !navigator.clipboard?.write) return;
+
+    try {
+      const dataUrl = chartInstance.getDataURL({
+        type: 'png',
+        pixelRatio: 2,
+        backgroundColor: '#131313ff',
+        excludeComponents: ['dataZoom']
+      });
       const response = await fetch(dataUrl);
       const blob = await response.blob();
-
-      // 3. Use the Clipboard API to write the blob
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          [blob.type]: blob,
-        }),
-      ]);
+      await navigator.clipboard.write([ new ClipboardItem({ [blob.type]: blob }) ]);
       
-      // 4. Provide user feedback
       setIsCopied(true);
-      // Reset the icon after 2 seconds
       setTimeout(() => setIsCopied(false), 2000);
-
     } catch (error) {
       console.error('Failed to copy image to clipboard:', error);
-      alert('Failed to copy image. Please try downloading instead.');
     }
-  };
+  }, []); // No dependencies, as setIsCopied is stable.
 
   return (
     <Box sx={{ width:'100%', height:'100%', display: 'flex', flexDirection: 'column' }}>

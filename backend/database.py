@@ -1,5 +1,8 @@
 import os
 import time
+import uuid
+import traceback
+from fastapi import HTTPException
 from datetime import datetime
 from sqlalchemy import REAL, create_engine, Column, Integer, String, Text, ForeignKey, asc, JSON, text
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
@@ -92,7 +95,13 @@ class FeatureEngineeringTemplate(Base):
     description = Column(String)
     code = Column(Text)
 
-
+class BacktestTemplate(Base):
+    """Stores user-saved custom backtest strategy templates for the pipeline."""
+    __tablename__ = "backtest_templates"
+    key = Column(String, primary_key=True, index=True)
+    name = Column(String, index=True)
+    description = Column(String)
+    code = Column(Text)
 
 # --- Create all tables in the database ---
 # This will now only create api_keys, strategy_files, and backtest_jobs tables.
@@ -133,6 +142,58 @@ def get_api_key(exchange: str):
 def get_strategies_tree():
     db = SessionLocal()
     try:
+        
+        # 1. Look for a root-level folder named "Portfolio"
+        portfolio_folder = db.query(StrategyFile).filter(
+            StrategyFile.name == "PORTFOLIO",
+            StrategyFile.type == "folder",
+            StrategyFile.parent_id == None
+        ).first()
+        
+        # 2. If it doesn't exist, create it and a default file
+        if not portfolio_folder:
+            print("INFO: 'PORTFOLIO' folder not found. Creating it with a default template.")
+            
+            # Create the folder object
+            new_portfolio_folder = StrategyFile(
+                # You'll need a way to generate IDs, e.g., using uuid
+                id=str(uuid.uuid4()), 
+                name="PORTFOLIO",
+                type="folder"
+            )
+            db.add(new_portfolio_folder)
+            
+            # Use db.flush() to send the SQL to the DB and assign an ID to our new folder object
+            # This is crucial so we can use its ID as the parent_id for the child file.
+            db.flush()
+            
+            # Define the content for the default portfolio template
+            # Path to the default template file, assuming this script is in a 'backend' folder
+            # and the template is in a sibling 'core' folder.
+            template_path = os.path.join(os.path.dirname(__file__), 'core', 'portfolio.py')
+            
+            try:
+                with open(template_path, 'r') as f:
+                    default_portfolio_code = f.read()
+            except FileNotFoundError:
+                print(f"ERROR: Default portfolio template not found at {template_path}. Using a fallback.")
+                # Fallback to the original hardcoded string if the file is missing
+                default_portfolio_code = """"""
+            
+            # Create the default file, linking it to the new folder
+            default_file = StrategyFile(
+                id=str(uuid.uuid4()),
+                name="Default_Portfolio.py",
+                type="file",
+                content=default_portfolio_code,
+                parent_id=new_portfolio_folder.id # Link to the folder we just created
+            )
+            db.add(default_file)
+            
+            # Commit the transaction to save both the folder and the file
+            db.commit()
+            print("INFO: Successfully created 'Portfolio' folder and default template.")
+        
         # Fetch only top-level items (those without a parent)
         top_level_items = db.query(StrategyFile).filter(StrategyFile.parent_id == None).order_by(asc(StrategyFile.name)).all()
         # The to_dict method will recursively build the rest of the tree
@@ -171,8 +232,18 @@ def delete_strategy_item(item_id: str):
     db = SessionLocal()
     try:
         item_to_delete = db.query(StrategyFile).filter(StrategyFile.id == item_id).first()
+        
         if not item_to_delete:
-            return None
+            raise HTTPException(status_code=404, detail="Item not found.")
+        
+        # # Check if the item is a folder, is named "Portfolio", and is a root item.
+        # if (item_to_delete.type == "folder" and 
+        #     item_to_delete.name == "PORTFOLIO" and 
+        #     item_to_delete.parent_id is None):
+            
+        #     # If it is, raise a 403 Forbidden error immediately.
+        #     raise HTTPException(status_code=403, detail="The 'PORTFOLIO' folder is protected and cannot be deleted.")
+        
         db.delete(item_to_delete)
         db.commit()
         return {"status": "success", "message": "Item deleted."}
@@ -196,6 +267,54 @@ def move_strategy_item(item_id: str, new_parent_id: str | None):
         db.close()
         
 def clear_all_strategies():
+    """
+    Deletes all root-level files and folders EXCEPT for the 'Portfolio' folder.
+    Relies on cascading deletes to remove children of the deleted folders.
+    """
+    db = SessionLocal()
+    try:
+        # --- Step 1: Find the protected 'Portfolio' folder ---
+        portfolio_folder = db.query(StrategyFile).filter(
+            StrategyFile.name == "PORTFOLIO",
+            StrategyFile.type == "folder",
+            StrategyFile.parent_id == None
+        ).first()
+
+        if not portfolio_folder:
+            # Fallback behavior if the portfolio folder is missing.
+            print("WARNING: 'PORTFOLIO' folder not found during clear_all. Clearing all items.")
+            num_rows_deleted = db.query(StrategyFile).delete(synchronize_session=False)
+        else:
+            # --- Step 2: Delete all ROOT-LEVEL items that are NOT the portfolio folder ---
+            # By adding `StrategyFile.parent_id == None`, we only target top-level items.
+            # The cascade rule will handle deleting the children of these top-level folders.
+            
+            items_to_delete = db.query(StrategyFile).filter(
+                StrategyFile.parent_id == None,
+                StrategyFile.id != portfolio_folder.id
+            )
+            
+            # We need to count before deleting as the query object is consumed.
+            num_items_to_delete = items_to_delete.count()
+            
+            if num_items_to_delete > 0:
+                items_to_delete.delete(synchronize_session=False)
+                # Note: The returned count from .delete() might reflect more than just the root
+                # items if the cascade is complex. We'll return the root count for clarity.
+            
+        db.commit()
+        # Using the count of root items deleted for a clearer message.
+        return {"status": "success", "message": f"Successfully cleared {num_items_to_delete} root items."}
+    
+    except Exception as e:
+        db.rollback()
+        print(f"Error clearing strategies: {e}")
+        traceback.print_exc() # Added for more detailed error logging
+        return None
+    finally:
+        db.close()
+
+def clear_all_files_and_folders():
     db = SessionLocal()
     try:
         # This executes a "DELETE FROM strategy_files" statement, deleting all rows.
@@ -338,7 +457,7 @@ def clear_ohlcv_tables():
             
             if not tables_to_drop:
                 return {"status": "success", "message": "No OHLCV data tables found to clear."}
-
+            
             # Loop through the list and execute a DROP TABLE command for each one
             for table_row in tables_to_drop:
                 table_name = table_row[0]
@@ -409,6 +528,28 @@ def save_fe_template(db: Session, key: str, name: str, description: str, code: s
 
 def delete_fe_template(db: Session, key: str):
     db_template = db.query(FeatureEngineeringTemplate).filter(FeatureEngineeringTemplate.key == key).first()
+    if db_template:
+        db.delete(db_template)
+        db.commit()
+        return {"status": "success", "message": f"Template {key} deleted."}
+    return None
+
+def get_all_backtest_templates(db: Session):
+    templates_from_db = db.query(BacktestTemplate).all()
+    return {t.key: {"name": t.name, "description": t.description, "code": t.code, "isDeletable": True} for t in templates_from_db}
+
+def save_backtest_template(db: Session, key: str, name: str, description: str, code: str):
+    db_template = db.query(BacktestTemplate).filter(BacktestTemplate.key == key).first()
+    if db_template:
+        db_template.name, db_template.description, db_template.code = name, description, code
+    else:
+        db_template = BacktestTemplate(key=key, name=name, description=description, code=code)
+        db.add(db_template)
+    db.commit()
+    return db_template
+
+def delete_backtest_template(db: Session, key: str):
+    db_template = db.query(BacktestTemplate).filter(BacktestTemplate.key == key).first()
     if db_template:
         db.delete(db_template)
         db.commit()
