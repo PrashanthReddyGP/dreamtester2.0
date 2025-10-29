@@ -12,8 +12,14 @@ def calculate_metrics(strategy_data, initialCapital, commission):
     strategy = strategy_data
     
     equity = np.array(strategy['equity'])
+    
     dfSignals = strategy['signals'].copy()
     df = strategy['ohlcv'].copy()
+    
+    if dfSignals.empty:
+        # If there are no trades, return a default/empty metrics dictionary
+        print("Strategy produced zero trades!!!!!!")
+        return {'Sharpe_Ratio': 0, 'Max_Drawdown': 0, 'Total_Trades': 0, 'Winrate': 0}, [] # Return empty monthly returns too
     
     # # Calculate how many rows are missing from the start
     # len_diff = len(df) - len(equity)
@@ -25,7 +31,7 @@ def calculate_metrics(strategy_data, initialCapital, commission):
     #     [initialCapital] * len_diff + equity.tolist(), 
     #     index=df.index
     # )
-
+    
     monthly_returns = calculate_monthly_returns(
         df, 
         equity
@@ -73,8 +79,15 @@ def calculate_metrics(strategy_data, initialCapital, commission):
     avgRunup = 0
     winrate = (totalWins/totalTrades) * 100 if totalTrades > 0 else 0
     rr = 0
-    maxOpenTrades = round(dfSignals['Open_Trades'].max())
-    avgOpenTrades = 1 if dfSignals['Open_Trades'].mean() < 1 else round(dfSignals['Open_Trades'].mean())
+    
+    open_trades_series = dfSignals['Open_Trades']
+    
+    if not open_trades_series.empty:
+        maxOpenTrades = int(open_trades_series.fillna(0).max())
+        avgOpenTrades = 1 if dfSignals['Open_Trades'].mean() < 1 else round(dfSignals['Open_Trades'].mean())
+    else:
+        maxOpenTrades = 0
+        avgOpenTrades = 0
     
     # Profit Factor Calculation
     def calculate_profit_factor(equity):

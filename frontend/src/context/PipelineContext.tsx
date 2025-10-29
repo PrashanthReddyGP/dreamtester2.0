@@ -27,16 +27,119 @@ import { fetchAvailableSymbols } from '../../src/services/api';
 import { HYPERPARAMETER_CONFIG } from '../../src/components/pipeline/mlModels';
 import { INITIAL_LABELING_TEMPLATES } from '../components/pipeline/templates/LabelingTemplates';
 import { INITIAL_FEATURE_ENGINEERING_CODE } from '../components/pipeline/templates/FeaturesEngineeringTemplates';
-import { useTerminal } from './TerminalContext'; // We'll need this for running the pipeline
+import { useTerminal } from './TerminalContext';
 import type { IndicatorSchema } from '../components/pipeline/types';
 import { TUNING_GRID_CONFIG } from '../components/pipeline/mlModels';
+import type { StrategyResult } from '../../src/services/api';
+import { useAnalysis } from './AnalysisContext';
+
+// 1. DEFINE THE SHAPE OF OUR UNDOABLE STATE
+interface FlowState {
+    nodes: Node[];
+    edges: Edge[];
+}
+
+// 2. CREATE THE CUSTOM HOOK FOR MANAGING HISTORY
+const useUndoableState = <T,>(initialState: T) => {
+    const [state, setState] = useState<{
+        past: T[];
+        present: T;
+        future: T[];
+    }>({
+        past: [],
+        present: initialState,
+        future: [],
+    });
+
+    const canUndo = state.past.length > 0;
+    const canRedo = state.future.length > 0;
+
+    const undo = useCallback(() => {
+        setState((currentState) => {
+            const { past, present, future } = currentState;
+            if (past.length === 0) return currentState;
+
+            const previous = past[past.length - 1];
+            const newPast = past.slice(0, past.length - 1);
+
+            return {
+                past: newPast,
+                present: previous,
+                future: [present, ...future],
+            };
+        });
+    }, []);
+
+    const redo = useCallback(() => {
+        setState((currentState) => {
+            const { past, present, future } = currentState;
+            if (future.length === 0) return currentState;
+
+            const next = future[0];
+            const newFuture = future.slice(1);
+
+            return {
+                past: [...past, present],
+                present: next,
+                future: newFuture,
+            };
+        });
+    }, []);
+
+    const set = useCallback((newState: T) => {
+        setState((currentState) => {
+            const { present } = currentState;
+
+            // If the new state is the same as the present, do nothing
+            if (newState === present) {
+                return currentState;
+            }
+            
+            return {
+                past: [...currentState.past, present],
+                present: newState,
+                future: [], // A new action clears the redo stack
+            };
+        });
+    }, []);
+    
+    // 1. ADD a new function to update only the "present" state for transient changes like dragging.
+    // This will NOT create a new history entry.
+    const setPresent = useCallback((newState: T) => {
+        setState(currentState => ({
+            ...currentState,
+            present: newState,
+        }));
+    }, []);
+
+    // A function to reset state without adding to history (for loading workflows)
+    const reset = useCallback((newState: T) => {
+        setState({
+            past: [],
+            present: newState,
+            future: [],
+        });
+    }, []);
+
+    return {
+        state: state.present,
+        setState: set,
+        setPresentState: setPresent,
+        resetState: reset,
+        undo,
+        redo,
+        canUndo,
+        canRedo,
+    };
+};
 
 // --- Constants and Initial State (Copied from MachineLearning.tsx) ---
 const API_URL = 'http://127.0.0.1:8000';
 
 
 
-// 1. Define the new structured data for the BacktesterNode
+
+// 1. Redefine the BacktesterNodeData structure (remove indicators)
 export interface BacktesterNodeData {
     label: string;
     selectedTemplateKey?: string;
@@ -44,18 +147,19 @@ export interface BacktesterNodeData {
         initialCapital: number;
         riskPercent: number;
         rr: number;
-        exitType: 'tp_sl' | 'single_condition' | 'time_based';
+        commission: number;
+        exitType: 'tp_sl' | 'single_condition';
         tradeDirection: 'long' | 'short' | 'hedge';
-        // Add more config fields here in the future
     };
     codeBlocks: {
-        indicators: string;
         entryLogic: string;
-        exitLogic: string; // Only used if exitType is 'single_condition'
+        stopLossLogic: string;
+        positionSizingLogic: string;
+        customExitLogic: string;
     };
 }
 
-// 2. The template will now store a stringified version of BacktesterNodeData
+// The template still stores a stringified version of the data
 export interface BacktestTemplate {
     name: string;
     description: string;
@@ -63,52 +167,43 @@ export interface BacktestTemplate {
     isDeletable: boolean;
 }
 
-// 3. Update the initial template to use the new structure
+// 2. Update the initial default data
 const defaultBacktesterData: Omit<BacktesterNodeData, 'label' | 'selectedTemplateKey'> = {
     config: {
         initialCapital: 1000,
         riskPercent: 1,
         rr: 1,
+        commission: 0.1,
         exitType: 'tp_sl',
-        tradeDirection: 'hedge',
+        tradeDirection: 'short',
     },
     codeBlocks: {
-        indicators: `[
-    ('SMA', self.timeframe, (50,)),
-    ('SMA', self.timeframe, (200,)),
-]`,
-        entryLogic: `fast_sma = self.df[f'sma_50_{self.timeframe}'].values
-slow_sma = self.df[f'sma_200_{self.timeframe}'].values
-
-# Condition for long entry
-if fast_sma[i-1] < slow_sma[i-1] and fast_sma[i] > slow_sma[i]:
-    return True # Return True to signal a long entry
-
-return False`,
-        exitLogic: `# Example: Exit if price closes below the slow moving average
-slow_sma = self.df[f'sma_200_{self.timeframe}'].values
-current_price = self.close[i]
-
-if current_price < slow_sma[i]:
-    return True # Return True to signal an exit
-
-return False`
+        entryLogic: `# Must return a boolean.
+# Available variables: i, open, high, low, close, and all indicator columns (e.g., sma_50).
+short_sma[i-1] > long_sma[i-1] and short_sma[i] < long_sma[i] and open_trades[i] < 1`,
+        stopLossLogic: `# Must return a price level (float).
+# Available variables: i, open, high, low, close, and all indicator columns.
+stop_loss[i]`,
+        positionSizingLogic: `# Must return a position size (float).
+# Available variables: i, capital, cash, entry_price, initial_sl, and indicators.
+cash / (initial_sl - entry_price)`,
+        customExitLogic: `# Must return a boolean.
+# Available variables: i, j, entry_price, and all indicator columns.
+close[j] > hc[i-1]`
     }
 };
 
 const INITIAL_BACKTEST_TEMPLATES: Record<string, BacktestTemplate> = {
-    'ma_crossover': {
-        name: 'MA Crossover Guide',
-        description: 'A simple moving average crossover strategy example.',
-        code: JSON.stringify({ // Store the structured data as a string
+    'short_sma_crossover': {
+        name: 'Short SMA Crossover',
+        description: 'A strategy template for shorting SMA crossovers.',
+        code: JSON.stringify({
+            label: 'Short SMA Crossover',
             ...defaultBacktesterData,
-            label: 'MA Crossover Guide',
         }),
         isDeletable: false,
     }
 };
-
-
 
 
 export interface FETemplate {
@@ -154,13 +249,11 @@ const initialEdges: Edge[] = [];
 interface PipelineContextType {
     nodes: Node[];
     edges: Edge[];
-    setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
-    setEdges: React.Dispatch<React.SetStateAction<Edge[]>>;
     onNodesChange: (changes: NodeChange[]) => void;
     onEdgesChange: (changes: EdgeChange[]) => void;
     onConnect: (connection: Connection) => void;
     reactFlowWrapperRef: React.RefObject<HTMLDivElement>;
-    addNode: (nodeType: string, position: { x: number; y: number }, connectingNode?: { id: string; handleType: 'source' | 'target' }, template?: { label: string; code: string; subType: 'feature_engineering' | 'labeling' }) => void;
+    addNode: (nodeType: string, position: { x: number; y: number }, connectingNode?: { id: string; handleType: 'source' | 'target' }, template?: any) => Node;
     deleteElement: (id: string, type: 'node' | 'edge') => void;
     updateNodeData: (nodeId: string, data: any) => void;
     feTemplates: Record<string, FETemplate>;
@@ -183,9 +276,7 @@ interface PipelineContextType {
     workflowId: string | null;
     isProcessing: boolean; // A single global processing state
     processingNodeId: string | null; // Which node is currently running?
-    selectedNodeId: string | null; // Which node is selected for viewing?
     pipelineNodeCache: Record<string, PipelineNodeData>; // Cache for node outputs
-    selectNode: (nodeId: string | null) => void;
     executePipelineUpToNode: (nodeId: string) => Promise<void>;
     dataForDisplay: { data: any[], info: any | null};
     
@@ -196,16 +287,39 @@ interface PipelineContextType {
     loadWorkflow: (name: string) => Promise<void>;
 
     clearBackendCache: () => Promise<void>;
+    viewBacktestAnalysis: (nodeId: string) => void;
+    
+    setNavigationTarget: React.Dispatch<React.SetStateAction<string | null>>;
+    navigationTarget: string | null;
 
     editingNodeId: string | null;
     setEditingNodeId: React.Dispatch<React.SetStateAction<string | null>>;
+
+    undo: () => void;
+    redo: () => void;
+    canUndo: boolean;
+    canRedo: boolean;
 }
 
 const PipelineContext = createContext<PipelineContextType | undefined>(undefined);
 
 export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const [nodes, setNodes] = useState<Node[]>(initialNodes);
-    const [edges, setEdges] = useState<Edge[]>(initialEdges);
+    const {
+        state: flowState,
+        setState: setFlowState,
+        setPresentState: setPresentFlowState,
+        resetState: resetFlowState,
+        undo,
+        redo,
+        canUndo,
+        canRedo,
+    } = useUndoableState<FlowState>({
+        nodes: initialNodes,
+        edges: initialEdges,
+    });
+
+    const { nodes, edges } = flowState; // Destructure for convenience
+
     const reactFlowWrapperRef = useRef<HTMLDivElement>(null);
     const [workflowId, setWorkflowId] = useState<string | null>(null);
 
@@ -218,7 +332,6 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
 
     const [isProcessing, setIsProcessing] = useState(false);
     const [processingNodeId, setProcessingNodeId] = useState<string | null>(null);
-    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
     const [pipelineNodeCache, setPipelineNodeCache] = useState<Record<string, PipelineNodeData>>({});
 
     const [feTemplates, setFeTemplates] = useState<Record<string, FETemplate>>(INITIAL_FEATURE_ENGINEERING_CODE);
@@ -233,6 +346,11 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
     const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
     
     const { connectToBatch, toggleTerminal } = useTerminal();
+
+    const [navigationTarget, setNavigationTarget] = useState<string | null>(null);
+
+    // Instantiate hooks for analysis and navigation
+    const { setSingleResult } = useAnalysis();
 
     // --- Fetching Logic (moved here from PipelineEditor) ---
     useEffect(() => {
@@ -346,10 +464,8 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
             const workflow = await response.json();
             if (workflow.nodes && workflow.edges) {
                 setCurrentWorkflowName(name);
-                setNodes(workflow.nodes);
-                setEdges(workflow.edges);
+                resetFlowState({ nodes: workflow.nodes, edges: workflow.edges });
                 // Reset runtime state
-                setSelectedNodeId(null);
                 setPipelineNodeCache({});
             } else {
                 throw new Error("Invalid workflow data received from server");
@@ -358,7 +474,7 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
             console.error("Error loading workflow:", error);
             alert(`Error: Could not load workflow. ${error instanceof Error ? error.message : ''}`);
         }
-    }, [setNodes, setEdges]);
+    }, [resetFlowState]);
 
     // This function now handles overwriting and returns the key on success.
     const saveFeTemplate = useCallback(async (name: string, description: string, code: string): Promise<string> => {
@@ -405,41 +521,38 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
 
     // --- Node Manipulation Functions ---
     const updateNodeData = useCallback((nodeId: string, data: any) => {
-        setNodes((nds) => {
-            // Step 1: Apply the primary update to the target node
-            const newNds = nds.map((node) =>
-                node.id === nodeId
-                    ? { ...node, data: { ...node.data, ...data } }
-                    : node
-            );
+        let currentNodes = nodes;
+        let currentEdges = edges;
 
-            // Step 2: Check if the updated node is a DataSource and if its timeframe changed.
-            const sourceNode = newNds.find(n => n.id === nodeId);
-            if (sourceNode?.type === 'dataSource' && 'timeframe' in data) {
-                const newTimeframe = data.timeframe;
-                
-                // Find all direct children of this node
-                const childEdges = edges.filter(e => e.source === nodeId);
-                const childIds = new Set(childEdges.map(e => e.target));
+        // Step 1: Apply the primary update to the target node
+        const newNds = currentNodes.map((node) =>
+            node.id === nodeId
+                ? { ...node, data: { ...node.data, ...data } }
+                : node
+        );
 
-                // Step 3: If so, propagate the new timeframe to any connected FeatureNode children.
-                return newNds.map(node => {
-                    if (childIds.has(node.id) && node.type === 'feature') {
-                        // This is a child FeatureNode, update its timeframe
-                        return {
-                            ...node,
-                            data: { ...node.data, timeframe: newTimeframe }
-                        };
-                    }
-                    // Otherwise, return the node as is
-                    return node;
-                });
-            }
+        // Step 2: Check for timeframe propagation
+        const sourceNode = newNds.find(n => n.id === nodeId);
+        if (sourceNode?.type === 'dataSource' && 'timeframe' in data) {
+            const newTimeframe = data.timeframe;
+            const childEdges = currentEdges.filter(e => e.source === nodeId);
+            const childIds = new Set(childEdges.map(e => e.target));
             
-            // If no propagation is needed, just return the result of the primary update
-            return newNds;
-        });
-    }, [setNodes, edges]); // IMPORTANT: Add `edges` as a dependency
+            const finalNodes = newNds.map(node => {
+                if (childIds.has(node.id) && node.type === 'feature') {
+                    return {
+                        ...node,
+                        data: { ...node.data, timeframe: newTimeframe }
+                    };
+                }
+                return node;
+            });
+            setFlowState({ nodes: finalNodes, edges: currentEdges });
+        } else {
+            // If no propagation, just update the nodes
+            setFlowState({ nodes: newNds, edges: currentEdges });
+        }
+    }, [nodes, edges, setFlowState]); 
 
     const deleteFeTemplate = useCallback(async (templateKey: string) => {
         if (!window.confirm(`Are you sure you want to delete the template "${feTemplates[templateKey]?.name}"?`)) {
@@ -502,16 +615,14 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
             });
             if (!response.ok) throw new Error("Server failed to clear cache.");
             
-            setNodes(initialNodes);
-            setEdges(initialEdges);
-            setSelectedNodeId(null);
+            resetFlowState({ nodes: initialNodes, edges: initialEdges });
             setPipelineNodeCache({});
             setCurrentWorkflowName(null);
         } catch (error) {
             console.error("Failed to clear backend cache:", error);
             alert("Error: Could not clear backend cache.");
         }
-    }, [setNodes, setEdges]);
+    }, [resetFlowState]);
 
     const clearBackendCache = useCallback(async () => {
         try {
@@ -528,36 +639,55 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
     }, []);
 
     // --- Core Callbacks ---
-    const onNodesChange = useCallback((changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)), [setNodes]);
+    const onNodesChange = useCallback((changes: NodeChange[]) => {
+        const nextNodes = applyNodeChanges(changes, nodes);
+
+        // Check if the change is a drag event. A drag event is a series of position changes.
+        // The last position change in a drag has `dragging: false`. All others have `dragging: true`.
+        const isDrag = changes.every(c => c.type === 'position' && c.dragging === true);
+
+        if (isDrag) {
+            // If we are dragging, we only update the 'present' state for smooth visuals
+            // without creating a new history entry for every pixel moved.
+            setPresentFlowState({ nodes: nextNodes, edges });
+        } else {
+            // For any other change (selection, node drop, dimension change), we commit it to history.
+            setFlowState({ nodes: nextNodes, edges });
+        }
+    }, [nodes, edges, setFlowState, setPresentFlowState]);
 
     const onEdgesChange = useCallback((changes: EdgeChange[]) => {
         // Find which edges are being removed *before* applying the state change
         const removedEdges = changes
             .filter((c): c is { id: string; type: 'remove' } => c.type === 'remove')
             .map(c => edges.find(e => e.id === c.id))
-            .filter((e): e is Edge => e !== undefined); // Ensure we only have valid Edge objects
+            .filter((e): e is Edge => e !== undefined);
 
-        // Apply the changes to the edges state as usual
-        setEdges((eds) => applyEdgeChanges(changes, eds));
+        const nextEdges = applyEdgeChanges(changes, edges);
+        let nextNodes = nodes;
 
         // Now, process the logic for the removed edges
         removedEdges.forEach(removedEdge => {
-            const sourceNode = nodes.find(n => n.id === removedEdge.source);
-            const targetNode = nodes.find(n => n.id === removedEdge.target);
+            const sourceNode = nextNodes.find(n => n.id === removedEdge.source);
+            const targetNode = nextNodes.find(n => n.id === removedEdge.target);
 
-            // If a feature node was disconnected from a processIndicators node
             if (sourceNode?.type === 'feature' && targetNode?.type === 'processIndicators') {
                 const currentSelections = targetNode.data.selectedIndicators || {};
-                
-                // Create a new object without the key of the disconnected source node
                 const { [sourceNode.id]: _, ...remainingSelections } = currentSelections;
                 
-                // Update the node data to uncheck the box
-                updateNodeData(targetNode.id, { selectedIndicators: remainingSelections });
+                // We map over nextNodes to create an entirely new array
+                nextNodes = nextNodes.map(n => 
+                    n.id === targetNode.id 
+                    ? { ...n, data: { ...n.data, selectedIndicators: remainingSelections } }
+                    : n
+                );
             }
         });
-    }, [edges, nodes, setEdges, updateNodeData]); // Add dependencies
-    
+        
+        setFlowState({ nodes: nextNodes, edges: nextEdges });
+
+    }, [edges, nodes, setFlowState]);
+
     // Validation Function
     const isValidConnection = (connection: Connection): boolean => {
         const sourceNode = nodes.find(n => n.id === connection.source);
@@ -565,21 +695,21 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
 
         if (!sourceNode || !targetNode) return false;
 
-        // RULE 1: ClassImbalanceNode can only connect to the 'train' output of a DataValidationNode.
-        if (targetNode.type === 'classImbalance') {
-            if (sourceNode.type !== 'dataValidation' || connection.sourceHandle !== 'train') {
-                alert("Invalid Connection:\nThe Class Imbalance node can only be connected to the 'Train' output of a Data Validation node.");
-                return false;
-            }
-        }
+        // // RULE 1: ClassImbalanceNode can only connect to the 'train' output of a DataValidationNode.
+        // if (targetNode.type === 'classImbalance') {
+        //     if (sourceNode.type !== 'dataValidation' || connection.sourceHandle !== 'train') {
+        //         alert("Invalid Connection:\nThe Class Imbalance node can only be connected to the 'Train' output of a Data Validation node.");
+        //         return false;
+        //     }
+        // }
 
-        // RULE 2: ModelTrainerNode's 'test' handle MUST connect to a DataValidationNode's 'test' output.
-        if (targetNode.type === 'modelTrainer' && connection.targetHandle === 'test') {
-            if (sourceNode.type !== 'dataValidation' || connection.sourceHandle !== 'test') {
-                alert("Invalid Connection:\nThe Model Trainer's 'Test Data' input must be connected to the 'Test' output of a Data Validation node.");
-                return false;
-            }
-        }
+        // // RULE 2: ModelTrainerNode's 'test' handle MUST connect to a DataValidationNode's 'test' output.
+        // if (targetNode.type === 'modelTrainer' && connection.targetHandle === 'test') {
+        //     if (sourceNode.type !== 'dataValidation' || connection.sourceHandle !== 'test') {
+        //         alert("Invalid Connection:\nThe Model Trainer's 'Test Data' input must be connected to the 'Test' output of a Data Validation node.");
+        //         return false;
+        //     }
+        // }
 
         // Add more rules here in the future...
 
@@ -589,33 +719,40 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
     const onConnect = useCallback((connection: Connection) => {
         // Call the validation function first
         if (!isValidConnection(connection)) {
-            return; // Abort the connection if it's invalid
+            return;
         }
 
-        // This function will now ONLY handle connections between EXISTING nodes.
-        // The logic is still correct for that use case.
-        setEdges((eds) => addEdge({ ...connection, animated: true }, eds));
+        const nextEdges = addEdge({ ...connection, animated: true }, edges);
+        let nextNodes = nodes;
 
-        // Now, check the types of nodes being connected
-        const sourceNode = nodes.find(n => n.id === connection.source);
-        const targetNode = nodes.find(n => n.id === connection.target);
+        const sourceNode = nextNodes.find(n => n.id === connection.source);
+        const targetNode = nextNodes.find(n => n.id === connection.target);
 
-        // If a DataSourceNode is connected to a FeatureNode, pass the timeframe
+        // Logic for timeframe propagation
         if (sourceNode?.type === 'dataSource' && targetNode?.type === 'feature') {
-            updateNodeData(targetNode.id, { timeframe: sourceNode.data.timeframe });
+            nextNodes = nextNodes.map(n => 
+                n.id === targetNode.id
+                ? { ...n, data: { ...n.data, timeframe: sourceNode.data.timeframe } }
+                : n
+            );
         }
 
-        // If a feature node is connected to a processIndicators node
+        // Logic for process indicator selection
         if (sourceNode?.type === 'feature' && targetNode?.type === 'processIndicators') {
-            // Update the target node's data to check the box for the source node
             const updatedSelection = {
                 ...(targetNode.data.selectedIndicators || {}),
-                [sourceNode.id]: true, // Set to true by default
+                [sourceNode.id]: true,
             };
-            updateNodeData(targetNode.id, { selectedIndicators: updatedSelection });
+            nextNodes = nextNodes.map(n =>
+                n.id === targetNode.id
+                ? { ...n, data: { ...n.data, selectedIndicators: updatedSelection } }
+                : n
+            );
         }
-    }, [nodes, setEdges, updateNodeData]); // Add dependencies
 
+        setFlowState({ nodes: nextNodes, edges: nextEdges });
+
+    }, [nodes, edges, setFlowState]);
     
     const saveBacktestTemplate = useCallback(async (name: string, description: string, code: string): Promise<string> => {
         const newKey = name.toLowerCase().replace(/\s+/g, '_');
@@ -665,26 +802,17 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
         nodeType: string, 
         position: { x: number, y: number }, 
         connectingNode?: { id: string, handleType: 'source' | 'target' },
-        template?: { label: string; code: string; subType: 'feature_engineering' | 'labeling' }
-    ) => {
+        template?: any // Changed type to `any` to allow pasted node data
+    ): Node => { // Return type is still Node
+        ///// FIX ///// - REFACTOR TO USE setFlowState
         let newNodeData: any;
 
-        // If a template is provided for a customCode node, use it directly
-        if (nodeType === 'customCode' && template) {
-            newNodeData = {
-                label: template.label,
-                code: template.code,
-                subType: template.subType // Store the subtype!
-            };
-
-        } else if (nodeType === 'customLabeling' && template) {
-            newNodeData = {
-                label: template.label,
-                code: template.code,
-                subType: template.subType // Store the subtype!
-            };
-
+        // If a template/initial data is provided, use it. This will handle both menu templates and pasted data.
+        if (template) {
+            newNodeData = template;
+        
         } else {
+
         switch (nodeType) {
             case 'feature':
             newNodeData = { label: 'Feature', name: 'SMA', params: {'length': 20} };
@@ -717,6 +845,17 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
                     noteContent: 'Type your notes here...'
                 };
                 break;
+            case 'loop':
+                newNodeData = {
+                    label: 'Loop',
+                    variableName: 'sma_length',
+                    loopType: 'numeric_range',
+                    numericStart: 10,
+                    numericEnd: 50,
+                    numericStep: 10,
+                    valueList: '10,20,50' // Provide a default for the other type too
+                };
+                break;
             case 'customCode': { 
                 const defaultTemplate = INITIAL_FEATURE_ENGINEERING_CODE.guide;
                 newNodeData = {
@@ -730,15 +869,34 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
             case 'customLabeling': // This is the fallback for a blank custom node
                 newNodeData = {
                     label: 'Custom Labeling',
-                    code: INITIAL_FEATURE_ENGINEERING_CODE.guide.code,
+                    code: INITIAL_LABELING_TEMPLATES.guide.code, // Fixed to use labeling template
                     subType: 'labeling'
                 };
                 break;
-            case 'dataScaling': // Add the new node type case
+            case 'dataProfiler':
+                newNodeData = {
+                    label: 'Data Profiler',
+                    selectedFeature: null, // Initially, no feature is selected
+                };
+                break;
+            case 'dataScaling':
                 newNodeData = {
                     label: 'Data Scaling',
                     scaler: 'none',
                     removeCorrelated: false,
+                    correlationThreshold: 0.9,
+                    usePCA: false,
+                    pcaComponents: 5,
+                };
+                break;
+            case 'advancedDataScaling':
+                newNodeData = {
+                    label: 'Advanced Data Scaling',
+                    standardFeatures: [],
+                    minmaxFeatures: [],
+                    robustFeatures: [],
+                    removeCorrelated: false,
+                    isConfigured: false,
                     correlationThreshold: 0.9,
                     usePCA: false,
                     pcaComponents: 5,
@@ -791,6 +949,47 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
                 };
                 break;
             }
+            case 'neuralNetworkTrainer': {
+                newNodeData = {
+                    label: 'Neural Network',
+                    predictionThreshold: 0.5,
+                    architecture: {
+                        layers: [
+                            { id: 'layer1', type: 'Dense', units: 64, activation: 'relu' },
+                            { id: 'layer2', type: 'Dropout', rate: 0.5 },
+                            { id: 'layer3', type: 'Dense', units: 32, activation: 'relu' },
+                        ]
+                        },
+                        training: {
+                        optimizer: 'adam',
+                        loss: 'binary_crossentropy',
+                        epochs: 50,
+                        batchSize: 32,
+                        earlyStoppingPatience: 10
+                        }
+                    };
+                break;
+            }
+            case 'baggingTrainer': {
+                const defaultBaseModel = 'DecisionTreeClassifier';
+                const baseConfig = HYPERPARAMETER_CONFIG[defaultBaseModel];
+                const baggingConfig = HYPERPARAMETER_CONFIG['BaggingClassifier'];
+
+                newNodeData = {
+                    label: 'Bagging Trainer',
+                    predictionThreshold: 0.5,
+                    baseModelName: defaultBaseModel,
+                    baseModelHyperparameters: baseConfig.reduce((acc, param) => {
+                        acc[param.name] = param.defaultValue;
+                        return acc;
+                    }, {} as { [key: string]: any }),
+                    baggingHyperparameters: baggingConfig.reduce((acc, param) => {
+                        acc[param.name] = param.defaultValue;
+                        return acc;
+                    }, {} as { [key: string]: any }),
+                };
+                break;
+            }
             case 'hyperparameterTuning': {
                 const defaultModelName = 'RandomForestClassifier';
                 const defaultConfig = TUNING_GRID_CONFIG[defaultModelName];
@@ -819,8 +1018,8 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
                 break;
             case 'backtester': {
                 newNodeData = {
-                    label: 'MA Crossover Guide',
-                    selectedTemplateKey: 'ma_crossover',
+                    label: 'Short SMA Crossover',
+                    selectedTemplateKey: 'short_sma_crossover',
                     ...defaultBacktesterData
                 };
                 break;
@@ -828,59 +1027,59 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
             }
         }
         
-        const newNode: Node = {
-            id: uuidv4(),
-            type: nodeType,
-            position,
-            data: newNodeData,
-        };
+        const newNode: Node = { id: uuidv4(), type: nodeType, position, data: newNodeData, };
+
+        let nextNodes = [...nodes, newNode];
+        let nextEdges = edges;
 
         if (connectingNode) {
-            // This is the "create and connect" scenario.
-            const newEdge: Edge = {
-                id: uuidv4(),
-                source: connectingNode.handleType === 'source' ? connectingNode.id : newNode.id,
-                target: connectingNode.handleType === 'source' ? newNode.id : connectingNode.id,
-                animated: true,
-            };
-            
+            const newEdge: Edge = { id: uuidv4(), source: connectingNode.handleType === 'source' ? connectingNode.id : newNode.id, target: connectingNode.handleType === 'source' ? newNode.id : connectingNode.id, animated: true, };
+            nextEdges = addEdge(newEdge, edges);
             const sourceNode = nodes.find(n => n.id === newEdge.source);
             
-            // --- Replicate ALL relevant onConnect logic here, before setting state ---
-            
-            // 1. Handle timeframe inheritance for Feature nodes
             if (sourceNode?.type === 'dataSource' && newNode.type === 'feature') {
-                newNode.data.timeframe = sourceNode.data.timeframe;
+                newNode.data.timeframe = sourceNode.data.timeframe; // Modify newNode directly before adding
             }
-
-            // 2. Handle auto-selection for ProcessIndicator nodes
             if (sourceNode?.type === 'feature' && newNode.type === 'processIndicators') {
-                newNode.data.selectedIndicators = {
-                    ...(newNode.data.selectedIndicators || {}),
-                    [sourceNode.id]: true, // Auto-check the box
-                };
+                newNode.data.selectedIndicators = { ...(newNode.data.selectedIndicators || {}), [sourceNode.id]: true, };
             }
-
-            // Set both nodes and edges state AT ONCE.
-            setNodes((nds) => [...nds, newNode]);
-            setEdges((eds) => addEdge(newEdge, eds));
-            
-        } else {
-            // This is the simple "drag from sidebar" scenario. Just add the node.
-            setNodes((nds) => [...nds, newNode]);
         }
-    }, [nodes, setNodes, setEdges, feTemplates]); // Add feTemplates to dependencies if needed
-
+        
+        setFlowState({ nodes: nextNodes, edges: nextEdges });
+        return newNode;
+    }, [nodes, edges, setFlowState]);
 
     const deleteElement = useCallback((id: string, type: 'node' | 'edge') => {
         if (type === 'node') {
-            setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
-            setNodes((nds) => nds.filter((node) => node.id !== id));
+            const nextEdges = edges.filter((edge) => edge.source !== id && edge.target !== id);
+            const nextNodes = nodes.filter((node) => node.id !== id);
+            setFlowState({ nodes: nextNodes, edges: nextEdges });
         } else if (type === 'edge') {
-            // Manually trigger the removal logic when deleting an edge directly
+            // Re-use onEdgesChange logic which is now history-aware
             onEdgesChange([{ id, type: 'remove' }]);
         }
-    }, [setNodes, setEdges, onEdgesChange]); // IMPORTANT: Add onEdgesChange here
+    }, [nodes, edges, setFlowState, onEdgesChange]);
+
+    // Function to handle viewing backtest results
+    const viewBacktestAnalysis = useCallback((nodeId: string) => {
+        const nodeCache = pipelineNodeCache[nodeId];
+        
+        const backtestResult = nodeCache?.info?.backtest_result as StrategyResult;
+
+        if (backtestResult) {
+            console.log("Found pipeline backtest result, setting single result for analysis:", backtestResult);
+            
+            // --- Use the new, single, synchronous function ---
+            setSingleResult(backtestResult, { test_type: 'pipeline_backtest' });
+            
+            // Set the navigation target. The useEffect in PipelineEditor will handle the rest.
+            setNavigationTarget('/analysis');
+        
+        } else {
+            alert("No backtest results found for this node. Please run the node first.");
+            console.warn(`Analysis button clicked, but no result in cache for node ${nodeId}. Cache content:`, nodeCache);
+        }
+    }, [pipelineNodeCache, setSingleResult]); // Update dependencies
 
     // All effects are also moved here
     useEffect(() => {
@@ -901,11 +1100,6 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
             startNewWorkflow();
         }
     }, [workflowId]); // Depend on workflowId to prevent re-running
-
-    // 1. Memoize selectNode
-    const selectNode = useCallback((nodeId: string | null) => {
-        setSelectedNodeId(nodeId);
-    }, []); // Empty dependency array is correct because setSelectedNodeId is stable
 
     // 2. Memoize executePipelineUpToNode
     const executePipelineUpToNode = useCallback(async (targetNodeId: string) => {
@@ -940,7 +1134,6 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
                 ...prevCache,
                 ...result // Directly merge the entire results object into the cache
             }));
-            selectNode(targetNodeId);
 
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
@@ -949,7 +1142,6 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
                 ...prevCache,
                 [targetNodeId]: { data: [], info: { error: errorMessage } }
             }));
-            selectNode(targetNodeId);
         } finally {
             setIsProcessing(false);
             setProcessingNodeId(null);
@@ -959,7 +1151,6 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
         isProcessing, 
         nodes, // Add nodes and edges here
         edges, 
-        selectNode, // This is now a stable dependency
         // State setters are stable and don't need to be in the array, but it's good practice
         setPipelineNodeCache, 
         setIsProcessing, 
@@ -968,47 +1159,33 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
 
     const dataForDisplay = useMemo(() => {
         const emptyDisplayData = { data: [], info: null };
+        
+        // Find all selected nodes.
+        const selectedNodes = nodes.filter(node => node.selected);
 
-        // If a node is explicitly selected, prioritize its data.
-        if (selectedNodeId) {
-            return pipelineNodeCache[selectedNodeId] || emptyDisplayData;
+        // If exactly one node is selected, show its data.
+        if (selectedNodes.length === 1) {
+            const selectedId = selectedNodes[0].id;
+            return pipelineNodeCache[selectedId] || emptyDisplayData;
         }
 
-        // If no node is selected, find the "last" node(s) in the graph.
-        if (nodes.length > 0) {
-            // Find all node IDs that are used as a source for an edge.
-            const sourceNodeIds = new Set(edges.map(edge => edge.source));
-            
-            // A terminal node is one that is NOT a source for any edge.
-            const terminalNodes = nodes.filter(node => !sourceNodeIds.has(node.id));
-
-            let lastNodeId: string | null = null;
-
-            if (terminalNodes.length > 0) {
-                // If we have one or more terminal nodes, pick the first one.
-                lastNodeId = terminalNodes[0].id;
-            } else {
-                // Fallback for single-node graphs or graphs with cycles.
-                // Just use the first node in the list.
-                lastNodeId = nodes[0].id;
-            }
-
-            // Return the cached data for the determined "last node".
-            if (lastNodeId) {
-                return pipelineNodeCache[lastNodeId] || emptyDisplayData;
-            }
+        // If more than one node is selected, we could show a summary or nothing.
+        // For now, let's just show an info message in the panel.
+        if (selectedNodes.length > 1) {
+            return {
+                data: [],
+                info: { message: `${selectedNodes.length} nodes selected.` }
+            };
         }
 
-        // If there are no nodes at all, return the empty state.
+        // If no nodes are selected, return the default empty state.
         return emptyDisplayData;
 
-    }, [selectedNodeId, nodes, edges, pipelineNodeCache]); // This memo re-runs only when these dependencies change
+    }, [nodes, pipelineNodeCache]);
 
     const value = {
         nodes,
         edges,
-        setNodes,
-        setEdges,
         onNodesChange,
         onEdgesChange,
         onConnect,
@@ -1032,9 +1209,7 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
         workflowId,
         isProcessing,
         processingNodeId,
-        selectedNodeId,
         pipelineNodeCache,
-        selectNode,
         executePipelineUpToNode,
         dataForDisplay,
         newWorkflow,
@@ -1043,11 +1218,18 @@ export const PipelineContextProvider: React.FC<{ children: ReactNode }> = ({ chi
         saveWorkflow,
         loadWorkflow,
         clearBackendCache,
+        viewBacktestAnalysis,
+        navigationTarget,    
+        setNavigationTarget,  
         editingNodeId,
         setEditingNodeId,
         backtestTemplates,
         saveBacktestTemplate,
         deleteBacktestTemplate,
+        undo,
+        redo,
+        canUndo,
+        canRedo,
     };
 
     return (

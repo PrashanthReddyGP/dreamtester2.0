@@ -14,6 +14,7 @@ interface AnalysisContextType {
     clearResults: () => void;
     markComplete: () => void;
     setBatchConfig: (config: BatchConfig) => void; 
+    setSingleResult: (result: AnalysisResult, config?: BatchConfig) => void;
 }
 
 export interface BatchConfig {
@@ -63,6 +64,20 @@ export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ chi
       setBatchConfigState(null);
     }, []);
 
+    const setSingleResult = useCallback((result: AnalysisResult, config: BatchConfig = { test_type: 'single_run' }) => {
+        // First, perform a full clear to stop any pending streaming operations
+        if (animationFrameId.current !== null) {
+            cancelAnimationFrame(animationFrameId.current);
+            animationFrameId.current = null;
+        }
+        resultsBuffer.current = [];
+        
+        // Now, set all state synchronously. React will batch these updates.
+        setResults([result]);
+        setBatchConfigState(config);
+        setIsComplete(true);
+    }, []);
+
     const markComplete = useCallback(() => {
       if (animationFrameId.current !== null) {
         cancelAnimationFrame(animationFrameId.current);
@@ -93,6 +108,7 @@ export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ chi
       clearResults,
       markComplete,
       setBatchConfig,
+      setSingleResult
     }), [
         results, 
         isComplete, 
@@ -100,7 +116,8 @@ export const AnalysisContextProvider: React.FC<{ children: ReactNode }> = ({ chi
         addResult, 
         clearResults, 
         markComplete, 
-        setBatchConfig
+        setBatchConfig,
+        setSingleResult
     ]);
 
     return <AnalysisContext.Provider value={value}>{children}</AnalysisContext.Provider>;

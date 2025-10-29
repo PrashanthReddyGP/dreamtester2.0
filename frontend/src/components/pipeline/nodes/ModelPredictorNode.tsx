@@ -1,7 +1,7 @@
 import React from 'react';
 import { Handle, Position } from 'reactflow';
 import type { NodeProps } from 'reactflow';
-import { Paper, Typography, Box, IconButton, Autocomplete, TextField, CircularProgress } from '@mui/material';
+import { Paper, Box, IconButton, Autocomplete, TextField, CircularProgress } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { usePipeline } from '../../../context/PipelineContext';
 import { NodeHeader } from './NodeHeader'; // Import the new header
@@ -16,14 +16,23 @@ export const ModelPredictorNode = ({ id, data }: NodeProps<ModelPredictorData>) 
     const { nodes, updateNodeData, executePipelineUpToNode, isProcessing, processingNodeId } = usePipeline();
     const amIProcessing = isProcessing && processingNodeId === id;
 
-    // Find all available Model Trainer nodes in the workflow to create dropdown options
+    // Find all available Model Trainer and Bagging Trainer nodes in the workflow
     const trainerNodeOptions = nodes
-        .filter(n => n.type === 'modelTrainer')
-        .map(n => ({
-            id: n.id,
-            // Create a user-friendly label for the dropdown
-            label: n.data.label ? `${n.data.label} (${n.data.modelName})` : `Trainer (${n.data.modelName})`
-        }));
+        .filter(n => n.type === 'modelTrainer' || n.type === 'baggingTrainer') // Correctly filter for both types
+        .map(n => {
+            // Determine the model name based on the node type as their data structures differ
+            const modelName = n.type === 'baggingTrainer' 
+                ? n.data.baseModelName 
+                : n.data.modelName;
+            
+            return {
+                id: n.id,
+                // Create a user-friendly label for the dropdown
+                label: n.data.label 
+                    ? `${n.data.label} (${modelName})` 
+                    : `Trainer (${modelName})`
+            };
+        });
     
     // Find the full object for the currently selected trainer to show in the Autocomplete
     const selectedTrainer = trainerNodeOptions.find(n => n.id === data.trainerNodeId);

@@ -37,14 +37,6 @@ export const DataValidationNode = memo(({ id, data }: NodeProps<DataValidationNo
         zIndex: 10
     };
 
-    // Style for the output handle text labels
-    const labelStyle: React.CSSProperties = {
-        position: 'absolute',
-        right: 18,
-        fontSize: '10px',
-        color: '#ccc',
-    };
-    
     return (
         <Paper elevation={3} sx={{ borderRadius: 2, width: '300px', border: '1px solid #555' }}>
             <Handle type="target" position={Position.Left} style={{ ...handleStyle, backgroundColor: '#555'}} />

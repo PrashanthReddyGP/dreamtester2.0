@@ -473,6 +473,157 @@ def process_backtest_job(batch_id: str, manager: any, job_id: str, file_name: st
         return None
 
 # This is a placeholder for your actual backtest engine
+def run_single_node_backtest(batch_id: str, manager: any, job_id: str, file_name:str, strategy_code: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, df_input: pd.DataFrame, sub_df: Optional[pd.DataFrame] = None, use_training_set: bool = False):
+    
+    print(f"--- Running core backtest for {file_name} ---")
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"Running core backtest for {file_name}"}})
+    
+    # 1. Parse the code of config
+    strategy_instance, strategy_name = parse_file(job_id, file_name, strategy_code)
+    
+    timeframe = strategy_instance.timeframe
+    
+    strategy_instance.dataframes[timeframe] = df_input
+    
+    main_timeframe = strategy_instance.timeframe
+    
+    if main_timeframe not in strategy_instance.dataframes:
+        raise ValueError(f"Main timeframe '{main_timeframe}' not found in strategy_instance.dataframes.")
+    
+    # Isolate the main dataframe and other "sub" dataframes. Use .copy() to prevent side effects.
+    main_df = strategy_instance.dataframes[main_timeframe].copy()
+    sub_dfs = {}
+    
+    if strategy_instance.sub_timeframes != []:
+        
+        sub_dfs = {tf: df.copy() for tf, df in strategy_instance.dataframes.items() if tf != main_timeframe}
+        
+        # --- 2. Pre-processing: Convert all timestamps to datetime objects ---
+        main_df['timestamp'] = pd.to_datetime(main_df['timestamp'], unit='ms')
+        
+        for tf, df in sub_dfs.items():
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        
+        print(f"  -> Main DF ('{main_timeframe}') has {len(main_df)} rows before merging.")
+        
+        # --- 3. Iteratively Merge Sub-DataFrames into the Main DataFrame ---
+        main_df_freq = main_df['timestamp'].diff().median()
+        
+        for sub_timeframe, sub_df in sub_dfs.items():
+            if sub_df.empty:
+                print(f"  - Skipping empty sub-dataframe for timeframe '{sub_timeframe}'.")
+                continue
+            
+            print(f"  - Merging sub-timeframe '{sub_timeframe}' into '{main_timeframe}'...")
+            sub_df_freq = sub_df['timestamp'].diff().median()
+            
+            # SCENARIO 1: sub_df is lower frequency (e.g., 1D sub -> 15m main)
+            if sub_df_freq > main_df_freq:
+                print(f"    - Scenario: Lower freq sub_df ({sub_df_freq}) -> Higher freq main_df ({main_df_freq}).")
+                print("    - Projecting data onto finer bars (with shift to prevent lookahead).")
+                
+                # Shift data by 1 to prevent lookahead bias (data from 10:00 1H bar is available at 11:00)
+                data_cols_to_shift = [col for col in sub_df.columns if col != 'timestamp']
+                sub_df[data_cols_to_shift] = sub_df[data_cols_to_shift].shift(1)
+                
+                # Rename columns dynamically (e.g., 'open' -> '1h_open')
+                prefix = f"{sub_timeframe}_"
+                sub_df_renamed = sub_df.add_prefix(prefix)
+                sub_df_renamed = sub_df_renamed.rename(columns={f'{prefix}timestamp': 'timestamp'})
+                
+                # Drop first row which is now NaN after the shift
+                sub_df_renamed = sub_df_renamed.dropna(subset=[f'{prefix}{col}' for col in data_cols_to_shift])
+                
+                # Use merge_asof for efficient point-in-time merging
+                main_df = main_df.sort_values('timestamp')
+                sub_df_renamed = sub_df_renamed.sort_values('timestamp')
+                
+                main_df = pd.merge_asof(main_df, sub_df_renamed, on='timestamp', direction='backward')
+                
+                # ffill() propagates the last known value, which is safe.
+                # bfill() would use future data, causing lookahead bias.
+                sub_columns = [col for col in main_df.columns if col.startswith(prefix)]
+                main_df[sub_columns] = main_df[sub_columns].ffill()
+                
+            # SCENARIO 2: sub_df is higher frequency (e.g., 15m sub -> 1D main)
+            else:
+                print(f"    - Scenario: Higher freq sub_df ({sub_df_freq}) -> Lower freq main_df ({main_df_freq}).")
+                print("    - Aggregating (resampling) finer data up to the main timeframe.")
+                
+                # Convert our timeframe string (e.g., '1h', '15m') to a pandas-compatible one ('1H', '15T')
+                resample_freq_str = main_timeframe.upper().replace('M', 'T')
+                
+                sub_df_agg = sub_df.set_index('timestamp').resample(resample_freq_str).agg({
+                    'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
+                }).dropna()
+                
+                sub_df_agg = sub_df_agg.reset_index()
+                
+                # Rename columns dynamically before merging (e.g., 'open' -> '15m_open')
+                prefix = f"{sub_timeframe}_"
+                sub_df_agg_renamed = sub_df_agg.add_prefix(prefix)
+                sub_df_agg_renamed = sub_df_agg_renamed.rename(columns={f'{prefix}timestamp': 'timestamp'})
+                
+                # Merge on the shared, resampled timestamp
+                main_df = pd.merge(main_df, sub_df_agg_renamed, on='timestamp', how='left')
+        
+        print(f"  -> After all merges, main_df has {len(main_df)} rows and columns: {list(main_df.columns)}")
+    
+    # --- Step 4: Run the backtest simulation loop ---
+    run_result = run_backtest_loop(strategy_name, strategy_instance, initialCapital, main_df, sub_dfs)
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Backtest loop finished."}})
+    
+    # --- Step 5: Check for a complete failure from the backtest loop ---
+    if run_result is None:
+        print(f"--- Core backtest for {file_name} failed. Creating dummy result. ---")
+        # Create a dictionary for the UI payload
+        failed_strategy_data = {
+            'strategy_name': f"{file_name} [FAILED]",
+            'equity': np.array([initialCapital] * len(df_input)),
+            'ohlcv': df_input,
+            'signals': pd.DataFrame()
+        }
+        # We must still return a valid 6-item tuple to the calling manager
+        return (
+            failed_strategy_data, 
+            strategy_instance, 
+            {}, # Empty metrics
+            [], # Empty monthly returns
+            np.array([]), # Empty no-fee equity
+            pd.DataFrame() # Empty trade events
+        )
+    
+    # --- Step 6: Unpack the successful result ---
+    (
+        corrected_equity, 
+        dfSignals, 
+        df_full, 
+        commission, 
+        corrected_no_fee_equity, 
+        trade_events_df
+    ) = run_result
+    
+    # --- Step 7: Assemble the `strategy_data` dictionary for metrics ---
+    # This dictionary is the primary data structure used by downstream functions.
+    strategy_data = {
+        'strategy_name': strategy_name,
+        'equity': corrected_equity,
+        'ohlcv': df_full,
+        'signals': dfSignals
+    }
+    
+    # 5. Calculate metrics (simulated)
+    strategy_metrics, monthly_returns = calculate_metrics(strategy_data, initialCapital, commission)
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Metrics Calculation Successful"}})
+    
+    print(f"--- Core backtest for {file_name} finished ---")
+    # print(f"  -> Strategy Metrics: {strategy_metrics}")
+    send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": f"{file_name}: Core backtest for {file_name} finished"}})
+    
+    # In a real app, this would return the full results object
+    return strategy_data, strategy_instance, strategy_metrics, monthly_returns, corrected_no_fee_equity, trade_events_df
+
+# This is a placeholder for your actual backtest engine
 def run_single_backtest(batch_id: str, manager: any, job_id: str, file_name:str, strategy_code: str, initialCapital: int, client, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, ohlcv_df: Optional[pd.DataFrame] = None, sub_df: Optional[pd.DataFrame] = None, use_training_set: bool = False):
     
     print(f"--- Running core backtest for {file_name} ---")
@@ -670,6 +821,18 @@ def convert_to_json_serializable(obj):
     Recursively traverses a dictionary or list to convert special data types
     to standard Python types for JSON serialization.
     """
+    # Handle pandas DataFrames and Series first
+    if isinstance(obj, pd.DataFrame):
+        # Convert the DataFrame to a list of dictionaries, which is JSON-friendly
+        return obj.to_dict(orient='records')
+    if isinstance(obj, pd.Series):
+        return obj.tolist()
+    
+    # Handle individual float values that are not JSON compliant
+    if isinstance(obj, float) and not np.isfinite(obj):
+        # np.isfinite() is False for inf, -inf, and NaN
+        return None # Convert these values to null in the final JSON
+    
     if isinstance(obj, dict):
         return {k: convert_to_json_serializable(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -989,14 +1152,16 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
         "payload": { "config": {**config, "test_type": test_type or "standard_optimization"} }
     })
     
-    if test_type == "data_segmentation":
+    if test_type == 'parameter_range':
+        pass
+    elif test_type == "data_segmentation":
         # Call the new, dedicated manager for this test type
         run_data_segmentation_manager(batch_id, config, manager, queue, loop)
         return # Important: exit after calling the specific manager
     elif test_type == 'walk_forward':
         run_walk_forward_manager(batch_id, config, manager, queue, loop)
         return
-
+    
     print(f"[{batch_id}] Starting standard optimization/screening test...")
     
     # --- Step 1: Get all configuration from the payload ---
@@ -1065,10 +1230,27 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
         fail_job(batch_id, "No valid test combinations to run after pruning."); 
         return
     
-    # This list will hold all the raw results needed for the heatmap
-    all_results_for_heatmap = []
     # This dictionary will map each running job (future) back to its parameter combo
     future_to_combo = {}
+    
+    # Get user-defined metrics, defaulting to an empty list
+    user_metric_input = config.get('optimization_metric') # e.g., "Sharpe_Ratio" or None
+    
+    user_metrics_list = []
+    # Check if the input is a valid, non-empty string
+    if isinstance(user_metric_input, str) and user_metric_input:
+        user_metrics_list.append(user_metric_input)
+    # You can also add a check for a list for future flexibility
+    elif isinstance(user_metric_input, list):
+        user_metrics_list = user_metric_input
+        
+    # Use a set to automatically handle duplicates and ensure EER is always present
+    metrics_to_plot = set(user_metrics_list)
+    metrics_to_plot.add('Equity_Efficiency_Rate') # EER is mandatory
+    
+    print(f"[{batch_id}] Will generate heatmaps for the following metrics: {list(metrics_to_plot)}")
+    
+    all_results_by_metric = {metric: [] for metric in metrics_to_plot}
     
     # --- Step 7: The Nested Loop Logic for Job Submission ---
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
@@ -1126,31 +1308,33 @@ def run_unified_test_manager(batch_id: str, config: dict, manager: any, queue: a
                 if result_tuple:
                     # We need the combo (a tuple of values) and the metric value
                     metrics = result_tuple[2]
-                    # You need to decide which metric to plot. Let's assume it's in the config.
-                    metric_to_plot = config.get('optimization_metric', 'Equity_Efficiency_Rate')
-                    metric_value = metrics.get(metric_to_plot)
                     
-                    if metric_value is not None:
-                        # The heatmap function expects a list of (combo_tuple, metric_value)
-                        all_results_for_heatmap.append((combo, metric_value))
+                    for metric_name in metrics_to_plot:
+                        metric_value = metrics.get(metric_name)
+                        if metric_value is not None:
+                            # Append the result to the correct list in our dictionary
+                            all_results_by_metric[metric_name].append((combo, metric_value))
+            
             except Exception as e:
                 print(f"--- ERROR collecting result for combo {combo}: {e} ---")
         
-        # After all results are collected, generate the heatmap
-        if all_results_for_heatmap:
-            print(f"--- UNIFIED MANAGER ({batch_id}): Generating parameter heatmap... ---")
-            send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "All runs complete. Generating parameter heatmap..."}})
-            
-            # Assuming you have a single symbol for the heatmap
-            strategy_key = symbols_to_screen[0] 
-            
-            generate_parameter_heatmap(
-                results_data=all_results_for_heatmap,
-                params_to_optimize=params_to_optimize,
-                metric=config.get('optimization_metric', 'Equity_Efficiency_Rate'),
-                batch_id=batch_id,
-                strategy_key=strategy_key
-            )
+        print(f"--- UNIFIED MANAGER ({batch_id}): Generating parameter heatmap... ---")
+        send_update_to_queue(loop, queue, batch_id, {"type": "log", "payload": {"message": "All runs complete. Generating parameter heatmap..."}})
+        
+        strategy_key_base = symbols_to_screen[0]
+        
+        for metric_name, results_data in all_results_by_metric.items():
+            if results_data:
+                print(f"--- Generating heatmap for metric: {metric_name} ---")
+                generate_parameter_heatmap(
+                    results_data=results_data,
+                    params_to_optimize=params_to_optimize,
+                    metric=metric_name,
+                    batch_id=batch_id,
+                    strategy_key=f"{strategy_key_base}"
+                )
+            else:
+                print(f"--- Skipping heatmap for {metric_name} as no valid data was collected. ---")
     
     # Note: A truly robust implementation would wait for all futures to complete
     # before sending the final "batch_complete" message. For simplicity, we omit that here.

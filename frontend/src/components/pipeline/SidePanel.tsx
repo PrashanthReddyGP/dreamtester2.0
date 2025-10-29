@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Box, Typography, IconButton, Tooltip, Tabs, Tab } from '@mui/material'; // Import Tabs and Tab
 import {
     ChevronLeft,
@@ -126,12 +126,14 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 }) => {
 
     
-    const showModelAnalysisTab = selectedNode?.type === 'modelTrainer' && displayInfo?.model_analysis;
+    const showModelAnalysisTab = selectedNode?.type === 'modelTrainer' && displayInfo?.model_analysis || selectedNode?.type === 'baggingTrainer' && displayInfo?.model_analysis;
     const isChartingNodeSelected = selectedNode?.type === 'charting';
 
     // 2. Add a new condition to check for the correlation node and its data
     // The backend stores the result in displayInfo.correlation_info
     const isCorrelationNodeSelected = selectedNode?.type === 'featuresCorrelation' && displayInfo?.correlation_info;
+
+    const isProfilerNodeSelected = selectedNode?.type === 'dataProfiler' && displayInfo?.profile?.distribution;
 
     // Adjust the default active tab based on what's available
     const [activeTab, setActiveTab] = useState(showModelAnalysisTab ? 3 : 0);
@@ -166,6 +168,29 @@ export const SidePanel: React.FC<SidePanelProps> = ({
     
     // This boolean makes our JSX cleaner and more readable.
     const isHorizontalLayout = panelPosition === 'top' || panelPosition === 'bottom';
+
+    // We use useMemo to avoid recalculating this on every render
+    const profilerChartPayload = useMemo(() => {
+        if (!isProfilerNodeSelected) return null;
+
+        const { bins, counts } = displayInfo.profile.distribution;
+        const featureName = displayInfo.profile.feature_name;
+
+        // Transform backend data into the format recharts expects: an array of objects
+        const chartData = counts.map((count: number, index: number) => ({
+            bin: bins[index].toFixed(4), // Use the start of the bin as the label, format it
+            count: count,
+        }));
+
+        const chartConfig = {
+            xAxis: 'bin',
+            yAxis: 'count',
+            xAxisLabel: `Value Bins for ${featureName}`,
+            yAxisLabel: 'Frequency',
+        };
+
+        return { data: chartData, config: chartConfig };
+    }, [isProfilerNodeSelected, displayInfo]);
 
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', p: 1, backgroundColor: 'background.paper' }}>
@@ -223,10 +248,15 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                             displayMode={selectedNode.data.displayMode}
                             method={selectedNode.data.method}
                         />
+                    ) : isProfilerNodeSelected && profilerChartPayload ? (
+                        // Render the chart with the prepared data and config
+                        <GenericChartDisplay
+                            chartType="bar"
+                            data={profilerChartPayload.data}
+                            config={profilerChartPayload.config}
+                        />
                     ) : (
-                        // Fallback to cluster plot or default message
-                        displayInfo?.model_analysis?.scatter_plot_data ? 
-                        <ClusterScatterPlot data={displayInfo.model_analysis.scatter_plot_data} /> : 
+                        // Fallback message
                         <Typography>No chart to display. Select a node and run it.</Typography>
                     )}
                 </TabPanel>

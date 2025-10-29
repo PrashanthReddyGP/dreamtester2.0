@@ -14,13 +14,18 @@ class ExecutionContext:
     A context object passed through the pipeline, holding shared state.
     This includes intermediate dataframes, generated metadata, and trained models.
     """
-    def __init__(self):
+    def __init__(self, run_id: str):
+        self.run_id = run_id
+        
         # Stores the primary DataFrame output of each node
         self.node_outputs: Dict[str, pd.DataFrame] = {}
         # Stores any special metadata a node wants to provide (e.g., metrics, charts)
         self.node_metadata: Dict[str, Dict[str, Any]] = {}
         # Stores trained model objects, keyed by their trainer node ID
         self.trained_models: Dict[str, Any] = {}
+        
+        # Stores pipeline-wide parameters, like symbol and timeframe from the source
+        self.pipeline_params: Dict[str, Any] = {}
 
 class BaseNodeExecutor(ABC):
     """Abstract Base Class for all node executors."""

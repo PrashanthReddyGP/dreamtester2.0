@@ -6,7 +6,7 @@ import xgboost as xgb
 # --- Scikit-learn Imports ---
 # Classifiers
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, BaggingClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
@@ -42,11 +42,41 @@ def get_model(model_name: str, params: dict = None):
     """
     if params is None:
         params = {}
+    
+    # Make a copy to avoid modifying the original dict during iteration
+    params = params.copy()
+    
+    def clean_params(d):
+        if not isinstance(d, dict):
+            return d
         
-    # Convert the string 'none' from the UI into Python's None object.
-    # This is a common requirement when interfacing with web frontends.
-    if params.get('class_weight') == 'none':
-        params['class_weight'] = None
+        cleaned_dict = {}
+        for key, value in d.items():
+            
+            # Handle the ambiguous integer '1' for max_samples/max_features
+            if key in ['max_samples', 'max_features'] and value == 1:
+                cleaned_dict[key] = 1.0 # Convert integer 1 to float 1.0
+                continue # Move to the next item in the loop
+            
+            if isinstance(value, str):
+                val_lower = value.lower()
+                if val_lower == 'true':
+                    cleaned_dict[key] = True
+                elif val_lower == 'false':
+                    cleaned_dict[key] = False
+                elif val_lower == 'none':
+                    cleaned_dict[key] = None
+                else:
+                    cleaned_dict[key] = value # Keep other strings as is
+            elif isinstance(value, dict):
+                # Recurse for nested dictionaries and assign the cleaned result
+                cleaned_dict[key] = clean_params(value)
+            else:
+                # Keep other types (numbers, lists, etc.) as is
+                cleaned_dict[key] = value
+        return cleaned_dict
+    
+    params = clean_params(params)
     
     # --- Classification Models ---
     if model_name == 'LogisticRegression':
@@ -57,7 +87,39 @@ def get_model(model_name: str, params: dict = None):
     elif model_name == 'RandomForestClassifier':
         default_params = {'n_estimators': 100, 'class_weight': 'none', 'random_state': 42, 'n_jobs': -1}
         return RandomForestClassifier(**{**default_params, **params})
-
+    
+    elif model_name == 'BaggingClassifier':
+        base_model_name = params.pop('baseModelName', None)
+        base_model_params = params.pop('baseModelHyperparameters', {})
+        
+        # Extract the bagger's own parameters from the nested dictionary.
+        # The .get() method returns an empty dict {} if 'baggingHyperparameters' isn't found,
+        # which prevents errors.
+        bagging_params = params.pop('baggingHyperparameters', {})
+        
+        if not base_model_name:
+            raise ValueError("BaggingClassifier requires a 'baseModelName' parameter.")
+        
+        print(f"Instantiating base model '{base_model_name}' for BaggingClassifier...")
+        
+        # Recursively call get_model to create the base estimator
+        base_estimator = get_model(base_model_name, base_model_params)
+        
+        default_params = {'random_state': 42, 'n_jobs': -1}
+        
+        # Now, we combine the defaults with the UNPACKED bagging_params.
+        # The 'local_params' dictionary is now empty or contains other top-level
+        # params if you ever add them, which is fine.
+        final_bagging_params = {**default_params, **bagging_params, **params}
+        
+        print(final_bagging_params)
+        
+        # The remaining params in the dictionary are for the BaggingClassifier itself
+        return BaggingClassifier(
+            estimator=base_estimator, 
+            **final_bagging_params
+        )
+    
     elif model_name == 'LightGBMClassifier':
         default_params = {'random_state': 42}
         return lgb.LGBMClassifier(**{**default_params, **params})

@@ -36,6 +36,30 @@ interface DataInfo {
         "Synthetic Rows Added": number;
         "Total Training Rows After": number;
     };
+
+    backtest_info?: {
+        "Total Trades": number, 
+        "Annual Return": number, 
+        "Max Drawdown": number, 
+        "Sharpe Ratio": number, 
+        "Profit Factor": number, 
+        "Winrate": number, 
+        "RR": Record<string, number>, 
+    };
+    profile?: {
+        feature_name: string;
+        stats: Record<string, number>;
+        skewness: number;
+        kurtosis: number;
+        outliers: {
+            count: number;
+            percentage: number;
+        };
+        suggestion: {
+            scaler: string;
+            reason: string;
+        };
+    };
 }
 
 const StatItem: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
@@ -44,6 +68,32 @@ const StatItem: React.FC<{ label: string; value: React.ReactNode }> = ({ label, 
         <Typography variant="body2" component="span" sx={{ fontWeight: 'bold', ml: 1 }}>{value}</Typography>
     </Box>
 );
+
+const formatBacktestValue = (label: string, value: any): React.ReactNode => {
+    if (label === 'RR' && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        return Object.entries(value)
+            .map(([k, v]) => `${k.charAt(0).toUpperCase() + k.slice(1)}: ${(v as number).toFixed(2)}`)
+            .join(' | ');
+    }
+    
+    if (typeof value !== 'number') {
+        return String(value);
+    }
+    
+    switch (label) {
+        case "Total Trades":
+            return `${value.toLocaleString()} trades`;
+        case "Winrate":
+        case "Max Drawdown":
+        case "Annual Return":
+            return `${value.toFixed(2)}%`;
+        case "Sharpe Ratio":
+        case "Profit Factor":
+            return value.toFixed(2);
+        default:
+            return value.toLocaleString();
+    }
+};
 
 export const DataInfoDisplay = ({ info }: { info: DataInfo | null }) => (
     <Box sx={{ height: '100%' }}>
@@ -62,6 +112,38 @@ export const DataInfoDisplay = ({ info }: { info: DataInfo | null }) => (
                         <StatItem label="Start Date" value={info["Start Date"]} />
                         <StatItem label="End Date" value={info["End Date"]} />
                         <StatItem label="Memory Usage" value={info["Memory Usage"]} />
+
+                        {info.backtest_info && Object.keys(info.backtest_info).length > 0 && (
+                            <>
+                                <Divider sx={{ pt: 1 }} />
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>Backtest Info</Typography>
+                                {Object.entries(info.backtest_info).map(([label, value]) => (
+                                    <StatItem key={label} label={label} value={formatBacktestValue(label, value)} />
+                                ))}
+                            </>
+                        )}
+
+                        {info.model_info && Object.keys(info.model_info).length > 0 && (
+                            <>
+                                <Divider sx={{ pt: 1 }} />
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>Model Info</Typography>
+                                {Object.entries(info.model_info).map(([label, value]) => (
+                                    // Use toLocaleString() for numbers, otherwise just display the value
+                                    <StatItem key={label} label={label} value={typeof value === 'number' ? value.toLocaleString() : value} />
+                                ))}
+                            </>
+                        )}
+
+                        {info.model_metrics && Object.keys(info.model_metrics).length > 0 && (
+                            <>
+                                <Divider sx={{ pt: 1 }} />
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>Model Metrics</Typography>
+                                {Object.entries(info.model_metrics).map(([label, value]) => {
+                                    const displayLabel = label.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                                    return <StatItem key={label} label={displayLabel} value={value.toFixed(4)} />
+                                })}
+                            </>
+                        )}
 
                         {info.label_distribution && Object.keys(info.label_distribution).length > 0 && (
                             <>
@@ -111,6 +193,51 @@ export const DataInfoDisplay = ({ info }: { info: DataInfo | null }) => (
                                 <StatItem label="Original Rows" value={info.resampling_info["Original Training Rows"].toLocaleString()} />
                                 <StatItem label="Synthetic Rows Added" value={info.resampling_info["Synthetic Rows Added"].toLocaleString()} />
                                 <StatItem label="New Total Rows" value={info.resampling_info["Total Training Rows After"].toLocaleString()} />
+                            </>
+                        )}
+
+                        {info.profile && (
+                            <>
+                                <Divider sx={{ pt: 1 }} />
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>
+                                    Feature Profile: {info.profile.feature_name}
+                                </Typography>
+
+                                {/* Basic Stats */}
+                                {Object.entries(info.profile.stats).map(([key, value]) => (
+                                    <StatItem 
+                                        key={key} 
+                                        label={key.charAt(0).toUpperCase() + key.slice(1)} 
+                                        value={value.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                                    />
+                                ))}
+
+                                <Divider sx={{ pt: 1 }} />
+
+                                {/* Distribution Shape */}
+                                <StatItem label="Skewness" value={info.profile.skewness} />
+                                <StatItem label="Kurtosis" value={info.profile.kurtosis} />
+                                
+                                <Divider sx={{ pt: 1 }} />
+
+                                {/* Outliers */}
+                                <StatItem label="Outliers Detected" value={info.profile.outliers.count.toLocaleString()} />
+                                <StatItem label="Outlier Percentage" value={`${info.profile.outliers.percentage}%`} />
+                                
+                                <Divider sx={{ pt: 1 }} />
+
+                                {/* Suggestion */}
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>
+                                    Scaling Suggestion
+                                </Typography>
+                                <Paper variant="outlined" sx={{ p: 1.5, my: 1, backgroundColor: 'action.hover' }}>
+                                    <Typography variant="body1" sx={{ fontWeight: 'bold', textAlign: 'center', mb: 1 }}>
+                                        Use {info.profile.suggestion.scaler}
+                                    </Typography>
+                                    <Typography variant="caption" sx={{ color: 'text.secondary', textAlign: 'justify', display: 'block' }}>
+                                        {info.profile.suggestion.reason}
+                                    </Typography>
+                                </Paper>
                             </>
                         )}
 
@@ -165,6 +292,17 @@ export const DataInfoDisplayHorizontal = ({ info }: { info: DataInfo | null }) =
                             <StatItem label="Start Date" value={info["Start Date"]} />
                             <StatItem label="End Date" value={info["End Date"]} />
                             <StatItem label="Memory Usage" value={info["Memory Usage"]} />
+
+                            {info.backtest_info && Object.keys(info.backtest_info).length > 0 && (
+                                <>
+                                    <Divider sx={{ pt: 1 }} />
+                                    <Typography variant="subtitle2" sx={{ fontWeight: 'bold', pt: 1, textAlign: 'center', color: '#c3c3c3ff' }}>Backtest Info</Typography>
+                                    {Object.entries(info.backtest_info).map(([label, value]) => (
+                                        <StatItem key={label} label={label} value={formatBacktestValue(label, value)} />
+                                    ))}
+
+                                </>
+                            )}
 
                             {info.label_distribution && Object.keys(info.label_distribution).length > 0 && (
                                 <>
@@ -467,7 +605,7 @@ export const DataGridDisplay = ({ data, info, title }: { data: any[], info: Data
                         columns={columns}
                         getRowId={(row) => row.timestamp} // Timestamps are unique and reliable IDs
                         initialState={{
-                            pagination: { paginationModel: { pageSize: 5 } },
+                            pagination: { paginationModel: { pageSize: 20 } },
                             sorting: { sortModel: [{ field: 'timestamp', sort: 'desc' }] },
                         }}
                         pageSizeOptions={[5, 20, 50]}

@@ -37,10 +37,10 @@ export const MergeNode = ({ id, data }: NodeProps<MergeNodeData>) => {
             <Handle type="target" position={Position.Left} id="a" style={{ ...handleStyle, top: '33%', backgroundColor: '#555'}} />
             <Handle type="target" position={Position.Left} id="b" style={{ ...handleStyle, top: '66%', backgroundColor: '#555'}} />
 
-            <NodeHeader nodeId={id} title={data.label} color="#ff9800">
+            <NodeHeader nodeId={id} title={data.label} color="#ff9800" textColor='black'>
                 <IconButton 
                     size="small" 
-                    sx={{ color: 'white' }} 
+                    sx={{ color: 'black' }} 
                     aria-label="run" 
                     onClick={() => executePipelineUpToNode(id)}
                     disabled={amIProcessing}

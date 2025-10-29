@@ -1,114 +1,122 @@
 // src/components/pipeline/analysis/GenericChartDisplay.tsx
 
 import React from 'react';
+import { Box, Typography, useTheme } from '@mui/material';
 import {
-    ScatterChart, Scatter, LineChart, Line, BarChart, Bar,
-    XAxis, YAxis, ZAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ScatterChart,
+  Scatter,
+  ZAxis,
+  Label
 } from 'recharts';
-import { Typography } from '@mui/material';
 
-// Same color palette as before
-const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088FE', '#00C49F', '#FFBB28'];
-
-interface GenericChartProps {
-    chartType: 'scatter' | 'line' | 'histogram';
-    data: any[];
-    config: {
-        xAxis: string;
-        yAxis?: string;
-        groupBy?: string;
-    };
+interface ChartDisplayProps {
+  chartType: 'bar' | 'scatter';
+  data: any[];
+  config: {
+    xAxis: string;
+    yAxis: string;
+    zAxis?: string; // For bubble charts in scatter plots
+    xAxisLabel?: string;
+    yAxisLabel?: string;
+    groupBy?: string;
+  };
 }
 
-export const GenericChartDisplay: React.FC<GenericChartProps> = ({ chartType, data, config }) => {
-    if (!data || data.length === 0) return <Typography>No data to plot.</Typography>;
+// A helper to generate distinct colors for grouped data
+const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088FE', '#00C49F', '#FFBB28'];
 
-    const renderScatterPlot = () => {
-        // Find the unique group names if a groupBy key is provided
-        const groupKeys = config.groupBy ? [...new Set(data.map(p => p[config.groupBy!]))] : ['default'];
+export const GenericChartDisplay: React.FC<ChartDisplayProps> = ({ chartType, data, config }) => {
+  const theme = useTheme();
+  const tickColor = theme.palette.text.secondary;
 
+  if (!data || data.length === 0) {
+    return <Typography>No data available for charting.</Typography>;
+  }
+
+  const renderChart = () => {
+    switch (chartType) {
+      case 'bar':
         return (
-            <ScatterChart>
-                <CartesianGrid />
-                <XAxis type="number" dataKey={config.xAxis} name={config.xAxis} tick={{ fill: '#ccc' }} />
-                <YAxis type="number" dataKey={config.yAxis} name={config.yAxis} tick={{ fill: '#ccc' }} />
-                
-                {/* 2. Use ZAxis to control the color/grouping */}
-                {/* It maps a categorical value (the groupBy column) to a color fill */}
-                {config.groupBy && <ZAxis dataKey={config.groupBy} name={config.groupBy} />}
+          <BarChart data={data} margin={{ top: 5, right: 30, left: 20, bottom: 20 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
+            <XAxis dataKey={config.xAxis} stroke={tickColor} tick={{ fontSize: 12 }}>
+              <Label value={config.xAxisLabel} offset={-15} position="insideBottom" fill={tickColor} />
+            </XAxis>
+            <YAxis stroke={tickColor} tick={{ fontSize: 12 }}>
+               <Label value={config.yAxisLabel} angle={-90} position="insideLeft" fill={tickColor} style={{ textAnchor: 'middle' }} />
+            </YAxis>
+            <Tooltip
+              contentStyle={{
+                backgroundColor: theme.palette.background.paper,
+                borderColor: theme.palette.divider,
+              }}
+            />
+            {/* <Legend /> */}
+            <Bar dataKey={config.yAxis} fill={theme.palette.primary.main} />
+          </BarChart>
+        );
 
-                <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                <Legend />
-
-                {/* 3. Render a SINGLE <Scatter> component for each group */}
-                {/* This is much more efficient than rendering one giant one */}
-                {groupKeys.map((key, index) => (
-                    <Scatter
-                        key={String(key)}
-                        name={String(key)}
-                        // Filter the data for this specific group
-                        data={config.groupBy ? data.filter(p => p[config.groupBy!] === key) : data}
-                        // Assign a color from our palette
-                        fill={COLORS[index % COLORS.length]}
-                    />
-                ))}
+      case 'scatter':
+        // Logic for handling grouped vs. non-grouped scatter plots
+        if (config.groupBy && config.groupBy in data[0]) {
+            const groups = [...new Set(data.map(item => item[config.groupBy]))];
+            return (
+                <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                    <CartesianGrid stroke={theme.palette.divider} />
+                    <XAxis type="number" dataKey={config.xAxis} name={config.xAxisLabel || config.xAxis} stroke={tickColor}>
+                         <Label value={config.xAxisLabel} offset={-15} position="insideBottom" fill={tickColor} />
+                    </XAxis>
+                    <YAxis type="number" dataKey={config.yAxis} name={config.yAxisLabel || config.yAxis} stroke={tickColor}>
+                        <Label value={config.yAxisLabel} angle={-90} position="insideLeft" fill={tickColor} style={{ textAnchor: 'middle' }} />
+                    </YAxis>
+                    {config.zAxis && <ZAxis type="number" dataKey={config.zAxis} range={[20, 200]} name={config.zAxis} />}
+                    <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: theme.palette.background.paper, borderColor: theme.palette.divider }}/>
+                    <Legend />
+                    {groups.map((group, index) => (
+                        <Scatter 
+                            key={String(group)} 
+                            name={String(group)} 
+                            data={data.filter(d => d[config.groupBy] === group)} 
+                            fill={COLORS[index % COLORS.length]} 
+                        />
+                    ))}
+                </ScatterChart>
+            );
+        }
+        // Fallback for non-grouped scatter
+        return (
+            <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                <CartesianGrid stroke={theme.palette.divider}/>
+                <XAxis type="number" dataKey={config.xAxis} name={config.xAxisLabel || config.xAxis} stroke={tickColor}>
+                    <Label value={config.xAxisLabel} offset={-15} position="insideBottom" fill={tickColor} />
+                </XAxis>
+                <YAxis type="number" dataKey={config.yAxis} name={config.yAxisLabel || config.yAxis} stroke={tickColor}>
+                    <Label value={config.yAxisLabel} angle={-90} position="insideLeft" fill={tickColor} style={{ textAnchor: 'middle' }} />
+                </YAxis>
+                {config.zAxis && <ZAxis type="number" dataKey={config.zAxis} range={[20, 200]} name={config.zAxis} />}
+                <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: theme.palette.background.paper, borderColor: theme.palette.divider }}/>
+                <Scatter name="Points" data={data} fill={theme.palette.primary.main} />
             </ScatterChart>
         );
-    };
-    
-    const renderLineChart = () => (
-        <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey={config.xAxis} tick={{ fill: '#ccc' }} />
-            <YAxis tick={{ fill: '#ccc' }} />
-            <Tooltip />
-            <Legend />
-            <Line type="monotone" dataKey={config.yAxis} stroke="#8884d8" activeDot={{ r: 8 }} />
-        </LineChart>
-    );
 
-    const renderHistogram = () => (
-        <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="bin" tick={{ fill: '#ccc' }} />
-            <YAxis tick={{ fill: '#ccc' }} />
-            <Tooltip />
-            <Legend />
-            <Bar dataKey="count" fill="#82ca9d" />
-        </BarChart>
-    );
-    
-    let chart;
-    switch (chartType) {
-        case 'scatter':
-            if (!config.xAxis || !config.yAxis) {
-                chart = <Typography color="text.secondary">Please select both an X and Y axis.</Typography>;
-            } else {
-                chart = renderScatterPlot();
-            }
-            break;
-        case 'line':
-            if (!config.xAxis || !config.yAxis) {
-                chart = <Typography color="text.secondary">Please select both an X and Y axis.</Typography>;
-            } else {
-                chart = renderLineChart();
-            }
-            break;
-        case 'histogram':
-            if (!config.xAxis) {
-                chart = <Typography color="text.secondary">Please select an X axis for the histogram.</Typography>;
-            } else {
-                chart = renderHistogram();
-            }
-            break;
-        default:
-            chart = <Typography>Unknown chart type.</Typography>;
+      default:
+        return <Typography>Unsupported chart type: {chartType}</Typography>;
     }
+  };
 
-
-    return (
-        <ResponsiveContainer width="100%" height="100%">
-            {chart}
-        </ResponsiveContainer>
-    );
+  return (
+    <Box sx={{ width: '100%', height: '100%', minHeight: 300 }}>
+      <ResponsiveContainer>
+        {renderChart()}
+      </ResponsiveContainer>
+    </Box>
+  );
 };

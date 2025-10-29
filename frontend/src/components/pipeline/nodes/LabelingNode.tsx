@@ -1,11 +1,12 @@
-import React from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { Handle, Position } from 'reactflow';
 import type { NodeProps } from 'reactflow';
-import { Paper, Typography, Box, IconButton, CircularProgress } from '@mui/material';
+import { Paper, Box, IconButton, CircularProgress } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import Editor from '@monaco-editor/react';
 import type { OnChange } from '@monaco-editor/react';
 import { NodeHeader } from './NodeHeader'; // Import the new header
+import debounce from 'lodash.debounce';
 
 import { usePipeline } from '../../../context/PipelineContext';
 
@@ -15,6 +16,8 @@ interface LabelingNodeData {
     code: string;
 }
 
+const DEBOUNCE_DELAY = 500; // 500ms delay
+
 export const LabelingNode = ({ id, data }: NodeProps<LabelingNodeData>) => {
     // 2. Pull the necessary state and functions from the context
     const { updateNodeData, executePipelineUpToNode, isProcessing, processingNodeId } = usePipeline();
@@ -22,11 +25,31 @@ export const LabelingNode = ({ id, data }: NodeProps<LabelingNodeData>) => {
     // The component determines for itself if it is the one currently being processed
     const amIProcessing = isProcessing && processingNodeId === id;
 
-    // The onChange handler for Monaco has a different signature
+    // // Create a stable, debounced version of the update function
+    // const debouncedUpdate = useMemo(
+    //     () => debounce((value: string | undefined) => {
+    //         updateNodeData(id, { code: value || '' });
+    //     }, DEBOUNCE_DELAY),
+    //     [id, updateNodeData] // Dependencies are stable
+    // );
+
+    // // The handler for the editor now calls the debounced function
+    // const handleEditorChange: OnChange = (value) => {
+    //     debouncedUpdate(value);
+    // };
+    
     const handleEditorChange: OnChange = (value) => {
         // value can be undefined, so we provide a fallback
         updateNodeData(id, { code: value || '' });
     };
+
+    // // Add a cleanup effect to cancel any pending updates when the component unmounts
+    // useEffect(() => {
+    //     return () => {
+    //         debouncedUpdate.cancel();
+    //     };
+    // }, [debouncedUpdate]);
+
 
     const handleStyle = {
         width: 12,

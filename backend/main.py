@@ -6,7 +6,6 @@ try:
     import ast
     from ast import unparse, fix_missing_locations
     import sys
-    import inspect
     from pathlib import Path
     import time
     import uuid
@@ -14,32 +13,22 @@ try:
     import asyncio
     import pandas as pd
     import numpy as np
-    from datetime import datetime, timezone
     from typing import List, Literal, Union, Annotated
-    from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, Response, Depends, APIRouter, UploadFile, File, Form
+    from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request, Response, Depends, UploadFile, File, Form
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import JSONResponse
     from pydantic import BaseModel, Field
-    from typing import Optional, List, Dict, Literal, Union, Any
+    from typing import Optional, List, Dict, Literal, Union, Any, Set
     from sqlalchemy.orm import Session
     import json
     from core.json_encoder import CustomJSONEncoder # Import our new encoder
     from types import SimpleNamespace
     from collections import deque
-    from sklearn.preprocessing import StandardScaler, MinMaxScaler
-    from sklearn.decomposition import PCA
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-    from sklearn.metrics import mean_squared_error, r2_score
-    from sklearn.metrics import classification_report, confusion_matrix
     from starlette.concurrency import run_in_threadpool # Ensure this is imported
-            
 
-    from core.ml_models import get_model, UNSUPERVISED_MODELS # Import your model factory
     
     # Import the new database functions
     from database import (
-        BacktestJob,
         SessionLocal,
         save_api_key, 
         get_api_key,
@@ -64,18 +53,19 @@ try:
         delete_backtest_template
     )
 
-    from pipeline import run_unified_test_manager, get_charting_data, run_asset_screening_manager, run_batch_manager, run_local_backtest_manager, download_dataframe #, run_hedge_optimization_manager
+    from pipeline import run_unified_test_manager, get_charting_data, run_asset_screening_manager, run_batch_manager, run_local_backtest_manager, download_dataframe
     from hedge_pipeline import run_hedge_optimization_manager
     from core.machinelearning import run_ml_pipeline_manager
     
     from core.indicator_registry import get_indicator_schema
     from core.connect_to_brokerage import get_client
-    from core.data_manager import get_ohlcv, import_csv_data
+    from core.data_manager import import_csv_data
     from core.machinelearning import load_data_for_ml, transform_features_for_backend
     from core.robust_idk_processor import calculate_indicators
     from core.state import WORKFLOW_CACHE
     from core.node_executors import get_executor
     from core.node_executors.base import ExecutionContext
+    from core.node_executors.utils import resolve_parameters
     
     from core.types import IndicatorConfig
     
@@ -292,6 +282,10 @@ try:
         step_forward_pct: int
         optimization_metric: str
 
+    class ParameterRangeConfig(BaseDurabilityConfig):
+        test_type: Literal['parameter_range']
+        optimization_metric: str
+
     # You can add other test configurations here as you build them
     # class MonteCarloConfig(BaseDurabilityConfig):
     #     test_type: Literal['monte_carlo']
@@ -304,6 +298,7 @@ try:
         Union[
             DataSegmentationConfig,
             WalkForwardConfig,
+            ParameterRangeConfig,
             # MonteCarloConfig, # Add other configs here later
         ],
         Field(discriminator="test_type"),
@@ -1919,212 +1914,222 @@ try:
         if workflow_id not in WORKFLOW_CACHE:
             raise HTTPException(status_code=404, detail="Workflow ID not found.")
         
-        nodes = {node.id: node for node in body.nodes}
+        nodes_map = {node.id: node for node in body.nodes}
         edges = body.edges
         target_node_id = body.target_node_id
         
-        # --- 1. Determine Execution Order (Topological Sort) ---
-        def calculate_execution_order(nodes, edges, target_node_id):
+        def get_required_ancestors(target_id: str) -> Set[str]:
+            reverse_adj: Dict[str, List[str]] = {nid: [] for nid in nodes_map}
+            for edge in edges: reverse_adj[edge.target].append(edge.source)
+            q = deque([target_id])
+            ancestors = {target_id}
+            while q:
+                current_id = q.popleft()
+                for parent_id in reverse_adj.get(current_id, []):
+                    if parent_id not in ancestors:
+                        ancestors.add(parent_id)
+                        q.append(parent_id)
+            return ancestors
+        
+        required_nodes = get_required_ancestors(target_node_id)
+        print(f"Execution pruned to {len(required_nodes)} required nodes for target '{target_node_id}'.")
+        
+        def get_nodes_in_loop_body(loop_node_id: str, nodes_map: Dict, edges: List) -> Set[str]:
+            """
+            Finds all node IDs that are part of a loop's body by traversing from its
+            'loop-body' output until we reach the 'loop-back' input of the same loop.
+            """
+            body_nodes = set()
             
-            # Build adjacency list and in-degree count for the graph
-            adj = {node_id: [] for node_id in nodes}
-            in_degree = {node_id: 0 for node_id in nodes}
+            # Create an adjacency list for forward traversal
+            adj: Dict[str, List[str]] = {nid: [] for nid in nodes_map}
             for edge in edges:
                 adj[edge.source].append(edge.target)
-                in_degree[edge.target] += 1
             
-            # Find all nodes that are ancestors of the target node
-            q = deque([target_node_id])
-            ancestors = {target_node_id}
-            visited_for_ancestors = {target_node_id}
-            
-            # Reverse edges to traverse backwards from target
-            reverse_adj = {node_id: [] for node_id in nodes}
+            # Find the starting node(s) of the loop body
+            q = deque()
             for edge in edges:
-                reverse_adj[edge.target].append(edge.source)
+                if edge.source == loop_node_id and edge.source_handle == 'loop-body':
+                    q.append(edge.target)
+                    body_nodes.add(edge.target)
             
+            # Traverse the graph from the start of the loop body
+            visited = set(q)
             while q:
-                curr = q.popleft()
-                for parent in reverse_adj.get(curr, []):
-                    if parent not in visited_for_ancestors:
-                        visited_for_ancestors.add(parent)
-                        ancestors.add(parent)
-                        q.append(parent)
-            
-            # Perform topological sort ONLY on the ancestors subgraph
-            queue = deque([node_id for node_id in ancestors if in_degree[node_id] == 0])
-            exec_order = []
-            while queue:
-                node_id = queue.popleft()
-                exec_order.append(node_id)
-                for neighbor in adj.get(node_id, []):
-                    if neighbor in ancestors:
-                        in_degree[neighbor] -= 1
-                        if in_degree[neighbor] == 0:
-                            queue.append(neighbor)
-            
-            if len(exec_order) != len(ancestors):
-                raise ValueError("Cycle detected in the pipeline graph.")
-            
-            return exec_order
+                current_id = q.popleft()
+                
+                # Check if this node loops back to the start
+                is_loop_end = False
+                for edge in edges:
+                    if edge.source == current_id and edge.target == loop_node_id and edge.target_handle == 'loop-back':
+                        is_loop_end = True
+                        break
+                if is_loop_end:
+                    continue # Don't traverse past the loop-back connection
+                
+                # Continue traversal to children
+                for neighbor_id in adj.get(current_id, []):
+                    if neighbor_id not in visited:
+                        visited.add(neighbor_id)
+                        body_nodes.add(neighbor_id)
+                        q.append(neighbor_id)
+                        
+            return body_nodes
         
-        try:
-            exec_order = calculate_execution_order(nodes, edges, target_node_id)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid pipeline structure: {e}")
+        # --- The rest of the function is now correct ---
+        in_degree: Dict[str, int] = {nid: 0 for nid in required_nodes}
+        for edge in edges:
+            if edge.source in required_nodes and edge.target in required_nodes:
+                is_loop_back = nodes_map.get(edge.target, {}).type == 'loop' and edge.target_handle == 'loop-back'
+                if not is_loop_back:
+                    in_degree[edge.target] += 1
         
-        # --- 2. Execute Nodes in Order WITH CACHING ---
-        setup_cache_directory() # Ensure the .pipeline_cache folder exists
-        context = ExecutionContext()
-        node_hashes: Dict[str, str] = {} # To store the calculated hash for each node
+        initial_in_degree = in_degree.copy()
         
-        for node_id in exec_order:
-            node = nodes[node_id]
-            print(f"--- Processing Node: {node.data.get('label', node.type)} (ID: {node_id}) ---")
+        setup_cache_directory()
+        context = ExecutionContext(run_id=workflow_id)
+        node_hashes: Dict[str, str] = {}
+        queue = deque([node_id for node_id in required_nodes if in_degree[node_id] == 0])
+        completed_nodes: Set[str] = set()
+        NODES_WITH_NAMED_INPUTS = ['modelTrainer', 'neuralNetworkTrainer', 'merge', 'advancedDataScaling', 'baggingTrainer', 'hyperparameterTuning', 'loop']
+        
+        while queue:
             
-            # --- A. Assemble Parent Inputs and Hashes ---
-            parent_edges = [edge for edge in edges if edge.target == node_id]
+            node_id = queue.popleft()
             
-            parent_hashes = []
-            parent_inputs = {} 
+            if node_id in completed_nodes and nodes_map[node_id].type != 'loop':
+                continue
             
+            node = nodes_map[node_id]
+            print(f"\n--- Processing Node: {node.data.get('label', node.type)} (ID: {node_id}) ---")
+            
+            parent_edges = [e for e in edges if e.target == node_id]
+            parent_hashes, parent_inputs = [], {}
             for edge in parent_edges:
                 parent_id = edge.source
-                parent_node = nodes[parent_id] # Get the full parent node object
-                
-                parent_output_dict = context.node_outputs.get(parent_id)
-                if not parent_output_dict:
-                    raise ConnectionError(f"Parent node {parent_id} did not produce any output.")
-                
-                df_to_pass = None
-                source_handle_to_use = edge.source_handle
-                
-                if source_handle_to_use:
-                    # Case 1: The edge explicitly defines the source handle. Use it.
+                if parent_id in context.node_outputs:
+                    parent_node = nodes_map[parent_id]
+                    parent_output_dict = context.node_outputs.get(parent_id, {})
+                    source_handle_to_use = edge.source_handle or 'default'
                     df_to_pass = parent_output_dict.get(source_handle_to_use)
-                elif len(parent_output_dict) == 1:
-                    # Case 2: Edge is implicit, but parent has only ONE output. Use that output.
-                    # This is the key fix for single-output nodes.
-                    source_handle_to_use = list(parent_output_dict.keys())[0]
-                    df_to_pass = parent_output_dict[source_handle_to_use]
-                else:
-                    # Case 3 (Fallback): Edge is implicit, parent has multiple outputs.
-                    # Try 'default' as a last resort.
-                    source_handle_to_use = 'default'
-                    df_to_pass = parent_output_dict.get(source_handle_to_use)
-                
-                if df_to_pass is None:
-                    # Give a much more helpful error message
-                    raise ConnectionError(
-                        f"Could not connect nodes. Parent '{parent_node.data.get('label', parent_id)}' "
-                        f"did not produce an output on the required handle '{source_handle_to_use}'. "
-                        f"Available handles: {list(parent_output_dict.keys())}"
-                    )
-                
-                target_handle_to_use = edge.target_handle or 'default'
-                
-                parent_hashes.append(node_hashes[parent_id])
-                
-                input_key = target_handle_to_use if node.type in ['modelTrainer', 'merge'] else edge.id
-
-                parent_inputs[input_key] = {
-                    "data": df_to_pass,
-                    "source_node_id": parent_id,
-                    "source_node_type": parent_node.type,
-                    "source_handle": source_handle_to_use, 
-                }
+                    if df_to_pass is None and len(parent_output_dict) == 1 and not edge.source_handle:
+                        df_to_pass = list(parent_output_dict.values())[0]
+                    if df_to_pass is None: raise ConnectionError(f"Parent '{parent_node.data.get('label')}' could not provide output for handle '{source_handle_to_use}'")
+                    target_handle_to_use = edge.target_handle or 'default'
+                    if parent_id in node_hashes: parent_hashes.append(node_hashes[parent_id])
+                    input_key = target_handle_to_use if node.type in NODES_WITH_NAMED_INPUTS else edge.id
+                    parent_inputs[input_key] = {"data": df_to_pass, "source_node_id": parent_id}
             
-            current_hash = generate_node_hash(node.data, sorted(parent_hashes)) 
+            resolved_node_data = resolve_parameters(node.data, context.pipeline_params)
+            resolved_node = node.copy(update={"data": resolved_node_data})
+            current_hash = generate_node_hash(resolved_node.data, sorted(parent_hashes))
             node_hashes[node_id] = current_hash
             
-            # --- B. Check the Cache ---
             cached_result = load_from_cache(current_hash)
-            
-            if cached_result:
-                # CACHE HIT: Load results directly into the context
+            if cached_result and node.type != 'loop':
+                print(f"CACHE HIT for node {node_id}")
                 context.node_outputs[node_id] = cached_result['output']
-                if cached_result.get('metadata'):
-                    context.node_metadata[node_id] = cached_result['metadata']
-                if cached_result.get('model'):
-                    context.trained_models[node_id] = cached_result['model']
+                if cached_result.get('metadata'): context.node_metadata[node_id] = cached_result['metadata']
             else:
-                # CACHE MISS: Execute the node normally
+                print(f"CACHE MISS/EXECUTE for node {node_id}")
                 try:
                     executor = get_executor(node.type)
-                    
-                    # The executor now receives the rich parent_inputs object
-                    output_dict  = executor.execute(node, parent_inputs, context)
-                    
-                    # Store the direct dataframe output for immediate use by children
+                    output_dict = executor.execute(resolved_node, parent_inputs, context)
                     context.node_outputs[node_id] = output_dict
-                    
-                    # --- C. Save the new result to the cache ---
-                    result_to_cache = {
-                        'output': output_dict,
-                        'metadata': context.node_metadata.get(node_id),
-                        'model': context.trained_models.get(node_id)
-                    }
-                    save_to_cache(current_hash, result_to_cache)
-                
+                    if node.type != 'loop':
+                        result_to_cache = { 'output': output_dict, 'metadata': context.node_metadata.get(node_id) }
+                        save_to_cache(current_hash, result_to_cache)
                 except Exception as e:
-                    print(f"ERROR executing node {node_id}: {e}")
                     traceback.print_exc()
-                    error_info = {
-                        "error": f"Error in node '{node.data.get('label', node.type)}': {str(e)}",
-                        "nodeId": node_id
-                    }
-                    # Consider returning a more structured error response
-                    raise HTTPException(status_code=500, detail=error_info)
+                    raise HTTPException(status_code=500, detail=f"Error in node '{node.data.get('label')}': {str(e)}")
+            
+            completed_nodes.add(node_id)
+            
+            if node.type == 'dataSource':
+                context.pipeline_params.update(context.node_metadata.get(node_id, {}))
+                print(f"Propagating pipeline params: {context.pipeline_params}")
+            
+            output_handles = context.node_outputs.get(node_id, {}).keys()
+            for handle in output_handles:
+                outgoing_edges = [e for e in edges if e.source == node_id]
+                for edge in outgoing_edges:
+                    source_handle = edge.source_handle if edge.source_handle is not None else 'default'
+                    
+                    if source_handle == handle:
+                        child_id = edge.target
+                        if child_id not in required_nodes:
+                            continue
+                        
+                        is_child_loop_back = nodes_map.get(child_id, {}).type == 'loop' and edge.target_handle == 'loop-back'
+                        is_from_loop_body_output = node.type == 'loop' and handle == 'loop-body'
+                        
+                        if is_child_loop_back:
+                            print(f"Queueing loop-back to {child_id}")
+                            queue.append(child_id)
+                        else:
+                            if is_from_loop_body_output:
+                                # This is a new iteration. We must reset the state of the ENTIRE loop body.
+                                print(f"--- RESETTING STATE FOR NEW LOOP ITERATION (Loop ID: {node_id}) ---")
+                                
+                                # 1. Find all nodes within this loop's body.
+                                nodes_to_reset = get_nodes_in_loop_body(node_id, nodes_map, edges)
+                                
+                                # 2. Reset their 'in_degree' and 'completed' status.
+                                for body_node_id in nodes_to_reset:
+                                    if body_node_id in required_nodes:
+                                        in_degree[body_node_id] = initial_in_degree[body_node_id]
+                                        if body_node_id in completed_nodes:
+                                            completed_nodes.remove(body_node_id)
+                                        print(f"  -> State for node {body_node_id} reset. New in-degree: {in_degree[body_node_id]}")
+                            
+                            # 3. Standard dependency logic now works for ALL cases.
+                            in_degree[child_id] -= 1
+                            if in_degree[child_id] == 0:
+                                print(f"Queueing child {child_id} (dependencies met)")
+                                queue.append(child_id)
         
-        # Add this constant near the top of your file, perhaps after the imports.
-        # This makes it easy to change the preview size later.
+        # --- 4. Format and Return ALL Node Outputs (Preserved Logic) ---
+        # This section is copied from your original code, ensuring the frontend
+        # receives data in the exact same format it expects.
         ROW_LIMIT_FOR_DISPLAY = 100
-        
-        # --- 3. Format and Return ALL Node Outputs (WITH TRUNCATION) ---
         all_node_results = {}
         
-        for node_id in exec_order:
+        # We iterate over `completed_nodes` instead of `exec_order`
+        for node_id in completed_nodes:
             node_output_dict = context.node_outputs.get(node_id, {})
             
-            # Intelligently select the primary DataFrame to display
             display_df = None
-            if 'default' in node_output_dict:
-                display_df = node_output_dict['default']
-            elif 'train' in node_output_dict:
-                display_df = node_output_dict['train']
-            elif node_output_dict:
-                display_df = list(node_output_dict.values())[0]
+            if 'default' in node_output_dict: display_df = node_output_dict['default']
+            elif 'train' in node_output_dict: display_df = node_output_dict['train']
+            elif node_output_dict: display_df = list(node_output_dict.values())[0]
                 
             data_as_dicts = []
-            # Start with a default info message
-            node_info = {"message": f"Node '{nodes[node_id].data.get('label', node_id)}' executed successfully."}
-
-            # Check if display_df is a valid, non-empty DataFrame
+            node_info = {"message": f"Node '{nodes_map[node_id].data.get('label', node_id)}' executed successfully."}
+            
             if display_df is not None and isinstance(display_df, pd.DataFrame) and not display_df.empty:
+                # Your info generation logic is fully preserved.
+                node_info = generate_df_info(display_df.copy(), context.pipeline_params.get('symbol', 'N/A'), context.pipeline_params.get('timeframe', 'N/A'))
                 
-                # --- IMPORTANT: Generate info from the FULL, original DataFrame first! ---
-                first_node_id = exec_order[0]
-                first_node = nodes.get(first_node_id, None)
-                if first_node:
-                    symbol = first_node.data.get('symbol', 'N/A')
-                    timeframe = first_node.data.get('timeframe', 'N/A')
-                    # This function now gets the full, untruncated row count
-                    node_info = generate_df_info(display_df.copy(), symbol, timeframe)
-                
-                # --- NEW: Add truncation info if necessary ---
                 total_rows = len(display_df)
+                
                 if total_rows > ROW_LIMIT_FOR_DISPLAY:
+                    # Combine the first 50 and last 50 rows
+                    CHUNK_SIZE = ROW_LIMIT_FOR_DISPLAY // 2
+                    
                     node_info['truncation_info'] = {
-                        "message": f"Displaying first {ROW_LIMIT_FOR_DISPLAY} of {total_rows} total rows.",
+                        "message": f"Displaying first {CHUNK_SIZE} and last {CHUNK_SIZE} of {total_rows} total rows.",
                         "is_truncated": True,
                         "displaying_rows": ROW_LIMIT_FOR_DISPLAY,
                         "total_rows": total_rows
                     }
-
-                # --- NEW: Create the truncated DataFrame for serialization ---
-                df_for_serialization = display_df.head(ROW_LIMIT_FOR_DISPLAY).copy()
+                    
+                    first_half = display_df.head(CHUNK_SIZE)
+                    last_half = display_df.tail(CHUNK_SIZE)
+                    df_for_serialization = pd.concat([first_half, last_half])
+                else:
+                    # If total rows are within the limit, use the entire DataFrame
+                    df_for_serialization = display_df.copy()
                 
-                # --- DataFrame Serialization Logic (now runs on the smaller df) ---
                 df_for_serialization.replace([np.inf, -np.inf], np.nan, inplace=True)
                 df_sanitized = df_for_serialization.astype(object).where(pd.notnull(df_for_serialization), None)
                 
@@ -2133,513 +2138,12 @@ try:
                 
                 data_as_dicts = df_sanitized.to_dict(orient='records')
             
-            # Merge any special metadata (like model performance) stored in the context
             if node_id in context.node_metadata:
-                # Using deepcopy can prevent nested dicts from being overwritten, but update is usually fine
                 node_info.update(context.node_metadata[node_id])
                 
-            all_node_results[node_id] = {
-                "data": data_as_dicts,
-                "info": node_info
-            }
-
+            all_node_results[node_id] = {"data": data_as_dicts, "info": node_info}
+        
         return all_node_results
-
-
-
-
-    # @app.post("/api/ml/workflow/{workflow_id}/execute")
-    # async def execute_pipeline_up_to_node(workflow_id: str, body: PipelineExecutionRequest):
-    #     """
-    #     Executes the pipeline defined by the graph up to a specific target node.
-    #     """
-    #     if workflow_id not in WORKFLOW_CACHE:
-    #         raise HTTPException(status_code=404, detail="Workflow ID not found.")
-
-    #     nodes = {node.id: node for node in body.nodes}
-    #     edges = body.edges
-    #     target_node_id = body.target_node_id
-
-    #     # --- 1. Determine Execution Order (Topological Sort) ---
-    #     try:
-    #         # Build adjacency list and in-degree count for the graph
-    #         adj = {node_id: [] for node_id in nodes}
-    #         in_degree = {node_id: 0 for node_id in nodes}
-    #         for edge in edges:
-    #             adj[edge.source].append(edge.target)
-    #             in_degree[edge.target] += 1
-            
-    #         # Find all nodes that are ancestors of the target node
-    #         q = deque([target_node_id])
-    #         ancestors = {target_node_id}
-    #         visited_for_ancestors = {target_node_id}
-            
-    #         # Reverse edges to traverse backwards from target
-    #         reverse_adj = {node_id: [] for node_id in nodes}
-    #         for edge in edges:
-    #             reverse_adj[edge.target].append(edge.source)
-
-    #         while q:
-    #             curr = q.popleft()
-    #             for parent in reverse_adj.get(curr, []):
-    #                 if parent not in visited_for_ancestors:
-    #                     visited_for_ancestors.add(parent)
-    #                     ancestors.add(parent)
-    #                     q.append(parent)
-
-    #         # Perform topological sort ONLY on the ancestors subgraph
-    #         queue = deque([node_id for node_id in ancestors if in_degree[node_id] == 0])
-    #         exec_order = []
-    #         while queue:
-    #             node_id = queue.popleft()
-    #             exec_order.append(node_id)
-    #             for neighbor in adj.get(node_id, []):
-    #                 if neighbor in ancestors:
-    #                     in_degree[neighbor] -= 1
-    #                     if in_degree[neighbor] == 0:
-    #                         queue.append(neighbor)
-            
-    #         if len(exec_order) != len(ancestors):
-    #             raise ValueError("Cycle detected in the pipeline graph.")
-            
-    #     except Exception as e:
-    #         raise HTTPException(status_code=400, detail=f"Invalid pipeline structure: {e}")
-
-    #     # --- 2. Execute Nodes in Order ---
-    #     node_outputs: Dict[str, pd.DataFrame] = {} # Cache for intermediate dataframes
-    #     node_metadata: Dict[str, Dict[str, Any]] = {}
-
-    #     for node_id in exec_order:
-    #         node = nodes[node_id]
-    #         print(f"Executing Node: {node.data.get('label', node.type)} (ID: {node_id})")
-
-    #         try:
-    #             # Find parent nodes for the current node
-    #             parent_ids = [edge.source for edge in edges if edge.target == node_id]
-                
-    #             # This is a critical step: get the output from the parent node(s)
-    #             # For simplicity, we assume single-input nodes for now.
-    #             # We will handle multi-input nodes like 'processIndicators' specially.
-    #             df_input = node_outputs[parent_ids[0]].copy() if parent_ids else pd.DataFrame()
-
-    #             # --- Logic for each node type ---
-    #             if node.type == 'dataSource':
-    #                 ds_config = DataSourceConfig(**node.data)
-    #                 df_output = load_data_for_ml(
-    #                     symbol=ds_config.symbol,
-    #                     timeframe=ds_config.timeframe,
-    #                     start_date_str=ds_config.startDate,
-    #                     end_date_str=ds_config.endDate
-    #                 )
-
-    #             elif node.type == 'feature':
-    #                 # Reformat feature data for the backend function
-    #                 indicator_config = [IndicatorConfig(id=node.id, name=node.data['indicator'], params=node.data['params'])]
-    #                 indicator_tuples = transform_features_for_backend(indicator_config, nodes[parent_ids[0]].data['timeframe'])
-    #                 mock_strategy = SimpleNamespace(indicators=indicator_tuples)
-    #                 df_output = calculate_indicators(mock_strategy, df_input)
-
-    #             elif node.type == 'processIndicators':
-    #                 # This node is special: it combines multiple inputs
-    #                 selected_ids = [pid for pid, is_selected in node.data.get('selectedIndicators', {}).items() if is_selected]
-                    
-    #                 # Ensure we only process inputs that are actually connected
-    #                 connected_and_selected_ids = list(set(parent_ids) & set(selected_ids))
-
-    #                 if not connected_and_selected_ids:
-    #                     # If nothing is selected, pass through the first parent's data as a default
-    #                     df_output = df_input
-    #                 else:
-    #                     # Start with the base dataframe (e.g., from dataSource)
-    #                     base_df_parent_id = next((pid for pid in parent_ids if nodes[pid].type not in ['feature']), None)
-    #                     if base_df_parent_id:
-    #                         df_output = node_outputs[base_df_parent_id].copy()
-    #                     else: # Fallback if no non-feature parent is found
-    #                         df_output = node_outputs[parent_ids[0]].copy()
-
-    #                     # Merge selected feature columns
-    #                     for feature_node_id in connected_and_selected_ids:
-    #                         feature_df = node_outputs[feature_node_id]
-    #                         # Find the new column(s) the feature node added
-    #                         new_cols = feature_df.columns.difference(df_output.columns)
-    #                         df_output = pd.merge(df_output, feature_df[new_cols.tolist() + [feature_df.index.name if feature_df.index.name else 'timestamp']], on=feature_df.index.name if feature_df.index.name else 'timestamp', how='left')
-                    
-    #             elif node.type == 'customCode':
-    #                 custom_code = node.data.get('code', '')
-    #                 sub_type = node.data.get('subType', 'feature_engineering')
-
-    #                 if not custom_code.strip():
-    #                     df_output = df_input
-    #                 else:
-    #                     local_namespace = {}
-    #                     # We pass a copy of globals() so the exec doesn't pollute our main global scope
-    #                     exec_globals = globals().copy() 
-    #                     exec(custom_code, exec_globals, local_namespace)
-                        
-    #                     if sub_type == 'labeling':
-    #                         print("Executing custom node as 'Labeling'")
-    #                         labeling_func = local_namespace.get('generate_labels')
-    #                         if not callable(labeling_func):
-    #                             raise NameError("Labeling script must have a 'generate_labels(data)' function.")
-                            
-    #                         # By updating the function's globals with our local_namespace,
-    #                         # it can now "see" the other functions defined in the same script.
-    #                         labeling_func.__globals__.update(local_namespace)
-
-    #                         labels_series = labeling_func(df_input.copy())
-    #                         if not isinstance(labels_series, pd.Series):
-    #                             raise TypeError("'generate_labels' function must return a pandas Series.")
-                            
-    #                         df_output = df_input.copy()
-    #                         df_output['label'] = labels_series
-                            
-    #                         # Drop rows where the label might be NaN after creation
-    #                         df_labeled = df_output.dropna(subset=['label'])
-                            
-    #                         label_counts = df_labeled['label'].value_counts()
-    #                         label_distribution = {str(k): int(v) for k, v in label_counts.to_dict().items()}
-                            
-    #                         print(f"Node {node_id} Label Distribution: {label_distribution}")
-                            
-    #                         # Store this special metadata against the node's ID
-    #                         node_metadata[node_id] = {
-    #                             "label_distribution": label_distribution
-    #                         }
-
-    #                     else: # 'feature_engineering'
-    #                         print("Executing custom node as 'Feature Engineering'")
-    #                         process_func = local_namespace.get('process')
-    #                         if not callable(process_func):
-    #                             raise NameError("Feature Engineering script must have a 'process(data)' function.")
-                            
-    #                         process_func.__globals__.update(local_namespace)
-
-    #                         df_output = process_func(df_input.copy())
-    #                         if not isinstance(df_output, pd.DataFrame):
-    #                             raise TypeError("'process' function must return a pandas DataFrame.")
-                
-    #             elif node.type == 'dataScaling':
-    #                 print("Executing Data Scaling & Preprocessing Node")
-    #                 df_processed = df_input.copy()
-                    
-    #                 # Store original columns to select only feature columns for scaling/PCA
-    #                 # Exclude OHLCV, timestamp, and the label if it exists
-    #                 original_cols = ['open', 'high', 'low', 'close', 'volume', 'timestamp', 'label']
-    #                 feature_cols = [col for col in df_processed.columns if col not in original_cols]
-                    
-    #                 if not feature_cols:
-    #                     print("Warning: No feature columns found to scale.")
-    #                     df_output = df_processed # Pass through if no features
-    #                 else:
-    #                     features_df = df_processed[feature_cols]
-
-    #                     # --- A. Remove Correlated Features ---
-    #                     if node.data.get('removeCorrelated'):
-    #                         threshold = node.data.get('correlationThreshold', 0.9)
-    #                         print(f"Removing features with correlation > {threshold}")
-    #                         corr_matrix = features_df.corr().abs()
-    #                         upper_tri = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-    #                         to_drop = [column for column in upper_tri.columns if any(upper_tri[column] > threshold)]
-    #                         features_df = features_df.drop(columns=to_drop)
-    #                         print(f"Dropped {len(to_drop)} columns: {to_drop}")
-
-    #                     # --- B. Apply Scaler ---
-    #                     scaler_type = node.data.get('scaler', 'none')
-    #                     if scaler_type != 'none':
-    #                         print(f"Applying {scaler_type}")
-    #                         if scaler_type == 'StandardScaler':
-    #                             scaler = StandardScaler()
-    #                         elif scaler_type == 'MinMaxScaler':
-    #                             scaler = MinMaxScaler()
-                            
-    #                         scaled_features = scaler.fit_transform(features_df)
-    #                         features_df = pd.DataFrame(scaled_features, index=features_df.index, columns=features_df.columns)
-
-    #                     # --- C. Apply PCA ---
-    #                     if node.data.get('usePCA'):
-    #                         n_components = node.data.get('pcaComponents', 5)
-    #                         # Ensure n_components is not more than available features
-    #                         n_components = min(n_components, len(features_df.columns), len(features_df))
-    #                         print(f"Applying PCA with {n_components} components")
-    #                         pca = PCA(n_components=n_components)
-    #                         principal_components = pca.fit_transform(features_df)
-    #                         pca_cols = [f'pca_{i+1}' for i in range(n_components)]
-    #                         features_df = pd.DataFrame(data=principal_components, columns=pca_cols, index=features_df.index)
-
-    #                     # --- D. Reconstruct the DataFrame ---
-    #                     # Combine the non-feature columns with the newly processed feature columns
-    #                     non_feature_df = df_processed[[col for col in df_processed.columns if col not in feature_cols]]
-    #                     df_output = pd.concat([non_feature_df, features_df], axis=1)
-                        
-    #             elif node.type == 'dataValidation':
-    #                 print("Executing Data Validation Node")
-    #                 df_output = df_input.copy() # This node is informational
-                    
-    #                 # 1. First, calculate the split info, which does NOT require a label.
-    #                 #    We use the full input dataframe for sample counts.
-    #                 total_samples = len(df_output)
-    #                 split_info = {}
-    #                 method = node.data.get('validationMethod', 'train_test_split')
-
-    #                 if method == 'train_test_split':
-    #                     train_pct = node.data.get('trainSplit', 70) / 100.0
-    #                     split_idx = int(total_samples * train_pct)
-    #                     split_info = {
-    #                         "method": "Train/Test Split",
-    #                         "train_samples": split_idx,
-    #                         "test_samples": total_samples - split_idx,
-    #                         "total_samples": total_samples
-    #                     }
-    #                 elif method == 'walk_forward':
-    #                     train_window = node.data.get('walkForwardTrainWindow', 365)
-    #                     test_window = node.data.get('walkForwardTestWindow', 30)
-                        
-    #                     num_folds = 0
-    #                     if total_samples > train_window and test_window > 0:
-    #                         num_folds = 1 + (total_samples - train_window) // test_window
-                        
-    #                     split_info = {
-    #                         "method": "Walk-Forward",
-    #                         "train_window_size": f"{train_window} days",
-    #                         "test_window_size": f"{test_window} days",
-    #                         "approximate_folds": num_folds,
-    #                         "total_samples": total_samples
-    #                     }
-                    
-    #                 # Initialize the metadata with the universally available split info
-    #                 node_metadata[node_id] = {
-    #                     "validation_info": split_info
-    #                 }
-
-    #                 # 2. THEN, if a label column exists, add the label distribution.
-    #                 if 'label' in df_output.columns:
-    #                     print("Validation Node: Reporting on existing label column.")
-    #                     df_labeled = df_output.dropna(subset=['label'])
-    #                     label_counts = df_labeled['label'].value_counts()
-    #                     label_distribution = {str(k): int(v) for k, v in label_counts.to_dict().items()}
-                        
-    #                     # Add it to the metadata dictionary
-    #                     node_metadata[node_id]["label_distribution"] = label_distribution
-                
-    #             elif node.type == 'mlModel':
-    #                 print("Executing ML Model Node (Validation Preview)")
-    #                 df_output = df_input.copy() # This node is informational, pass data through
-                    
-    #                 model_name = node.data.get('modelName')
-    #                 hyperparameters = node.data.get('hyperparameters', {})
-                    
-    #                 # --- 2. Check if the model is unsupervised FIRST ---
-    #                 is_unsupervised = model_name in UNSUPERVISED_MODELS
-                    
-    #                 # --- A. Prepare Feature Data (common for both paths) ---
-    #                 exclude_cols = ['timestamp', 'label']
-    #                 feature_cols = [col for col in df_output.columns if col not in exclude_cols]
-                    
-    #                 if not feature_cols:
-    #                     raise ValueError("No feature columns found for model processing.")
-                    
-    #                 X_features = df_output[feature_cols]
-                    
-    #                 # --- B. Instantiate the Model ---
-    #                 model = get_model(model_name, hyperparameters)
-                    
-    #                 # --- C. Branching Logic: Unsupervised vs. Supervised ---
-    #                 if is_unsupervised:
-    #                     print(f"Processing unsupervised model: {model_name}")
-                        
-    #                     # Fit the model and get the cluster labels/predictions
-    #                     # .fit_predict() is common for clustering, .fit_transform() for PCA
-    #                     if hasattr(model, 'fit_predict'):
-    #                         clusters = model.fit_predict(X_features)
-    #                         # Add the cluster assignments as a new column
-    #                         df_output[f'{model_name}_cluster'] = clusters
-    #                     elif hasattr(model, 'fit_transform'):
-    #                         # This case is for PCA, which is already handled by the DataScaling node.
-    #                         # We can just show a message or pass through.
-    #                         print("PCA model is for transformation; use Data Scaling node for PCA.")
-                        
-    #                     # For unsupervised, we don't have traditional metrics.
-    #                     # The primary output is the modified DataFrame with the new cluster column.
-    #                     # We can still add some info to the metadata.
-    #                     node_metadata[node_id] = {
-    #                         "model_info": {
-    #                             "Model Name": model_name,
-    #                             "Problem Type": "Unsupervised",
-    #                             "Total Samples": len(X_features),
-    #                             "Total Features": len(feature_cols)
-    #                         }
-    #                     }
-                    
-    #                 else: # Supervised Path
-    #                     print(f"Processing supervised model: {model_name}")
-                        
-    #                     if 'label' not in df_output.columns:
-    #                         raise ValueError(f"Supervised model '{model_name}' requires an upstream node to have created a 'label' column.")
-                        
-    #                     df_labeled = df_output.dropna(subset=['label']).copy()
-                        
-    #                     X = df_labeled[feature_cols]
-    #                     y = df_labeled['label']
-                        
-    #                     # The rest of your supervised logic is excellent and can remain here
-    #                     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, shuffle=False)
-                        
-    #                     model.fit(X_train, y_train)
-                        
-    #                     # --- C. Evaluate Model & Gather Metrics (MODIFIED) ---
-    #                     y_pred = model.predict(X_test)
-                        
-    #                     model_metrics = {}
-    #                     model_analysis = {}
-                        
-    #                     is_classification = y.dtype != 'float' and y.nunique() < 30
-                        
-    #                     if is_classification:
-    #                         print("Calculating classification metrics...")
-    #                         model_metrics['accuracy'] = round(accuracy_score(y_test, y_pred), 4)
-    #                         # Handle binary vs. multiclass for other metrics
-    #                         avg_method = 'binary' if y.nunique() == 2 else 'weighted'
-    #                         model_metrics['precision'] = round(precision_score(y_test, y_pred, average=avg_method, zero_division=0), 4)
-    #                         model_metrics['recall'] = round(recall_score(y_test, y_pred, average=avg_method, zero_division=0), 4)
-    #                         model_metrics['f1_score'] = round(f1_score(y_test, y_pred, average=avg_method, zero_division=0), 4)
-                            
-    #                         # ROC AUC for binary classification
-    #                         if avg_method == 'binary' and hasattr(model, "predict_proba"):
-    #                             y_proba = model.predict_proba(X_test)[:, 1]
-    #                             model_metrics['roc_auc'] = round(roc_auc_score(y_test, y_proba), 4)
-                            
-    #                         report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
-                            
-    #                         # Clean up the report for JSON (convert numpy types to native Python types)
-    #                         cleaned_report = {
-    #                             str(key): {str(k): float(v) for k, v in value.items()} if isinstance(value, dict) else float(value)
-    #                             for key, value in report.items()
-    #                         }
-    #                         model_analysis['classification_report'] = cleaned_report
-                            
-    #                         # Get class labels for the confusion matrix
-    #                         class_labels = sorted(list(y.unique()))
-    #                         cm = confusion_matrix(y_test, y_pred, labels=class_labels)
-    #                         model_analysis['confusion_matrix'] = {
-    #                             'labels': [str(label) for label in class_labels],
-    #                             'values': cm.tolist() # Convert numpy array to nested list
-    #                         }
-                            
-    #                         # --- Get Feature Importances ---
-    #                         if hasattr(model, 'feature_importances_'):
-    #                             importances = model.feature_importances_
-    #                             feature_importance_data = sorted(
-    #                                 zip(X.columns, importances),
-    #                                 key=lambda x: x[1],
-    #                                 reverse=True
-    #                             )
-    #                             model_analysis['feature_importance'] = [
-    #                                 {'feature': name, 'importance': float(imp)}
-    #                                 for name, imp in feature_importance_data
-    #                             ]
-                            
-    #                     else: # Regression
-    #                         print("Calculating regression metrics...")
-    #                         model_metrics['mean_squared_error'] = round(mean_squared_error(y_test, y_pred), 4)
-    #                         model_metrics['r2_score'] = round(r2_score(y_test, y_pred), 4)
-                            
-    #                         if hasattr(model, 'feature_importances_'):
-    #                             importances = model.feature_importances_
-    #                             feature_importance_data = sorted(zip(X.columns, importances), key=lambda x: x[1], reverse=True)
-    #                             model_analysis['feature_importance'] = [{'feature': name, 'importance': float(imp)} for name, imp in feature_importance_data]
-                        
-    #                     # --- D. Store results in metadata ---
-    #                     node_metadata[node_id] = {
-    #                         "model_metrics": model_metrics,
-    #                         "model_info": {
-    #                             "Model Name": model_name,
-    #                             "Problem Type": "Classification" if is_classification else "Regression",
-    #                             "Train Samples": len(y_train),
-    #                             "Test Samples": len(y_test),
-    #                             "Total Features": len(feature_cols)
-    #                         },
-    #                         "model_analysis": model_analysis
-    #                     }
-                
-    #             elif node.type == 'charting':
-    #                 print("Executing Charting Node")
-    #                 df_output = df_input.copy() # This node is informational, pass data through
-                    
-    #                 chart_config = node.data
-    #                 chart_type = chart_config.get('chartType')
-    #                 x_axis = chart_config.get('xAxis')
-    #                 y_axis = chart_config.get('yAxis')
-    #                 group_by = chart_config.get('groupBy')
-                    
-    #                 chart_data = []
-    #                 SAMPLE_LIMIT = 5000 # Max points to send to the frontend
-                    
-    #                 if chart_type == 'histogram' and x_axis:
-    #                     # Create bins for the histogram
-    #                     counts, bins = np.histogram(df_output[x_axis].dropna(), bins=20)
-    #                     chart_data = [
-    #                         {"bin": f"{bins[i]:.2f}-{bins[i+1]:.2f}", "count": int(counts[i])}
-    #                         for i in range(len(counts))
-    #                     ]
-    #                 elif x_axis and y_axis:
-    #                     cols_to_keep = [x_axis, y_axis]
-    #                     if group_by:
-    #                         cols_to_keep.append(group_by)
-                        
-    #                     plot_df = df_output[list(set(cols_to_keep))].dropna()
-                        
-    #                     # --- NEW: APPLY SAMPLING ---
-    #                     if len(plot_df) > SAMPLE_LIMIT:
-    #                         print(f"Dataset too large ({len(plot_df)} rows). Sampling down to {SAMPLE_LIMIT}.")
-    #                         plot_df = plot_df.sample(n=SAMPLE_LIMIT, random_state=42)
-                        
-    #                     chart_data = plot_df.to_dict(orient='records')
-                        
-    #                 node_metadata[node_id] = {
-    #                     "chart_config": chart_config,
-    #                     "chart_data": chart_data,
-    #                     "info_message": f"Displaying {len(chart_data)} of {len(df_output)} total points." if len(chart_data) < len(df_output) else None
-    #                 }
-                
-    #             else:
-    #                 # Default case: pass data through if node type is unknown
-    #                 df_output = df_input
-                
-    #             node_outputs[node_id] = df_output
-            
-    #         except Exception as e:
-    #             print(f"ERROR executing node {node_id}: {e}")
-    #             traceback.print_exc()
-    #             error_info = {
-    #                 "error": f"Error in node '{node.data.get('label', node.type)}': {e}",
-    #                 "nodeId": node_id
-    #             }
-    #             return {"data": [], "info": error_info}
-
-
-    #     # --- 3. Format and Return the Final Output ---
-    #     final_df = node_outputs.get(target_node_id)
-    #     if final_df is None or final_df.empty:
-    #         return {"data": [], "info": {"message": "No data produced by the target node."}}
-        
-    #     # Use your existing helper to generate rich metadata
-    #     final_info = generate_df_info(final_df.copy(), nodes[exec_order[0]].data['symbol'], nodes[exec_order[0]].data['timeframe'])
-        
-    #     if target_node_id in node_metadata:
-    #         print(f"Merging special metadata for node {target_node_id}")
-    #         final_info.update(node_metadata[target_node_id])
-        
-    #     # Sanitize and format for JSON
-    #     final_df.replace([np.inf, -np.inf], np.nan, inplace=True)
-    #     df_for_json = final_df.astype(object).where(pd.notnull(final_df), None)
-        
-    #     if 'timestamp' in df_for_json.columns:
-    #         df_for_json['timestamp'] = (pd.to_datetime(df_for_json['timestamp']).astype('int64') // 10**6)
-
-    #     data_as_dicts = df_for_json.to_dict(orient='records')
-        
-    #     return {"data": data_as_dicts, "info": final_info}
-
 
     ####################################
 

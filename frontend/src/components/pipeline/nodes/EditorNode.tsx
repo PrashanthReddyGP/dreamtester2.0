@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo, useEffect, useRef } from 'react';
 import { Handle, Position } from 'reactflow';
 import type { NodeProps } from 'reactflow';
 import { Paper, Box, IconButton, CircularProgress, FormControl, Select, MenuItem } from '@mui/material';
@@ -8,14 +8,17 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import Editor from '@monaco-editor/react';
 import type { OnChange } from '@monaco-editor/react';
 import { NodeHeader } from './NodeHeader';
-
+import debounce from 'lodash.debounce';
 import { usePipeline } from '../../../context/PipelineContext';
+import { StopPropagationBox } from './StopPropagationBox';
 
 interface EditorNodeData {
     label: string;
     code: string;
     selectedTemplateKey?: string; // Track which template is selected
 }
+
+const DEBOUNCE_DELAY = 500; // 500ms delay
 
 export const EditorNode = ({ id, data }: NodeProps<EditorNodeData>) => {
     const { 
@@ -30,6 +33,7 @@ export const EditorNode = ({ id, data }: NodeProps<EditorNodeData>) => {
 
     const amIProcessing = isProcessing && processingNodeId === id;
 
+    // The handler that will be passed to the editor's onChange prop
     const handleEditorChange: OnChange = (value) => {
         updateNodeData(id, { code: value || '' });
     };
@@ -105,79 +109,76 @@ export const EditorNode = ({ id, data }: NodeProps<EditorNodeData>) => {
                 </IconButton>
             </NodeHeader>
 
-            {/* FIX: Add nodrag and stopPropagation to this container */}
-            <Box 
-                className="nodrag"
-                onMouseDown={(e) => e.stopPropagation()}
-                sx={{ p: 1, display: 'flex', alignItems: 'center', gap: 1, bgcolor: 'background.paper', borderBottom: '1px solid #444' }}
-            >
-                <FormControl fullWidth size="small">
-                    <Select
-                        value={data.selectedTemplateKey || ''}
-                        onChange={handleTemplateChange}
-                        displayEmpty
-                        inputProps={{ 'aria-label': 'Select Template' }}
-                        MenuProps={{ // This helps with positioning inside the ReactFlow pane
-                            container: document.body 
-                        }}
-                        sx={{
-                            bgcolor: '#2e2e2eff',
-                            color: 'white',
-                            '& .MuiSvgIcon-root': { color: 'white' },
-                            '& .MuiOutlinedInput-notchedOutline': { border: 'none' }
-                        }}
-                    >
-                        <MenuItem value="" disabled>
-                            <em>Select a template...</em>
-                        </MenuItem>
-                        {Object.entries(feTemplates).map(([key, template]) => (
-                            <MenuItem key={key} value={key}>
-                                {template.name}
-                            </MenuItem>
-                        ))}
-                    </Select>
-                </FormControl>
-                <IconButton size="small" sx={{ color: 'white' }} onClick={handleSave} aria-label="save template">
-                    <SaveIcon />
-                </IconButton>
-                <IconButton
-                    size="small"
-                    sx={{ color: 'white' }}
-                    onClick={handleDelete}
-                    disabled={!currentTemplate?.isDeletable}
-                    aria-label="delete template"
-                >
-                    <DeleteIcon />
-                </IconButton>
-            </Box>
+            <StopPropagationBox>
 
-            <Box
-                className="nodrag"
-                onMouseDown={(event) => event.stopPropagation()}
-                sx={{
-                    border: '1px solid #444',
-                    borderRadius: '0 0 8px 8px',
-                    overflow: 'hidden'
-                }}
-            >
-                <Editor
-                    height="200px"
-                    language="python"
-                    theme="app-dark-theme"
-                    value={data.code}
-                    onChange={handleEditorChange}
-                    loading={<CircularProgress size={40} sx={{ display: 'block', margin: 'auto', my: 2 }} />}
-                    options={{
-                        minimap: { enabled: false },
-                        fontSize: 14,
-                        wordWrap: 'on',
-                        scrollBeyondLastLine: false,
-                        padding: {top: 10},
-                        automaticLayout: true,
-                        lineNumbers: 'off',
+                <Box 
+                    className="nodrag"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    sx={{ p: 1, display: 'flex', alignItems: 'center', gap: 1, bgcolor: 'background.paper', borderBottom: '1px solid #444' }}
+                >
+                    <FormControl fullWidth size="small">
+                        <Select
+                            value={data.selectedTemplateKey || ''}
+                            onChange={handleTemplateChange}
+                            displayEmpty
+                            inputProps={{ 'aria-label': 'Select Template' }}
+                            MenuProps={{ // This helps with positioning inside the ReactFlow pane
+                                container: document.body 
+                            }}
+                        >
+                            <MenuItem value="" disabled>
+                                <em>Select a template...</em>
+                            </MenuItem>
+                            {Object.entries(feTemplates).map(([key, template]) => (
+                                <MenuItem key={key} value={key}>
+                                    {template.name}
+                                </MenuItem>
+                            ))}
+                        </Select>
+                    </FormControl>
+                    <IconButton size="small" sx={{ color: 'white' }} onClick={handleSave} aria-label="save template">
+                        <SaveIcon />
+                    </IconButton>
+                    <IconButton
+                        size="small"
+                        sx={{ color: 'white' }}
+                        onClick={handleDelete}
+                        disabled={!currentTemplate?.isDeletable}
+                        aria-label="delete template"
+                    >
+                        <DeleteIcon />
+                    </IconButton>
+                </Box>
+
+                <Box
+                    className="nodrag"
+                    onMouseDown={(event) => event.stopPropagation()}
+                    sx={{
+                        border: '1px solid #444',
+                        borderRadius: '0 0 8px 8px',
+                        overflow: 'hidden'
                     }}
-                />
-            </Box>
+                >
+                    <Editor
+                        height="200px"
+                        language="python"
+                        theme="app-dark-theme"
+                        value={data.code}
+                        onChange={handleEditorChange}
+                        loading={<CircularProgress size={40} sx={{ display: 'block', margin: 'auto', my: 2 }} />}
+                        options={{
+                            minimap: { enabled: false },
+                            fontSize: 14,
+                            wordWrap: 'on',
+                            scrollBeyondLastLine: false,
+                            padding: {top: 10},
+                            automaticLayout: true,
+                            lineNumbers: 'off',
+                        }}
+                    />
+                </Box>
+            
+            </StopPropagationBox>
             
             <Handle type="source" position={Position.Right} style={{ ...handleStyle, backgroundColor: '#555'}} />
         </Paper>

@@ -1,22 +1,87 @@
-import React, { memo } from 'react';
+import React, { memo, useState, useEffect, useCallback, useRef } from 'react';
 import { Handle, Position } from 'reactflow';
 import type { NodeProps } from 'reactflow';
-import { Paper, Typography, Box, Select, MenuItem, FormControl, InputLabel, TextField, Autocomplete, Stack, CircularProgress, FormControlLabel, Checkbox } from '@mui/material';
+import { Paper, Box, Select, MenuItem, FormControl, InputLabel, TextField, Autocomplete, Stack, CircularProgress, FormControlLabel, Checkbox } from '@mui/material';
 import { usePipeline } from '../../../context/PipelineContext';
 import type { IndicatorSchema, IndicatorParamDef } from '../types';
 import { NodeHeader } from './NodeHeader'; // Import the new header
 
-// --- Sub-component for rendering parameter inputs ---
+// --- A NEW, SMARTER Sub-component for rendering parameter inputs ---
 const ParameterInput: React.FC<{
     paramDef: IndicatorParamDef;
-    value: any;
-    onChange: (e: React.ChangeEvent<any>, checked?: boolean) => void;
+    value: any; // The global value from the pipeline context
+    // This now receives the raw event, not a pre-processed value
+    onChange: (paramName: string, value: any, type: 'number' | 'string' | 'boolean') => void;
 }> = ({ paramDef, value, onChange }) => {
+
+    // 1. Local state to manage what's VISIBLE in the text field. It's ALWAYS a string.
+    const [inputValue, setInputValue] = useState(String(value ?? ''));
+    
+    // 2. A ref to hold the debounce timer
+    const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
+
+    // 3. Effect to sync local state if the GLOBAL state changes from outside
+    //    (e.g., loading a workflow, changing indicator type)
+    useEffect(() => {
+        setInputValue(String(value ?? ''));
+    }, [value]);
+    
+    // 4. The debounced function to update the global state
+    const debouncedGlobalUpdate = useCallback((newVal: string) => {
+        let finalValue: string | number | boolean = newVal;
+        const { name, type } = paramDef;
+
+        if (type === 'number') {
+            const isTemplateVariable = newVal.startsWith('{{') && newVal.endsWith('}}');
+            if (isTemplateVariable) {
+                finalValue = newVal;
+            } else {
+                const numValue = parseFloat(newVal);
+                // Only store a number if it's valid, otherwise keep the string
+                // the user typed so they can see their input.
+                finalValue = isNaN(numValue) ? newVal : numValue;
+            }
+        }
+        // Call the parent's update function
+        onChange(name, finalValue, type);
+    }, [paramDef, onChange]);
+
+
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newStringValue = e.target.value;
+        // Update the local state IMMEDIATELY for a responsive UI
+        setInputValue(newStringValue);
+
+        // Clear any existing debounce timer
+        if (debounceTimeout.current) {
+            clearTimeout(debounceTimeout.current);
+        }
+
+        // Set a new timer to update the global state after 500ms of inactivity
+        debounceTimeout.current = setTimeout(() => {
+            debouncedGlobalUpdate(newStringValue);
+        }, 500);
+    };
+    
+    const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>, checked: boolean) => {
+        const { name, type } = paramDef;
+        setInputValue(String(checked)); // Update local state
+        onChange(name, checked, type); // Update global state immediately for checkboxes
+    };
+
+    const handleSelectChange = (e: React.ChangeEvent<{ value: unknown }>) => {
+        const { name, type } = paramDef;
+        const val = e.target.value as string;
+        setInputValue(val); // Update local state
+        onChange(name, val, type); // Update global state immediately for selects
+    };
+
+
     switch (paramDef.type) {
         case 'boolean':
             return (
                 <FormControlLabel
-                    control={<Checkbox checked={!!value} onChange={onChange} />}
+                    control={<Checkbox checked={!!value} onChange={handleCheckboxChange} />}
                     label={paramDef.displayName || paramDef.name}
                     sx={{ textTransform: 'capitalize' }}
                 />
@@ -25,7 +90,7 @@ const ParameterInput: React.FC<{
             return (
                 <FormControl fullWidth size="small">
                     <InputLabel>{paramDef.displayName || paramDef.name}</InputLabel>
-                    <Select label={paramDef.displayName || paramDef.name} value={value || ''} onChange={onChange}>
+                    <Select label={paramDef.displayName || paramDef.name} value={value || ''} onChange={handleSelectChange as any}>
                         {paramDef.options?.map(opt => <MenuItem key={opt} value={opt}>{opt}</MenuItem>)}
                     </Select>
                 </FormControl>
@@ -34,13 +99,17 @@ const ParameterInput: React.FC<{
         default:
             return (
                 <TextField
-                    type="number"
+                    type="text"
                     size="small"
                     variant="outlined"
                     label={paramDef.displayName || paramDef.name}
-                    value={value}
-                    onChange={onChange}
+                    // The value is now driven by our fast LOCAL state
+                    value={inputValue}
+                    onChange={handleInputChange}
                     sx={{ width: '265px' }}
+                    InputProps={{
+                        placeholder: "Enter number or {{variable}}",
+                    }}
                 />
             );
     }
@@ -80,13 +149,10 @@ export const FeatureNode = memo(({ id, data, indicatorSchema, isLoadingSchema }:
         });
     };
 
+    // This function is now simplified, as the smart logic lives in ParameterInput.
+    // It just updates the global state.
     const handleParamChange = (paramName: string, value: any, type: 'number' | 'string' | 'boolean') => {
-        let finalValue = value;
-        if (type === 'number') {
-            finalValue = Number(value) || 0; // Ensure it's a number
-        }
-        
-        const updatedParams = { ...data.params, [paramName]: finalValue };
+        const updatedParams = { ...data.params, [paramName]: value };
         updateNodeData(id, { params: updatedParams });
     };
 
@@ -150,10 +216,8 @@ export const FeatureNode = memo(({ id, data, indicatorSchema, isLoadingSchema }:
                                 key={paramDef.name}
                                 paramDef={paramDef}
                                 value={data.params[paramDef.name]}
-                                onChange={(e, checked) => {
-                                    const value = paramDef.type === 'boolean' ? checked : e.target.value;
-                                    handleParamChange(paramDef.name, value, paramDef.type);
-                                }}
+                                // Pass the simplified handler down
+                                onChange={handleParamChange}
                             />
                         ))}
                     </Stack>

@@ -1,5 +1,5 @@
 // PipelineEditor.tsx
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { Box, Menu, MenuItem, IconButton, ListItemText } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete'; // Import the delete icon
 import ReactFlow, {
@@ -9,6 +9,7 @@ import ReactFlow, {
     useReactFlow,
 } from 'reactflow';
 import type { Node, Edge } from 'reactflow'; // Add Node, Edge here
+import { useNavigate } from 'react-router-dom'; // Add useNavigate
 import 'reactflow/dist/style.css';
 import { styled } from '@mui/material/styles'; // Import styled
 import NestedMenuItem from '../components/common/NestedMenuItem'; // Adjust path if necessary
@@ -42,9 +43,13 @@ import { MergeNode } from '../components/pipeline/nodes/MergeNode';
 import { HyperparameterTuningNode } from '../components/pipeline/nodes/HyperparameterTuningNode';
 import { ClassImbalanceNode } from '../components/pipeline/nodes/ClassImbalanceNode';
 import { BacktesterNode } from '../components/pipeline/nodes/BacktesterNode';
-
+import { BaggingTrainerNode } from '../components/pipeline/nodes/BaggingTrainerNode';
 import EditIcon from '@mui/icons-material/Edit';
 import { FeaturesCorrelationNode } from '../components/pipeline/nodes/FeaturesCorrelationNode';
+import { LoopNode } from '../components/pipeline/nodes/LoopNode';
+import { NeuralNetworkTrainerNode } from '../components/pipeline/nodes/NeuralNetworkTrainerNode';
+import { DataProfilerNode } from '../components/pipeline/nodes/DataProfilerNode';
+import { AdvancedDataScalingNode } from '../components/pipeline/nodes/AdvancedDataScalingNode';
 
 const StyledControls = styled(ReactFlowControls)(({ theme }) => ({
     backgroundColor: 'theme.palette.background.paper',
@@ -86,8 +91,6 @@ const PipelineEditorContent: React.FC = () => {
         isFetchingSymbols,
         indicatorSchema,
         isLoadingSchema,
-        selectNode,
-        selectedNodeId,
         pipelineNodeCache,
         isProcessing,
         processingNodeId,
@@ -99,13 +102,139 @@ const PipelineEditorContent: React.FC = () => {
         saveLabelingTemplate,
         deleteFeTemplate,
         deleteLabelingTemplate,
+        navigationTarget,      
+        setNavigationTarget,  
         editingNodeId,
         setEditingNodeId,
+        undo,
+        redo,
+        canUndo,
+        canRedo,
     } = usePipeline();
 
-    const { project } = useReactFlow();
+    const processedEdges = useMemo(() => {
+        // Create a quick lookup map for node positions
+        const nodesMap = new Map(nodes.map(node => [node.id, node]));
+
+        return edges.map(edge => {
+            const sourceNode = nodesMap.get(edge.source);
+            const targetNode = nodesMap.get(edge.target);
+
+            // A simple heuristic for detecting a "feedback" loop:
+            // If the source node is positioned to the right of the target node.
+            if (sourceNode && targetNode && sourceNode.position.x > targetNode.position.x) {
+                return {
+                    ...edge,
+                    type: 'smoothstep', // Assign the smoothstep type for feedback loops
+                    pathOptions: {
+                        borderRadius: 16,
+                    }
+                };
+            }
+
+            // For all other "forward" connections, use the default bezier curve.
+            // By not setting a type, it will use the default.
+            return edge;
+        });
+    }, [nodes, edges]);
+
+    const { project, getNodes, getEdges } = useReactFlow();
+    const navigate = useNavigate();
+
+    // State for our clipboard
+    const [copiedNode, setCopiedNode] = useState<Node | null>(null);
 
     const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
+
+    // Keyboard shortcut handler
+    useEffect(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            const isModifierPressed = event.ctrlKey || event.metaKey;
+
+            // Use event.target instead of document.activeElement for a more reliable check.
+            const target = event.target as HTMLElement;
+
+            // Use .closest() to check if the event originated from within an input,
+            // a textarea, or any content-editable element. This is much more reliable
+            // than checking event.target alone, especially for complex components.
+            const isTyping = target.closest(
+                'input, textarea, [contenteditable="true"]'
+            );
+            
+            // The rest of your logic remains the same.
+            if (isTyping) {
+                // A special case for the 'Escape' key. We might want to allow it to
+                // bubble up so it can be used to unfocus an input.
+                if (event.key === 'Escape') {
+                    // Optionally let escape bubble up
+                } else {
+                // Otherwise, do nothing and let the browser handle the typing.
+                return;
+                }
+            }
+
+            // Handle Delete/Backspace for nodes and edges
+            if (event.key === 'Delete' || event.key === 'Backspace') {
+                event.preventDefault();
+                const selectedNodes = getNodes().filter((n) => n.selected);
+                const selectedEdges = getEdges().filter((e) => e.selected);
+                if (selectedNodes.length > 0 || selectedEdges.length > 0) {
+                    const nodeIdsToDelete = selectedNodes.map(n => n.id);
+                    const edgeIdsToDelete = selectedEdges.map(e => e.id);
+                    nodeIdsToDelete.forEach(id => deleteElement(id, 'node'));
+                    edgeIdsToDelete.forEach(id => deleteElement(id, 'edge'));
+                }
+            }
+
+            // Handle Ctrl/Cmd shortcuts
+            if (isModifierPressed) {
+                switch (event.key.toLowerCase()) {
+                    case 'c': {
+                        // --- THE FIX IS HERE ---
+                        const selection = window.getSelection();
+                        const hasTextSelection = selection && selection.toString().length > 0;
+
+                        // If the user has selected any text on the page, DO NOTHING.
+                        // Let the browser perform its default copy action.
+                        if (hasTextSelection) {
+                            break;
+                        }
+                        
+                        // Otherwise, if no text is selected, proceed with our custom "copy node" logic.
+                        event.preventDefault(); // Now it's safe to prevent default
+                        const selectedNode = getNodes().find((n) => n.selected);
+                        if (selectedNode) {
+                            setCopiedNode(selectedNode);
+                        }
+                        break;
+                    }
+                    case 'v': {
+                        event.preventDefault();
+                        if (copiedNode) {
+                            const newPosition = { x: copiedNode.position.x + 30, y: copiedNode.position.y + 30 };
+                            const newData = { ...copiedNode.data, label: `${copiedNode.data.label} (Copy)` };
+                            addNode(copiedNode.type!, newPosition, undefined, newData);
+                        }
+                        break;
+                    }
+                    case 'z': {
+                        event.preventDefault();
+                        if (event.shiftKey) {
+                            if (canRedo) redo();
+                        } else {
+                            if (canUndo) undo();
+                        }
+                        break;
+                    }
+                }
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [addNode, deleteElement, getNodes, getEdges, copiedNode, undo, redo, canUndo, canRedo]);
 
     const [menu, setMenu] = useState<{
         id: string | null;
@@ -121,6 +250,42 @@ const PipelineEditorContent: React.FC = () => {
 
     const [isPanelOpen, setIsPanelOpen] = useState(true);
     const [panelPosition, setPanelPosition] = useState<'left' | 'right' | 'top' | 'bottom'>('right');
+    
+    useEffect(() => {
+        // If navigationTarget has a path...
+        if (navigationTarget) {
+            // ...navigate to it.
+            navigate(navigationTarget);
+            // And IMMEDIATELY reset the target to null to prevent re-navigation
+            // if this component re-renders for other reasons.
+            setNavigationTarget(null);
+        }
+    }, [navigationTarget, navigate, setNavigationTarget]); // Dependencies
+
+    // Effect to aggressively prevent default middle-mouse button behavior (auto-scroll)
+    // using the event capture phase to eliminate input lag.
+    useEffect(() => {
+        const rfWrapper = reactFlowWrapperRef.current;
+        if (!rfWrapper) return;
+
+        const handleMouseDown = (event: MouseEvent) => {
+            // Check if the middle mouse button is pressed (event.button === 1)
+            if (event.button === 1) {
+                // ONLY prevent the default browser action (autoscroll).
+                // DO NOT stop propagation, as that prevents React Flow from getting the event.
+                event.preventDefault(); 
+            }
+        };
+
+        // Add the event listener in the CAPTURE phase.
+        rfWrapper.addEventListener('mousedown', handleMouseDown, { capture: true });
+
+        // The cleanup function MUST also use the same capture option.
+        return () => {
+            rfWrapper.removeEventListener('mousedown', handleMouseDown, { capture: true });
+        };
+    }, []); // Empty dependency array is correct.
+
 
     const onConnectStart = useCallback((_, { nodeId, handleType }) => {
         connectingNodeId.current = nodeId;
@@ -186,17 +351,7 @@ const PipelineEditorContent: React.FC = () => {
         addNode(nodeType, position, connectingNode);
     };
 
-    const handleRenameNode = () => {
-        if (!menu || !menu.id || menu.type !== 'node') return;
-
-        // 1. Set the editing state in the context.
-        setEditingNodeId(menu.id);
-        // 2. Set the selected state. This will change the `selected` prop
-        //    on the node, busting the React.memo cache and forcing a re-render.
-        selectNode(menu.id);
-
-        handleClose();
-    };
+    const handleRenameNode = () => { if (!menu || !menu.id || menu.type !== 'node') return; setEditingNodeId(menu.id); handleClose(); };
 
     // We memoize the nodeTypes object to prevent it from being recreated on every render.
     // The dependency array is stable because the lists and schemas only load once.
@@ -220,17 +375,22 @@ const PipelineEditorContent: React.FC = () => {
         processIndicators: ProcessIndicatorsNode,
         merge: MergeNode,
         notes: NotesNode,
+        loop: LoopNode,
         customCode: EditorNode,
         customLabeling: LabelingNode,
+        dataProfiler: DataProfilerNode,
         dataScaling: DataScalingNode,
+        advancedDataScaling: AdvancedDataScalingNode,
         dataValidation: DataValidationNode,
         classImbalance: ClassImbalanceNode,
         charting: ChartingNode,
         featuresCorrelation: FeaturesCorrelationNode,
         modelTrainer: ModelTrainerNode,
+        neuralNetworkTrainer: NeuralNetworkTrainerNode,
         hyperparameterTuning: HyperparameterTuningNode, 
         modelPredictor: ModelPredictorNode,
         backtester: BacktesterNode,
+        baggingTrainer: BaggingTrainerNode,
     }), [symbolList, isFetchingSymbols, indicatorSchema, isLoadingSchema]); // Stable dependencies
 
 
@@ -239,14 +399,6 @@ const PipelineEditorContent: React.FC = () => {
         handleClose();
         deleteElement(menu.id, menu.type);
     };
-
-    const nodesWithControlledSelection = useMemo(() => {
-        return nodes.map(node => ({
-            ...node,
-            selected: node.id === selectedNodeId,
-        }));
-    }, [nodes, selectedNodeId]);
-
 
     const handleAddNodeFromTemplate = (
         template: FETemplate | LabelingTemplate, 
@@ -313,50 +465,31 @@ const PipelineEditorContent: React.FC = () => {
 
     const isHorizontal = panelPosition === 'left' || panelPosition === 'right';
 
-    const panelComponent = (
-        <Panel
-            // The ref is no longer passed
-            collapsible={true}
-            collapsedSize={0}
-            defaultSize={38}
-            minSize={15}
-            onCollapse={handleCollapse}
-            onExpand={handleExpand}
-        >
-            <SidePanel
-                isPanelOpen={isPanelOpen}
-                panelPosition={panelPosition}
-                setPanelPosition={setPanelPosition}
-                togglePanel={togglePanel}
-                displayData={dataForDisplay.data}
-                displayInfo={dataForDisplay.info}
-                selectedNode={nodes.find(n => n.id === selectedNodeId)} // Pass the selected node itself
-            />
-        </Panel>
+    const panelComponent = ( 
+        <Panel collapsible={true} collapsedSize={0} defaultSize={25} minSize={15} onCollapse={handleCollapse} onExpand={handleExpand} > 
+            <SidePanel 
+                isPanelOpen={isPanelOpen} 
+                panelPosition={panelPosition} 
+                setPanelPosition={setPanelPosition} 
+                togglePanel={togglePanel} 
+                displayData={dataForDisplay.data} 
+                displayInfo={dataForDisplay.info} 
+                selectedNode={nodes.find(n => n.selected)} /> 
+        </Panel> 
     );
 
     const reactFlowComponent = (
         <Panel defaultSize={62} minSize={30}>
             <Box sx={{ width: '100%', height: '100%' }} ref={reactFlowWrapperRef}>
                 <ReactFlow
-                    nodes={nodesWithControlledSelection}
-                    edges={edges}
+                    nodes={nodes}
+                    edges={processedEdges}
                     onNodesChange={onNodesChange}
                     onEdgesChange={onEdgesChange}
                     onConnect={onConnect}
                     onConnectStart={onConnectStart}
                     onConnectEnd={onConnectEnd}
                     nodeTypes={nodeTypes}
-                    onNodeClick={(_, node) => {
-                        // Clicking another node should select it and exit rename mode
-                        selectNode(node.id);
-                        setEditingNodeId(null);
-                    }}
-                    onPaneClick={() => {
-                        // Clicking the background should deselect and exit rename mode
-                        selectNode(null);
-                        setEditingNodeId(null);
-                    }}
                     onPaneContextMenu={(e) => onContextMenu(e)}
                     onNodeContextMenu={(e, node) => onContextMenu(e, node)}
                     onEdgeContextMenu={(e, edge) => onContextMenu(e, edge)}
@@ -367,8 +500,7 @@ const PipelineEditorContent: React.FC = () => {
                     maxZoom={1}
                     panOnScroll={false}
                     selectionOnDrag={true}
-                    panOnDrag={[1, 2]}
-                    deleteKeyCode={['Delete', 'Backspace']}
+                    panOnDrag={[1]}
                     connectionLineStyle={{
                         strokeWidth: 2,
                         stroke: '#eaeaeaff',
@@ -405,7 +537,7 @@ const PipelineEditorContent: React.FC = () => {
                 <>
                     <Box sx={{ width: '100%', height: '100%', overflow: 'hidden' }} ref={reactFlowWrapperRef}>
                         <ReactFlow
-                            nodes={nodesWithControlledSelection}
+                            nodes={nodes}
                             edges={edges}
                             onNodesChange={onNodesChange}
                             onEdgesChange={onEdgesChange}
@@ -413,16 +545,6 @@ const PipelineEditorContent: React.FC = () => {
                             onConnectStart={onConnectStart}
                             onConnectEnd={onConnectEnd}
                             nodeTypes={nodeTypes}
-                            onNodeClick={(_, node) => {
-                                // Clicking another node should select it and exit rename mode
-                                selectNode(node.id);
-                                setEditingNodeId(null);
-                            }}
-                            onPaneClick={() => {
-                                // Clicking the background should deselect and exit rename mode
-                                selectNode(null);
-                                setEditingNodeId(null);
-                            }}
                             onPaneContextMenu={(e) => onContextMenu(e)}
                             onNodeContextMenu={(e, node) => onContextMenu(e, node)}
                             onEdgeContextMenu={(e, edge) => onContextMenu(e, edge)}
@@ -433,8 +555,7 @@ const PipelineEditorContent: React.FC = () => {
                             maxZoom={1.2}
                             panOnScroll={false}
                             selectionOnDrag={true}
-                            panOnDrag={[1, 2]}
-                            deleteKeyCode={['Delete', 'Backspace']}
+                            panOnDrag={[1]}
                             connectionLineStyle={{
                                 strokeWidth: 2,
                                 stroke: '#eaeaeaff',
@@ -475,6 +596,7 @@ const PipelineEditorContent: React.FC = () => {
                     <MenuItem key="add-proc" onClick={() => handleAddNode('processIndicators')}>Add Indicator Processor</MenuItem>,
                     <MenuItem key="add-merge" onClick={() => handleAddNode('merge')}>Add Merge Node</MenuItem>,
                     <MenuItem key="add-notes" onClick={() => handleAddNode('notes')}>Add Notes</MenuItem>,
+                    <MenuItem key="add-loop" onClick={() => handleAddNode('loop')}>Add Loop Node</MenuItem>,
                     <MenuItem key="add-editor" onClick={() => handleAddNode('customCode')}>Add Editor Node</MenuItem>,
                     <NestedMenuItem
                         key="fe-templates"
@@ -541,15 +663,19 @@ const PipelineEditorContent: React.FC = () => {
                             </MenuItem>
                         ))}
                     </NestedMenuItem>,
-                    <MenuItem key="add-scaling" onClick={() => handleAddNode('dataScaling')}>Add Data Scaling</MenuItem>,
-                    <MenuItem key="add-validation" onClick={() => handleAddNode('dataValidation')}>Add Data Validation</MenuItem>,
-                    <MenuItem key="add-charting" onClick={() => handleAddNode('charting')}>Add Charting Node</MenuItem>,
-                    <MenuItem key="add-featcorr" onClick={() => handleAddNode('featuresCorrelation')}>Add Features Correlation Node</MenuItem>,
-                    <MenuItem key="add-trainer" onClick={() => handleAddNode('modelTrainer')}>Add ML Trainer</MenuItem>,
-                    <MenuItem key="add-imbalance" onClick={() => handleAddNode('classImbalance')}>Add Class Imbalancer</MenuItem>,
-                    <MenuItem key="add-hp-tuning" onClick={() => handleAddNode('hyperparameterTuning')}>Add Hyperparameter Tuning</MenuItem>,
-                    <MenuItem key="add-predictor" onClick={() => handleAddNode('modelPredictor')}>Add ML Predictor</MenuItem>,
-                    <MenuItem key="add-backtester" onClick={() => handleAddNode('backtester')}>Add Backtester</MenuItem>,
+                    <MenuItem key="add-profiler" onClick={() => handleAddNode('dataProfiler')}>Data Profiler Node</MenuItem>,
+                    <MenuItem key="add-scaling" onClick={() => handleAddNode('dataScaling')}>Data Scaling Node</MenuItem>,
+                    <MenuItem key="add-adv-scaling" onClick={() => handleAddNode('advancedDataScaling')}>Advanced Data Scaling Node</MenuItem>,
+                    <MenuItem key="add-validation" onClick={() => handleAddNode('dataValidation')}>Data Validation Node</MenuItem>,
+                    <MenuItem key="add-charting" onClick={() => handleAddNode('charting')}>Charting Node</MenuItem>,
+                    <MenuItem key="add-featcorr" onClick={() => handleAddNode('featuresCorrelation')}>Features Correlation Node</MenuItem>,
+                    <MenuItem key="add-trainer" onClick={() => handleAddNode('modelTrainer')}>ML Trainer Node</MenuItem>,
+                    <MenuItem key="add-neuralnet" onClick={() => handleAddNode('neuralNetworkTrainer')}>Neural Network Trainer Node</MenuItem>,
+                    <MenuItem key="add-bagging" onClick={() => handleAddNode('baggingTrainer')}>Bagging Trainer Node</MenuItem>,
+                    <MenuItem key="add-imbalance" onClick={() => handleAddNode('classImbalance')}>Class Imbalancer Node</MenuItem>,
+                    <MenuItem key="add-hp-tuning" onClick={() => handleAddNode('hyperparameterTuning')}>Hyperparameter Tuning Node</MenuItem>,
+                    <MenuItem key="add-predictor" onClick={() => handleAddNode('modelPredictor')}>ML Predictor Node</MenuItem>,
+                    <MenuItem key="add-backtester" onClick={() => handleAddNode('backtester')}>Backtester Node</MenuItem>,
                 ]}
                 {/* --- MENU FOR EDITING EXISTING ELEMENTS --- */}
                 {menu?.type === 'node' && (

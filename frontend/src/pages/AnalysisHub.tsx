@@ -20,15 +20,37 @@ export const AnalysisHub: React.FC = () => {
   const [isCompareModalOpen, setCompareModalOpen] = useState(false);
   const [isDataSegmentationMode, setIsDataSegmentationMode] = useState(false); 
 
+  // This robust effect synchronizes the selected strategy with the available results.
+  // It correctly handles content updates for strategies with the same name.
   useEffect(() => {
-    if (results.length > 0) {
-      if (!selectedStrategy || !results.some(r => r.strategy_name === selectedStrategy.strategy_name)) {
-        setSelectedStrategy(results[0]);
-      }
-    } else {
+    // Case 1: The results list is now empty. Clear the selection.
+    if (results.length === 0) {
       setSelectedStrategy(null);
+      return;
     }
-  }, [results, selectedStrategy]);
+
+    // If a strategy was previously selected, try to find its new version in the updated results list.
+    const previouslySelectedName = selectedStrategy?.strategy_name;
+    if (previouslySelectedName) {
+      const updatedVersionOfSelected = results.find(
+        r => r.strategy_name === previouslySelectedName
+      );
+      
+      // Case 2: The new version was found. Set state to this new object reference.
+      // This is the key to solving the "same name, different content" problem.
+      // We call the setter to update the state to the new object reference, triggering a re-render.
+      if (updatedVersionOfSelected) {
+        setSelectedStrategy(updatedVersionOfSelected);
+        return; // Our work is done.
+      }
+    }
+    
+    // Case 3: No strategy was selected before, OR the previously selected one
+    // is no longer in the list. Default to selecting the first available result.
+    setSelectedStrategy(results[0]);
+
+  // This effect should ONLY depend on the `results` array.
+  }, [results]);
 
   const handleSelectStrategy = (strategyName: string) => {
     const foundStrategy = results.find(s => s.strategy_name === strategyName);

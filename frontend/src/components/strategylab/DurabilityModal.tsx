@@ -83,11 +83,17 @@ export interface WalkForwardDetails {
     optimization_metric: string;
 }
 
+
+export interface ParameterRangeDetails {
+    test_type: 'parameter_range';
+    optimization_metric: string;
+}
+
 // We can add other test types here in the future
 // export interface MonteCarloDetails { test_type: 'monte_carlo'; ... }
 
 // The final submission object is a combination of the base config and one of the specific test details.
-export type DurabilitySubmissionConfig = BaseDurabilityConfig & (DataSegmentationDetails | WalkForwardDetails /* | MonteCarloDetails */);
+export type DurabilitySubmissionConfig = BaseDurabilityConfig & (DataSegmentationDetails | WalkForwardDetails | ParameterRangeDetails /* | MonteCarloDetails */);
 
 
 // The props for the modal now expect the new config type
@@ -362,6 +368,13 @@ export const DurabilityModal: React.FC<DurabilityModalProps> = ({ open, onClose,
             // Example structure:
             // const config = { ...baseConfig, test_type: 'monte_carlo', runs: 100, ... };
             // onSubmit(config);
+        } else if (mode === 'parameter_range') {
+            const config: DurabilitySubmissionConfig = {
+                ...baseConfig,
+                test_type: 'parameter_range',
+                optimization_metric: optimizationMetric
+            };
+            onSubmit(config);
         }
         // ... add other `else if` blocks for other modes
         else {
@@ -482,6 +495,29 @@ return (
                         >
                         Add Rule
                         </Button>
+                    </Box>
+                    <Box>
+                        <TextField
+                            select
+                            fullWidth
+                            label="Optimization Metric"
+                            value={optimizationMetric}
+                            onChange={e => setOptimizationMetric(e.target.value)}
+                            variant="outlined"
+                            sx={{mt: 2}}
+                        >
+                            <MenuItem value="Net_Profit">Net Profit</MenuItem>
+                            <MenuItem value="Avg_Monthly_Return">Avg Monthly Returns</MenuItem>
+                            <MenuItem value="Total_Trades">Total Trades</MenuItem>
+                            <MenuItem value="Max_Drawdown">Max Drawdown</MenuItem>
+                            <MenuItem value="Max_Drawdown_Duration">Max Drawdown Duration</MenuItem>
+                            <MenuItem value="Sharpe_Ratio">Sharpe Ratio</MenuItem>
+                            <MenuItem value="Profit_Factor">Profit Factor</MenuItem>
+                            <MenuItem value="Calmar_Ratio">Calmar Ratio</MenuItem>
+                            <MenuItem value="Equity_Efficiency_Rate">Equity Efficiency Rate</MenuItem>
+                            <MenuItem value="Strategy_Quality">Strategy Quality</MenuItem>
+                            <MenuItem value="Winrate">Win Rate</MenuItem>
+                        </TextField>
                     </Box>
                     </Box>
 

@@ -8,7 +8,7 @@ import pandas as pd
 # ==============================================================================
 # Third-party Library Imports (primarily for ML)
 # ==============================================================================
-from sklearn.model_selection import train_test_split
+from sklearn.ensemble import BaggingClassifier
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score, roc_auc_score,
     classification_report, confusion_matrix,
@@ -96,8 +96,27 @@ def _calculate_model_performance(model: Any, X_test: pd.DataFrame, y_test: pd.Se
         model_metrics['mean_squared_error'] = round(mean_squared_error(y_test, y_pred), 4)
         model_metrics['r2_score'] = round(r2_score(y_test, y_pred), 4)
     
+    importances = None # Initialize to None
+
+    # Case 1: The model has a direct feature_importances_ attribute (e.g., RandomForest, XGBoost)
     if hasattr(model, 'feature_importances_'):
+        print("Found direct feature_importances_ attribute.")
         importances = model.feature_importances_
+
+    # Case 2: The model is a BaggingClassifier, and its base estimators have importances (e.g., DecisionTree)
+    elif isinstance(model, BaggingClassifier) and hasattr(model.estimators_[0], 'feature_importances_'):
+        print("Calculating averaged feature importances for BaggingClassifier...")
+        
+        # Collect importances from all trees in the bag
+        all_importances = np.array([
+            estimator.feature_importances_ for estimator in model.estimators_
+        ])
+        
+        # Average the importances across all estimators
+        importances = np.mean(all_importances, axis=0)
+
+    # If we successfully found or calculated importances, format them for the UI
+    if importances is not None:
         feature_importance_data = sorted(
             zip(feature_names, importances),
             key=lambda x: x[1],
@@ -107,7 +126,7 @@ def _calculate_model_performance(model: Any, X_test: pd.DataFrame, y_test: pd.Se
             {'feature': name, 'importance': float(imp)}
             for name, imp in feature_importance_data
         ]
-        
+    
     return model_metrics, model_analysis
 
 
@@ -148,12 +167,12 @@ class ModelTrainerExecutor(BaseNodeExecutor):
                 "The test data should connect directly from the DataValidation node's 'test' output."
             )
         
-        test_input_info = inputs['test']
+        # test_input_info = inputs['test']
         
-        if test_input_info['source_node_type'] != 'dataValidation':
-            raise ValueError("ModelTrainer 'test' input must come from a DataValidation node.")
-        if test_input_info['source_handle'] != 'test':
-            raise ValueError("ModelTrainer 'test' input must be connected to the 'test' output of a DataValidation node.")
+        # if test_input_info['source_node_type'] != 'dataValidation':
+        #     raise ValueError("ModelTrainer 'test' input must come from a DataValidation node.")
+        # if test_input_info['source_handle'] != 'test':
+        #     raise ValueError("ModelTrainer 'test' input must be connected to the 'test' output of a DataValidation node.")
         
         # --- 2. Get Data ---
         df_train = inputs['train']['data'].copy()

@@ -7,7 +7,7 @@ export const HYPERPARAMETER_CONFIG: Record<string, { name: string; label: string
     ],
     'RandomForestClassifier': [
         { name: 'n_estimators', label: 'Number of Trees', type: 'number', defaultValue: 100 },
-        { name: 'max_depth', label: 'Max Depth', type: 'number', defaultValue: 100000 },
+        { name: 'max_depth', label: 'Max Depth', type: 'text', defaultValue: 'none' },
         { name: 'min_samples_leaf', label: 'Min Samples per Leaf', type: 'number', defaultValue: 1 },
         { name: 'max_features', label: 'Max Features', type: 'select', options: ['sqrt', 'log2', 'none'], defaultValue: 'sqrt' },
         { name: 'class_weight', label: 'Class Weight', type: 'select', options: ['balanced', 'balanced_subsample', 'none'], defaultValue: 'none' },
@@ -39,9 +39,17 @@ export const HYPERPARAMETER_CONFIG: Record<string, { name: string; label: string
     ],
     'DecisionTreeClassifier': [
         { name: 'criterion', label: 'Criterion', type: 'select', options: ['gini', 'entropy'], defaultValue: 'gini' },
-        { name: 'max_depth', label: 'Max Depth', type: 'number', defaultValue: 10 },
+        { name: 'max_depth', label: 'Max Depth', type: 'text', defaultValue: 'none' },
         { name: 'min_samples_split', label: 'Min Samples to Split', type: 'number', defaultValue: 2 },
         { name: 'min_samples_leaf', label: 'Min Samples per Leaf', type: 'number', defaultValue: 1 },
+        { name: 'class_weight', label: 'Class Weight', type: 'select', options: ['balanced', 'none'], defaultValue: 'none' }
+    ],
+    'BaggingClassifier': [
+        { name: 'n_estimators', label: 'Number of Estimators', type: 'number', defaultValue: 10 },
+        { name: 'max_samples', label: 'Max Samples per Estimator', type: 'number', defaultValue: 1.0 },
+        { name: 'max_features', label: 'Max Features per Estimator', type: 'number', defaultValue: 1.0 },
+        { name: 'bootstrap', label: 'Bootstrap Samples (Time Series Aware)', type: 'select', options: ['true', 'false'], defaultValue: 'true' },
+        { name: 'bootstrap_features', label: 'Bootstrap Features', type: 'select', options: ['true', 'false'], defaultValue: 'false' },
     ],
 
     // --- Regression Models ---

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Handle, Position } from 'reactflow';
 import type { NodeProps } from 'reactflow';
-import { Paper, Typography, Box, IconButton, Autocomplete, TextField, Select, MenuItem, FormControl, InputLabel, Stack, CircularProgress } from '@mui/material';
+import { Paper, Box, IconButton, Autocomplete, TextField, Select, MenuItem, FormControl, InputLabel, Stack, CircularProgress } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 
 import { usePipeline } from '../../../context/PipelineContext';
@@ -60,7 +60,9 @@ const HyperparameterInput: React.FC<{ paramDef: ParamDef; value: any; onChange: 
 export const ModelTrainerNode = ({ id, data }: NodeProps<MLModelNodeData>) => {
     // 1. PULL THE REQUIRED FUNCTIONS AND STATE FROM THE CONTEXT
     const { updateNodeData, executePipelineUpToNode, isProcessing, processingNodeId } = usePipeline();
-    const modelOptions = Object.keys(HYPERPARAMETER_CONFIG);
+    const modelOptions = Object.keys(HYPERPARAMETER_CONFIG).filter(
+        model => model !== 'BaggingClassifier'
+    );
     const currentModelConfig = HYPERPARAMETER_CONFIG[data.modelName] || [];
     
     // 2. DETERMINE THE PROCESSING STATE FOR THIS SPECIFIC NODE
@@ -101,14 +103,6 @@ export const ModelTrainerNode = ({ id, data }: NodeProps<MLModelNodeData>) => {
         background: 'primary.main',
         border: '1px solid #555',
         zIndex: 10,
-    };
-
-    // Style for the input handle text labels
-    const labelStyle: React.CSSProperties = {
-        position: 'absolute',
-        left: 18,
-        fontSize: '10px',
-        color: '#ccc',
     };
 
     return (

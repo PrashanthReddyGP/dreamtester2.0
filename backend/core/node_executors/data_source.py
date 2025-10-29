@@ -13,11 +13,25 @@ class DataSourceExecutor(BaseNodeExecutor):
         # This node has no inputs, it's the start of a pipeline.
         ds_config = node.data
         
-        # Replace with your actual data loading function
+        symbol = ds_config.get('symbol')
+        timeframe = ds_config.get('timeframe')
+        start_date = ds_config.get('startDate')
+        end_date = ds_config.get('endDate')
+        
         df_output = load_data_for_ml(
-            symbol=ds_config.get('symbol'),
-            timeframe=ds_config.get('timeframe'),
-            start_date_str=ds_config.get('startDate'),
-            end_date_str=ds_config.get('endDate')
+            symbol=symbol,
+            timeframe=timeframe,
+            start_date_str=start_date,
+            end_date_str=end_date
         )
+        
+        # Store symbol and timeframe in this node's metadata
+        # This ensures it gets saved to the cache along with the data.
+        context.node_metadata[node.id] = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "start_date": start_date,
+            "end_date": end_date
+        }
+        
         return {"default": df_output}

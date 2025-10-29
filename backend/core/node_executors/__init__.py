@@ -15,6 +15,11 @@ from .features_correlation import FeaturesCorrelationExecutor
 from .hyperparameter_tuning import HyperparameterTuningExecutor
 from .class_imbalance import ClassImbalanceExecutor
 from .backtester import BacktesterNodeExecutor
+from .bagging_trainer import BaggingTrainerExecutor
+from .loop import LoopNodeExecutor
+from .neural_network_trainer import NeuralNetworkTrainerExecutor
+from .data_profiler import DataProfilerExecutor
+from .advanced_data_scaling import AdvancedDataScalingExecutor
 
 # The Registry maps node type strings to executor instances
 NODE_EXECUTORS = {
@@ -23,7 +28,9 @@ NODE_EXECUTORS = {
     "processIndicators": ProcessIndicatorsExecutor(),
     "customCode": CustomCodeExecutor(),
     "customLabeling": CustomLabelingExecutor(),
+    "dataProfiler": DataProfilerExecutor(),
     "dataScaling": DataScalingExecutor(),
+    "advancedDataScaling": AdvancedDataScalingExecutor(),
     "dataValidation": DataValidationExecutor(),
     "charting": ChartingExecutor(),
     "modelTrainer": ModelTrainerExecutor(),
@@ -33,6 +40,9 @@ NODE_EXECUTORS = {
     "featuresCorrelation": FeaturesCorrelationExecutor(),
     "classImbalance": ClassImbalanceExecutor(),
     "backtester": BacktesterNodeExecutor(),
+    "baggingTrainer": BaggingTrainerExecutor(),
+    "loop": LoopNodeExecutor(),
+    'neuralNetworkTrainer': NeuralNetworkTrainerExecutor(),
 }
 
 def get_executor(node_type: str) -> BaseNodeExecutor:

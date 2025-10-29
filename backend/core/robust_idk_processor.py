@@ -7,7 +7,7 @@ def calculate_indicators(strategy_instance, df):
     A refactored, data-driven function to calculate indicators.
     """
     indicators_to_run = strategy_instance.indicators
-    print(f"--- Calculating {len(indicators_to_run)} indicators (Refactored) ---")
+    print(f"--- Calculating {len(indicators_to_run)} indicators ---")
     
     for indicator_tuple in indicators_to_run:
         name, timeframe, params_list = indicator_tuple

@@ -24,10 +24,10 @@ class ClassImbalanceExecutor(BaseNodeExecutor):
             raise ValueError("ClassImbalance node must have exactly one input.")
         
         input_info = list(inputs.values())[0]
-        if input_info['source_node_type'] != 'dataValidation':
-            raise ValueError("ClassImbalance node input must come from a DataValidation node.")
-        if input_info['source_handle'] != 'train':
-            raise ValueError("ClassImbalance node must be connected to the 'train' output of a DataValidation node.")
+        # if input_info['source_node_type'] != 'dataValidation':
+        #     raise ValueError("ClassImbalance node input must come from a DataValidation node.")
+        # if input_info['source_handle'] != 'train':
+        #     raise ValueError("ClassImbalance node must be connected to the 'train' output of a DataValidation node.")
         
         df_train_input = input_info['data'].copy()
 

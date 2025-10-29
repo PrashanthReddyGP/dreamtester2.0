@@ -25,7 +25,7 @@ def generate_parameter_heatmap(results_data, params_to_optimize, metric, batch_i
         print("--- NOTE: Not enough parameters (<2) to generate a heatmap. ---")
         return
 
-    # --- Data Preparation (same as before) ---
+    # --- Data Preparation ---
     records = []
     for combo_tuple, metric_value in results_data:
         record = dict(zip(param_names, combo_tuple))
@@ -37,47 +37,30 @@ def generate_parameter_heatmap(results_data, params_to_optimize, metric, batch_i
         return
         
     df = pd.DataFrame(records)
+    
     # 1. Find the true min and max values across all results for the metric
     if df.empty or metric not in df.columns:
         print("--- WARNING: Metric column not found or DataFrame is empty. Cannot generate heatmap. ---")
         return
-        
-    global_min = df[metric].min()
-    global_max = df[metric].max()
     
-    # 2. Handle edge cases where all data is on one side of zero
-    if global_min >= 0: global_min = 0 # If no losses, anchor min at 0
-    if global_max <= 0: global_max = 0 # If no profits, anchor max at 0
+    # 1. Find the true min and max values from the data, ignoring any NaNs
+    true_min = df[metric].min()
+    true_max = df[metric].max()
     
-    # If there's no range, create a small default one to avoid errors
-    if global_min == global_max:
-        global_min -= 1
-        global_max += 1
-
-    # # 1. Find the true min and max values from the data
-    # true_min = df[metric].min()
-    # true_max = df[metric].max()
-
-    # # 2. Determine the symmetric limit for the color scale
-    # # This finds the value with the largest distance from zero.
-    # limit = max(abs(true_min), abs(true_max))
-
-    # # If the limit is zero (i.e., all results were 0), create a small default range
-    # # to prevent a zero-width scale (e.g. vmin=0, vmax=0) which would also error.
-    # if limit == 0:
-    #     limit = 1 # e.g., scale will be -1 to 1
-
-    # # 3. Create a robust, symmetric TwoSlopeNorm object.
-    # # The scale will now run from -limit to +limit, centered perfectly on 0.
-    # # This is guaranteed to be valid because limit is always > 0 here.
-    # norm = TwoSlopeNorm(vmin=-limit, vcenter=0, vmax=limit)
-
-    # 3. Create the TwoSlopeNorm normalizer object
-    # This is the core of the fix. It maps the colors based on the actual data range
-    # on either side of the center point (0).
-    norm = TwoSlopeNorm(vmin=global_min, vcenter=0, vmax=global_max)
-
-    print(f"--- Heatmap ASYMMETRIC color scale set for '{metric}': Min={global_min:.2f}, Center=0, Max={global_max:.2f} ---")
+    # 2. Determine the symmetric limit for the color scale by finding the value with the largest distance from zero.
+    limit = max(abs(true_min), abs(true_max))
+    
+    # 3. Handle the edge case where all results are 0. Create a small default range 
+    #    to prevent a zero-width scale (e.g., vmin=0, vmax=0) which would also error.
+    if limit == 0:
+        limit = 1 
+    
+    # 4. Create a robust, symmetric TwoSlopeNorm object.
+    #    The scale will now run from -limit to +limit, centered perfectly on 0.
+    #    This is guaranteed to be valid because limit is always > 0 here.
+    norm = TwoSlopeNorm(vmin=-limit, vcenter=0, vmax=limit)
+    
+    print(f"--- Heatmap SYMMETRIC color scale set for '{metric}': Min={-limit:.2f}, Center=0, Max={limit:.2f} ---")
     
     # Assign roles based on parameter order
     x_param = param_names[0]
@@ -131,6 +114,16 @@ def generate_parameter_heatmap(results_data, params_to_optimize, metric, batch_i
             
             try:
                 pivot_df = subset_df.pivot_table(index=y_param, columns=x_param, values=metric)
+                
+                # We check if the dtype is numeric before trying to format.
+                # This prevents errors if a parameter is a string (e.g., 'ema', 'sma').
+                if pd.api.types.is_numeric_dtype(pivot_df.index):
+                    # Format y-axis labels to 2 decimal places
+                    pivot_df.index = pivot_df.index.map('{:.3f}'.format)
+                if pd.api.types.is_numeric_dtype(pivot_df.columns):
+                    # Format x-axis labels to 2 decimal places
+                    pivot_df.columns = pivot_df.columns.map('{:.3f}'.format)
+                
                 if not pivot_df.empty:
                     sns.heatmap(
                         pivot_df, 
@@ -145,7 +138,7 @@ def generate_parameter_heatmap(results_data, params_to_optimize, metric, batch_i
                 ax.text(0.5, 0.5, f'Error plotting:\n{e}', ha='center', va='center')
 
     # --- Final Figure Formatting ---
-    main_title = f'Optimization Heatmap for Strategy {strategy_key.upper()} ({metric})'
+    main_title = f'Optimization Heatmap for {strategy_key.upper()} ({metric})'
     if row_facet_param:
         main_title += f'\nRows: {row_facet_param} | Columns: {col_facet_param}'
     elif col_facet_param:
@@ -157,7 +150,7 @@ def generate_parameter_heatmap(results_data, params_to_optimize, metric, batch_i
     # Save the figure
     plot_dir = os.path.join('params_distribution')
     os.makedirs(plot_dir, exist_ok=True)
-    filename = f"heatmap_strat_{strategy_key}.png"
+    filename = f"param_heatmap_{strategy_key}_{metric}.png"
     filepath = os.path.join(plot_dir, filename)
     plt.savefig(filepath)
     plt.close(fig)
