@@ -5,13 +5,13 @@ idk = Indicators()
 def calculate_indicators(strategy_instance, df):
     
     indicators = strategy_instance.indicators
-
+    
     print(f"--- Calculating {indicators} indicators ---")
-
+    
     for indicator in indicators:
         
         name, timeframe, params = indicator
-                    
+        
         if name == 'EMA':
             
             # Ensure you have only 1 value
@@ -119,7 +119,7 @@ def calculate_indicators(strategy_instance, df):
                 
                 print(f"MACD takes 3 Input params, But {len(params)} were given...")
                 
-        if name == 'BOLLINDER BANDS':
+        if name == 'BOLLINGER BANDS':
             
             # Ensure you have only 1 value
             if len(params) == 2:
@@ -129,7 +129,7 @@ def calculate_indicators(strategy_instance, df):
                 deviation = int(params[1])
                 
                 if timeframe == '1m':
-                    df = idk.calculate_bollinger_bands(df, timeframe, length, deviation)
+                    df = idk.calculate_bollinger_bands(df, length, deviation)
                 # elif timeframe == '3m':
                 #     df_3m = idk.calculate_bollinger_bands(df_3m, timeframe, length, deviation)
                 #     df = df.merge(df_3m[['timestamp', f'{timeframe}_SMA_{length}']], how='left', on='timestamp')
@@ -157,17 +157,31 @@ def calculate_indicators(strategy_instance, df):
         if name == 'ATR':
             
             # Ensure you have at least 2 params
-            if len(params) == 2:
+            if len(params) == 3:
                 # Convert the first two params to integers (or float, as needed)
                 length = int(params[0])  # or float(params[0]) if you need float
                 multiplier = float(params[1])  # or float(params[1]) if you need float
+                index = int(params[2])
                 
-                df = idk.calculate_stop_loss(df, length, multiplier)
+                df = idk.calculate_stop_loss(df, length, multiplier, index)
             
             else:
                 
-                print(f"ATR takes 2 Input params, But {len(params)} were given...")
+                print(f"ATR takes 3 Input params, But {len(params)} were given...")
+        
+        if name == 'ADX':
+            
+            # Ensure you have at least 2 params
+            if len(params) == 1:
                 
+                length = int(params[0])  # or float(params[0]) if you need float
+                
+                df = idk.calculate_adx(df, length)
+            
+            else:
+                
+                print(f"ADX takes 1 Input params, But {len(params)} were given...")
+        
         if name == 'SUPERTREND':
             
             # Ensure you have at least 2 params
@@ -226,20 +240,36 @@ def calculate_indicators(strategy_instance, df):
             else:
                 print(f"HL OSCILLATOR takes 1 Input Value, But {len(params)} were given...")
         
+        # if name == 'SMA SLOPE':
+            
+        #     # Ensure you have at least 3 params
+        #     if len(params) == 3:
+        #         # Convert the first value to integers (or float, as needed)
+        #         length = int(params[0])  # or float(params[0]) if you need float
+        #         smoothBars = int(params[1])  # or float(params[0]) if you need float
+        #         neutralZoneHeight = int(params[2])  # or float(params[0]) if you need float
+                
+        #         df = idk.calculate_sma_slope(df, length, smoothBars, neutralZoneHeight)
+                
+        #     else:
+                
+        #         print(f"SMA Slope takes 3 Input params, But {len(params)} were given...")
+
+        # NORMALIZED
         if name == 'SMA SLOPE':
             
             # Ensure you have at least 3 params
             if len(params) == 3:
                 # Convert the first value to integers (or float, as needed)
-                length = int(params[0])  # or float(params[0]) if you need float
-                smoothBars = int(params[1])  # or float(params[0]) if you need float
-                neutralZoneHeight = int(params[2])  # or float(params[0]) if you need float
+                ma_period = int(params[0])  # or float(params[0]) if you need float
+                slope_period = int(params[1])  # or float(params[0]) if you need float
+                atr_period = int(params[2])  # or float(params[0]) if you need float
                 
-                df = idk.calculate_sma_slope(df, length, smoothBars, neutralZoneHeight)
+                df = idk.calculate_sma_slope_normalized(df, ma_period, slope_period, atr_period)
                 
             else:
                 
-                print(f"EMA Slope takes 3 Input params, But {len(params)} were given...")
+                print(f"SMA Slope takes 3 Input params, But {len(params)} were given...")
         
         if name == 'CANDLESTICK PATTERNS':
             
@@ -280,6 +310,93 @@ def calculate_indicators(strategy_instance, df):
         if name == 'PRICE MOVEMENT':
             
             df = idk.price_movement(df)
+        
+        if name == 'REGIME FILTERS':
+            
+            df = idk.calculate_regime_filters(df)
+            
+        if name == 'ROC':
+            
+            if len(params) == 1:
+                
+                lookback = int(params[0])
+                
+                df = idk.calculate_roc(df, lookback)
+                
+            else:
+                print(f"ROC takes 1 Input Value, But {len(params)} were given...")
+                
+        if name == 'ROEC':
+            
+            if len(params) >= 1:
+                
+                lookback = int(params[0])
+                
+                if len(params) == 2 and int(params[1] == 0):
+                    as_percentage=False
+                else:
+                    as_percentage=True
+                
+                df = idk.calculate_signed_extreme_change(df, lookback, as_percentage)
+                
+            else:
+                print(f"ROEC takes 1 Input Value, But {len(params)} were given...")
+
+        if name == 'ACTIVITY FILTER':
+            
+            if len(params) >= 1:
+                
+                window = int(params[0])
+                
+                df = idk.activity_filter(df, window=window)
+                
+            else:
+                print(f"ACTIVITY FILTER takes 1 Input Value, But {len(params)} were given...")
+
+        if name == 'STANDARD DEVIATION':
+            
+            if len(params) == 1:
+                
+                timeframe = int(params[0])
+                
+                df = idk.calculate_standard_deviation(df, timeframe=timeframe)
+                
+            else:
+                print(f"STANDARD DEVIATION takes 1 Input Value, But {len(params)} were given...")
+                
+        if name == 'SPIKE':
+            
+            if len(params) == 1:
+                
+                lookback = int(params[0])
+                
+                df = idk.calculate_spike(df, lookback=lookback)
+                
+            else:
+                print(f"SPIKE takes 1 Input Value, But {len(params)} were given...")
+        
+        if name == 'CONSOLIDATION':
+            
+            if len(params) == 1:
+                
+                change = int(params[0])
+                
+                df = idk.calculate_consolidation(df, change=change)
+                
+            else:
+                print(f"CONSOLIDATION takes 1 Input Value, But {len(params)} were given...")
+
+        if name == 'ZLEMA':
+            
+            if len(params) == 2:
+                
+                length = int(params[0])
+                multiplier = float(params[1])
+                
+                df = idk.calculate_zero_lag_trend_signals(df, length, multiplier)
+                
+            else:
+                print(f"ZLEMA takes 2 Input Value, But {len(params)} were given...")
     
     print("Indicators processed successfully")
     

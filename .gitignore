@@ -2,3 +2,4 @@ node_modules
 build
 out
 backend_app.spec
+analysis_exports

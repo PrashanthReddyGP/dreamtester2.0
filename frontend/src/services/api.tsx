@@ -1,5 +1,4 @@
 // frontend/src/services/api.tsx
-import type { OptimizationConfig } from '../components/strategylab/OptimizeModal'; // Import the type
 
 // The base URL for your backend
 const API_URL = 'http://127.0.0.1:8000';
@@ -103,12 +102,19 @@ export interface TradesType {
     trades: Trades[];
 }
 
+
+
 export interface BacktestResultPayload {
     name: string;
     strategies_results: StrategyResult[];
     initial_capital: number;
 }
 
+export interface BatchSubmitPayload {
+    strategies: StrategyFilePayload[];
+    use_training_set: boolean;
+    portfolio_code?: string;
+}
 export interface BatchSubmitResponse {
     message: string;
     batch_id: string;
@@ -118,6 +124,50 @@ export interface SubmissionResponse {
     message: string;
     batch_id: string;
 }
+
+
+// --- Define the ML-specific analysis types ---
+export interface FeatureImportance {
+    feature: string;
+    importance: number;
+}
+
+export interface ClassificationReport {
+  // e.g., "class_-1", "class_0", "class_1", "accuracy", "macro_avg"
+    [key: string]: {
+        precision: number;
+        recall: number;
+        'f1-score': number;
+        support: number;
+    } | number; // For accuracy
+}
+
+export interface ModelAnalysis {
+    feature_importance: FeatureImportance[];
+    classification_report: ClassificationReport;
+    confusion_matrix: number[][];
+}
+
+
+// --- The main ML Result interface ---
+// It's like a regular StrategyResult, but with an added `model_analysis` section.
+export interface MLResult extends StrategyResult {
+    strategy_name: 'ML Model'; // The name is fixed for an ML run
+    model_analysis: ModelAnalysis;
+    // We can also add the run config for display purposes
+    run_config: {
+        model: string;
+        features: string[];
+        labeling_method: string;
+        symbol: string;
+        timeframe: string;
+    }
+}
+
+export function isMLResult(result: StrategyResult | MLResult): result is MLResult {
+  return (result as MLResult).model_analysis !== undefined;
+}
+
 
 /**
  * Submits a new backtest job to the backend.
@@ -145,19 +195,19 @@ export const submitBacktest = async (config: BacktestConfig): Promise<BacktestJo
 /**
  * Submits a batch of strategy files for backtesting.
  */
-export const submitBatchBacktest = async (files: StrategyFilePayload[]): Promise<BatchSubmitResponse> => { 
+export const submitBatchBacktest = async (payload: BatchSubmitPayload[]): Promise<BatchSubmitResponse> => { 
     // This will call a new endpoint designed for batch submissions
     const response = await fetch(`${API_URL}/api/backtest/batch-submit`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify(files),
+        body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'An unknown error occurred.' }));
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+        throw new Error(errorData.detail || `Server responded with status: ${response.status}`);
     }
 
     return response.json();
@@ -179,6 +229,58 @@ export const fetchAvailableSymbols = async (exchange: string): Promise<string[]>
         return ['BTCUSDT', 'ETHUSDT', 'BNBUSDT'];
     }
 };
+
+
+export const uploadCsvData = async (symbol: string, timeframe: string, source: string, file: File): Promise<any> => {
+    const formData = new FormData();
+    formData.append('symbol', symbol);
+    formData.append('timeframe', timeframe);
+    formData.append('source', source);
+    formData.append('file', file); // 'file' must match the backend parameter name
+
+    try {
+        const response = await fetch(`${API_URL}/api/data/import-csv`, {
+            method: 'POST',
+            // IMPORTANT: When using FormData with fetch, do NOT set the 'Content-Type' header.
+            // The browser will automatically set it to 'multipart/form-data' and, critically,
+            // add the required 'boundary' parameter. Manually setting it will break the request.
+            body: formData,
+        });
+
+        // Unlike axios, fetch does not throw an error on bad HTTP status codes (like 4xx or 5xx).
+        // We need to check the 'ok' status and handle the error manually.
+        if (!response.ok) {
+            // Try to parse the error response from the backend for a more detailed message.
+            const errorData = await response.json().catch(() => {
+                // If the error response isn't valid JSON, create a fallback message.
+                return { detail: `Server responded with status: ${response.status}` };
+            });
+            throw new Error(errorData.detail || 'An unknown error occurred during file upload.');
+        }
+
+        // If the request was successful, parse the JSON response.
+        return response.json();
+
+    } catch (error: any) {
+        // This will catch network errors (e.g., server is down) or the error we threw above.
+        // Re-throw the error so the component that called this function can handle it.
+        throw new Error(error.message || 'Network error or server is down.');
+    }
+};
+
+export const clearOhlcvCache = async (): Promise<{ status: string; message: string }> => {
+  const response = await fetch(`${API_URL}/api/data/cache`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || 'Failed to clear cache on the server.');
+  }
+
+  return response.json();
+};
+
 
 // /**
 //  * Fetches the most recently completed backtest result.

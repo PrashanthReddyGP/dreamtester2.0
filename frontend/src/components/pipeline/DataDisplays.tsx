@@ -1,0 +1,647 @@
+// src/components/machinelearning/shared/DataDisplays.tsx
+import React, {useMemo} from 'react';
+import { Box, Typography, Paper, Stack, useTheme, Button, Divider } from '@mui/material';
+import { DataGrid, GridFooterContainer, GridPagination } from '@mui/x-data-grid';
+import type { GridColDef } from '@mui/x-data-grid';
+
+interface DataInfo {
+    Symbol?: string;
+    Timeframe?: string;
+    "Data Points"?: number;
+    "Start Date"?: string;
+    "End Date"?: string;
+    "Memory Usage"?: string;
+    message?: string;
+    error?: string;
+    
+    // Data Quality
+    "Total Missing Values"?: number;
+    "Missing Values by Column"?: Record<string, number>;
+
+    // Data Structure
+    "Data Types"?: Record<string, string>;
+    "Descriptive Statistics"?: Record<string, Record<string, number>>;
+
+    label_distribution?: Record<string, number>;
+    validation_info?: Record<string, string | number>;
+
+    model_info?: Record<string, string | number>;
+    model_metrics?: Record<string, number>;
+
+    resampling_info?: {
+        "Method": string;
+        "Original Distribution": Record<string, number>;
+        "Distribution (After Resampling)": Record<string, number>;
+        "Original Training Rows": number;
+        "Synthetic Rows Added": number;
+        "Total Training Rows After": number;
+    };
+
+    backtest_info?: {
+        "Total Trades": number, 
+        "Annual Return": number, 
+        "Max Drawdown": number, 
+        "Sharpe Ratio": number, 
+        "Profit Factor": number, 
+        "Winrate": number, 
+        "RR": Record<string, number>, 
+    };
+    profile?: {
+        feature_name: string;
+        stats: Record<string, number>;
+        skewness: number;
+        kurtosis: number;
+        outliers: {
+            count: number;
+            percentage: number;
+        };
+        suggestion: {
+            scaler: string;
+            reason: string;
+        };
+    };
+}
+
+const StatItem: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
+    <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+        <Typography variant="body2" sx={{ color: '#9c9c9cff' }}>{label}:</Typography>
+        <Typography variant="body2" component="span" sx={{ fontWeight: 'bold', ml: 1 }}>{value}</Typography>
+    </Box>
+);
+
+const formatBacktestValue = (label: string, value: any): React.ReactNode => {
+    if (label === 'RR' && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        return Object.entries(value)
+            .map(([k, v]) => `${k.charAt(0).toUpperCase() + k.slice(1)}: ${(v as number).toFixed(2)}`)
+            .join(' | ');
+    }
+    
+    if (typeof value !== 'number') {
+        return String(value);
+    }
+    
+    switch (label) {
+        case "Total Trades":
+            return `${value.toLocaleString()} trades`;
+        case "Winrate":
+        case "Max Drawdown":
+        case "Annual Return":
+            return `${value.toFixed(2)}%`;
+        case "Sharpe Ratio":
+        case "Profit Factor":
+            return value.toFixed(2);
+        default:
+            return value.toLocaleString();
+    }
+};
+
+export const DataInfoDisplay = ({ info }: { info: DataInfo | null }) => (
+    <Box sx={{ height: '100%' }}>
+        <Typography variant="subtitle1" gutterBottom sx={{ borderBottom: '1px solid', borderColor: 'divider', pb: 2, textAlign: 'center', fontWeight: 'bold' }}>Dataset Information</Typography>
+
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', pl: 2, pr: 2 }}>
+            {info ? (
+                <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', height: '100%' }}>
+                    <Stack spacing={1} sx={{ pt: 1 }}>
+                        {info.error && <Typography color="error">Error: {info.error}</Typography>}
+                        
+                        {/* General Info */}
+                        <StatItem label="Symbol" value={info.Symbol} />
+                        <StatItem label="Timeframe" value={info.Timeframe} />
+                        <StatItem label="Data Points" value={info["Data Points"]?.toLocaleString()} />
+                        <StatItem label="Start Date" value={info["Start Date"]} />
+                        <StatItem label="End Date" value={info["End Date"]} />
+                        <StatItem label="Memory Usage" value={info["Memory Usage"]} />
+
+                        {info.backtest_info && Object.keys(info.backtest_info).length > 0 && (
+                            <>
+                                <Divider sx={{ pt: 1 }} />
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>Backtest Info</Typography>
+                                {Object.entries(info.backtest_info).map(([label, value]) => (
+                                    <StatItem key={label} label={label} value={formatBacktestValue(label, value)} />
+                                ))}
+                            </>
+                        )}
+
+                        {info.model_info && Object.keys(info.model_info).length > 0 && (
+                            <>
+                                <Divider sx={{ pt: 1 }} />
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>Model Info</Typography>
+                                {Object.entries(info.model_info).map(([label, value]) => (
+                                    // Use toLocaleString() for numbers, otherwise just display the value
+                                    <StatItem key={label} label={label} value={typeof value === 'number' ? value.toLocaleString() : value} />
+                                ))}
+                            </>
+                        )}
+
+                        {info.model_metrics && Object.keys(info.model_metrics).length > 0 && (
+                            <>
+                                <Divider sx={{ pt: 1 }} />
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>Model Metrics</Typography>
+                                {Object.entries(info.model_metrics).map(([label, value]) => {
+                                    const displayLabel = label.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                                    return <StatItem key={label} label={displayLabel} value={value.toFixed(4)} />
+                                })}
+                            </>
+                        )}
+
+                        {info.label_distribution && Object.keys(info.label_distribution).length > 0 && (
+                            <>
+                                <Divider sx={{ pt: 1 }} />
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>Label Distribution</Typography>
+                                {Object.entries(info.label_distribution).map(([label, count]) => (
+                                    <StatItem key={label} label={`Label '${label}'`} value={count.toLocaleString()} />
+                                ))}
+                            </>
+                        )}
+
+
+                        {info.validation_info && Object.keys(info.validation_info).length > 0 && (
+                            <>
+                                <Divider sx={{ pt: 1 }} />
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>Validation Split</Typography>
+                                {Object.entries(info.validation_info).map(([key, value]) => {
+                                    // Format key for display
+                                    const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                                    return <StatItem key={key} label={displayKey} value={value.toLocaleString()} />
+                                })}
+                            </>
+                        )}
+                        {info.resampling_info && (
+                            <>
+                                <Divider sx={{ pt: 1 }} />
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>Class Resampling</Typography>
+                                
+                                <StatItem label="Method" value={info.resampling_info.Method} />
+
+                                {/* Display Original Distribution */}
+                                <Typography variant="body2" sx={{ color: '#9c9c9cff', mt: 1 }}>Original Distribution:</Typography>
+                                <Box sx={{ pl: 2 }}>
+                                    {Object.entries(info.resampling_info["Original Distribution"]).map(([label, count]) => (
+                                        <StatItem key={`orig-${label}`} label={`Label '${label}'`} value={count.toLocaleString()} />
+                                    ))}
+                                </Box>
+
+                                {/* Display Resampled Distribution */}
+                                <Typography variant="body2" sx={{ color: '#9c9c9cff', mt: 1 }}>After Resampling:</Typography>
+                                <Box sx={{ pl: 2 }}>
+                                    {Object.entries(info.resampling_info["Distribution (After Resampling)"]).map(([label, count]) => (
+                                        <StatItem key={`resamp-${label}`} label={`Label '${label}'`} value={count.toLocaleString()} />
+                                    ))}
+                                </Box>
+
+                                <StatItem label="Original Rows" value={info.resampling_info["Original Training Rows"].toLocaleString()} />
+                                <StatItem label="Synthetic Rows Added" value={info.resampling_info["Synthetic Rows Added"].toLocaleString()} />
+                                <StatItem label="New Total Rows" value={info.resampling_info["Total Training Rows After"].toLocaleString()} />
+                            </>
+                        )}
+
+                        {info.profile && (
+                            <>
+                                <Divider sx={{ pt: 1 }} />
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>
+                                    Feature Profile: {info.profile.feature_name}
+                                </Typography>
+
+                                {/* Basic Stats */}
+                                {Object.entries(info.profile.stats).map(([key, value]) => (
+                                    <StatItem 
+                                        key={key} 
+                                        label={key.charAt(0).toUpperCase() + key.slice(1)} 
+                                        value={value.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                                    />
+                                ))}
+
+                                <Divider sx={{ pt: 1 }} />
+
+                                {/* Distribution Shape */}
+                                <StatItem label="Skewness" value={info.profile.skewness} />
+                                <StatItem label="Kurtosis" value={info.profile.kurtosis} />
+                                
+                                <Divider sx={{ pt: 1 }} />
+
+                                {/* Outliers */}
+                                <StatItem label="Outliers Detected" value={info.profile.outliers.count.toLocaleString()} />
+                                <StatItem label="Outlier Percentage" value={`${info.profile.outliers.percentage}%`} />
+                                
+                                <Divider sx={{ pt: 1 }} />
+
+                                {/* Suggestion */}
+                                <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>
+                                    Scaling Suggestion
+                                </Typography>
+                                <Paper variant="outlined" sx={{ p: 1.5, my: 1, backgroundColor: 'action.hover' }}>
+                                    <Typography variant="body1" sx={{ fontWeight: 'bold', textAlign: 'center', mb: 1 }}>
+                                        Use {info.profile.suggestion.scaler}
+                                    </Typography>
+                                    <Typography variant="caption" sx={{ color: 'text.secondary', textAlign: 'justify', display: 'block' }}>
+                                        {info.profile.suggestion.reason}
+                                    </Typography>
+                                </Paper>
+                            </>
+                        )}
+
+                        <Divider sx={{ pt: 1 }} />
+
+                        <StatItem label="Total Missing Values" value={info["Total Missing Values"]?.toLocaleString()} />
+                        {info["Missing Values by Column"] && Object.keys(info["Missing Values by Column"]).length > 0 && (
+                            <Box>
+                                {Object.entries(info["Missing Values by Column"]).map(([col, count]) => (
+                                    <StatItem key={col} label={col} value={count.toLocaleString()} />
+                                ))}
+                            </Box>
+                        )}
+
+                        <Divider sx={{ pt: 0 }} />
+                        
+                        {/* Data Types Section */}
+                        {/* <Typography variant="subtitle1" sx={{ fontWeight: 'bold', textAlign: 'center', color: '#c3c3c3ff' }}>Data Types</Typography> */}
+                        {info["Data Types"] && (
+                            <Box>
+                                {Object.entries(info["Data Types"]).map(([col, dtype]) => (
+                                <StatItem key={col} label={col} value={dtype} />
+                                ))}
+                            </Box>
+                        )}
+
+                        {info.message && <Typography variant="body2" color="text.secondary">{info.message}</Typography>}
+                    </Stack>
+                </Box>
+            ) : (
+                <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>No data loaded.</Typography>
+            )}
+        </Box>
+    </Box>
+);
+
+
+export const DataInfoDisplayHorizontal = ({ info }: { info: DataInfo | null }) => (
+    <Paper variant="outlined" sx={{ p: 1, height: '100%' }}>
+
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', overflow: 'auto' }}>
+            {info ? (
+                <Box sx={{ height: '100%' }}>
+                    <Stack sx={{ display: 'flex', flexDirection: 'row', gap: 2, height: '100%' }}>
+                        
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexGrow: 1, height: '100%', p: 1 }}>
+                            {info.error && <Typography color="error">Error: {info.error}</Typography>}
+                            {/* General Info */}
+                            <StatItem label="Symbol" value={info.Symbol} />
+                            <StatItem label="Timeframe" value={info.Timeframe} />
+                            <StatItem label="Data Points" value={info["Data Points"]?.toLocaleString()} />
+                            <StatItem label="Start Date" value={info["Start Date"]} />
+                            <StatItem label="End Date" value={info["End Date"]} />
+                            <StatItem label="Memory Usage" value={info["Memory Usage"]} />
+
+                            {info.backtest_info && Object.keys(info.backtest_info).length > 0 && (
+                                <>
+                                    <Divider sx={{ pt: 1 }} />
+                                    <Typography variant="subtitle2" sx={{ fontWeight: 'bold', pt: 1, textAlign: 'center', color: '#c3c3c3ff' }}>Backtest Info</Typography>
+                                    {Object.entries(info.backtest_info).map(([label, value]) => (
+                                        <StatItem key={label} label={label} value={formatBacktestValue(label, value)} />
+                                    ))}
+
+                                </>
+                            )}
+
+                            {info.label_distribution && Object.keys(info.label_distribution).length > 0 && (
+                                <>
+                                    <Divider sx={{ pt: 1 }} />
+                                    <Typography variant="subtitle2" sx={{ fontWeight: 'bold', pt: 1, textAlign: 'center', color: '#c3c3c3ff' }}>Label Distribution</Typography>
+                                    {Object.entries(info.label_distribution).map(([label, count]) => (
+                                        <StatItem key={label} label={`Label '${label}'`} value={count.toLocaleString()} />
+                                    ))}
+
+                                </>
+                            )}
+
+
+                            {info.validation_info && Object.keys(info.validation_info).length > 0 && (
+                                <>
+                                    <Divider sx={{ pt: 1 }} />
+                                    <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>Validation Split</Typography>
+                                    {Object.entries(info.validation_info).map(([key, value]) => {
+                                        // Format key for display
+                                        const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                                        return <StatItem key={key} label={displayKey} value={value.toLocaleString()} />
+                                    })}
+                                </>
+                            )}
+
+                            {info.resampling_info && (
+                                <>
+                                    <Divider sx={{ pt: 1 }} />
+                                    <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: '#c3c3c3ff', textAlign: 'center' }}>Class Resampling</Typography>
+                                    
+                                    <StatItem label="Method" value={info.resampling_info.Method} />
+
+                                    {/* Display Original Distribution */}
+                                    <Typography variant="body2" sx={{ color: '#9c9c9cff', mt: 1 }}>Original Distribution:</Typography>
+                                    <Box sx={{ pl: 2 }}>
+                                        {Object.entries(info.resampling_info["Original Distribution"]).map(([label, count]) => (
+                                            <StatItem key={`orig-${label}`} label={`Label '${label}'`} value={count.toLocaleString()} />
+                                        ))}
+                                    </Box>
+
+                                    {/* Display Resampled Distribution */}
+                                    <Typography variant="body2" sx={{ color: '#9c9c9cff', mt: 1 }}>After Resampling:</Typography>
+                                    <Box sx={{ pl: 2 }}>
+                                        {Object.entries(info.resampling_info["Distribution (After Resampling)"]).map(([label, count]) => (
+                                            <StatItem key={`resamp-${label}`} label={`Label '${label}'`} value={count.toLocaleString()} />
+                                        ))}
+                                    </Box>
+
+                                    <StatItem label="Original Rows" value={info.resampling_info["Original Training Rows"].toLocaleString()} />
+                                    <StatItem label="Synthetic Rows Added" value={info.resampling_info["Synthetic Rows Added"].toLocaleString()} />
+                                    <StatItem label="New Total Rows" value={info.resampling_info["Total Training Rows After"].toLocaleString()} />
+                                </>
+                            )}
+
+                            <Divider sx={{ pt: 1 }} />
+                            <StatItem label="Total Missing Values" value={info["Total Missing Values"]?.toLocaleString()} />
+                            <Divider sx={{ pt: 1 }} />
+
+
+                            {info["Missing Values by Column"] && Object.keys(info["Missing Values by Column"]).length > 0 && (
+                                <Box pl={2}>
+                                    {Object.entries(info["Missing Values by Column"]).map(([col, count]) => (
+                                        <StatItem key={col} label={col} value={count.toLocaleString()} />
+                                    ))}
+                                </Box>
+                            )}
+                        </Box>
+
+                        <Divider orientation="vertical" flexItem />
+                        
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexGrow: 1, height: '100%', p: 1 }}>
+                            {info.validation_info && Object.keys(info.validation_info).length > 0 && (
+                                <>
+                                    <Typography variant="subtitle2" sx={{ fontWeight: 'bold', pt: 1, textAlign: 'center', color: '#c3c3c3ff' }}>Validation Split</Typography>
+                                    {Object.entries(info.validation_info).map(([key, value]) => {
+                                        const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                                        return <StatItem key={key} label={displayKey} value={value.toLocaleString()} />
+                                    })}
+                                    <Divider sx={{ pt: 1 }} />
+                                </>
+                            )}
+                            {info.message && <Typography variant="body2" color="text.secondary">{info.message}</Typography>}
+                            {/* Data Types Section */}
+                            <Typography variant="subtitle2" sx={{ fontWeight: 'bold', textAlign: 'center', color: '#c3c3c3ff' }}>Data Types</Typography>
+                            {info["Data Types"] && (
+                                <Box>
+                                    {Object.entries(info["Data Types"]).map(([col, dtype]) => (
+                                    <StatItem key={col} label={col} value={dtype} />
+                                    ))}
+                                </Box>
+                            )}
+                        </Box>
+
+                    </Stack>
+                </Box>
+            ) : (
+                <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>No data loaded.</Typography>
+            )}
+        </Box>
+    </Paper>
+);
+
+
+// Adapted to handle MILLISECONDS from the OHLCV data
+const formatTimestamp = (timestampInMillis: number): string => {
+    if (!timestampInMillis) return '';
+    const date = new Date(timestampInMillis);
+    return date.toLocaleString('en-US', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    });
+};
+
+const formatPrice = (price: any): string => {
+    const numericPrice = parseFloat(price);
+    if (isNaN(numericPrice)) return 'N/A';
+    // Use toFixed for consistent decimal places, adjust as needed for your assets
+    return numericPrice.toFixed(5);
+};
+
+const formatIndicatorValue = (value: any): string => {
+    const numericValue = parseFloat(value);
+    if (isNaN(numericValue)) return ''; // Return empty string for non-numbers
+    // Round to 2 decimal places for better readability
+    return numericValue.toFixed(5);
+};
+
+const formatHeaderName = (field: string): string => {
+    // Replaces underscores with spaces and capitalizes each word
+    return field
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, char => char.toUpperCase());
+};
+
+function exportToCsv(rows: any[], columns: GridColDef[], filename = 'data_export.csv') {
+    if (!rows || rows.length === 0) return;
+
+    const headers = columns.map((col) => col.headerName || col.field);
+    const csvRows = [
+        headers.join(','),
+        ...rows.map((row) =>
+            columns.map((col) => {
+                let value = row[col.field];
+                // Use the formatter if it exists to get the display value
+                if (col.valueFormatter) {
+                    value = col.valueFormatter(row[col.field]);
+                }
+                return `"${value ?? ''}"`;
+            }).join(',')
+        ),
+    ];
+
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+// --- Custom Footer Component ---
+function CustomFooter({ rows, columns }: { rows: any[]; columns: GridColDef[] }) {
+    return (
+        <GridFooterContainer sx={{ display: 'flex', justifyContent: 'space-between' }}>
+            <Button
+                variant="contained"
+                size="small"
+                sx={{ mr: 2, ml: 2 }}
+                onClick={() => exportToCsv(rows, columns)}
+            >
+                Export CSV
+            </Button>
+            <GridPagination />
+        </GridFooterContainer>
+    );
+}
+
+    
+export const DataGridDisplay = ({ data, info, title }: { data: any[], info: DataInfo | null, title: string }) => {
+    
+    const theme = useTheme();
+
+    const columns: GridColDef[] = useMemo(() => {
+        if (!data || data.length === 0) {
+            return [];
+        }
+
+        const allKeys = Object.keys(data[0]);
+        // Get the data types from our reliable info object
+        const dataTypes = info?.["Data Types"] || {};
+
+        return allKeys.map((key): GridColDef => {
+            const baseColumn: Omit<GridColDef, 'field'> = {
+                headerName: formatHeaderName(key),
+                minWidth: 150,
+                flex: 1,
+                sortable: true,
+            };
+            
+            // Check the type from the info object, not the data itself.
+            const columnType = dataTypes[key] || '';
+            const isNumeric = columnType.includes('float') || columnType.includes('int');
+
+            // Apply special formatting for known column names first
+            switch (key) {
+                case 'timestamp':
+                    return {
+                        ...baseColumn,
+                        field: key,
+                        headerName: 'Timestamp',
+                        minWidth: 180,
+                        valueFormatter: (value) => formatTimestamp(value as number),
+                    };
+                case 'open':
+                case 'high':
+                case 'low':
+                case 'close':
+                    return {
+                        ...baseColumn,
+                        field: key,
+                        type: 'number',
+                        align: 'right',
+                        headerAlign: 'right',
+                        valueFormatter: (value) => formatPrice(value),
+                    };
+                case 'volume':
+                    return {
+                        ...baseColumn,
+                        field: key,
+                        type: 'number',
+                        align: 'right',
+                        headerAlign: 'right',
+                        valueFormatter: (value) => (value as number)?.toLocaleString(),
+                    };
+                
+                // For all other columns, use our robust type check
+                default:
+                    if (isNumeric) {
+                        return {
+                            ...baseColumn,
+                            field: key,
+                            align: 'right',
+                            headerAlign: 'right',
+                            // Use renderCell for guaranteed formatting
+                            renderCell: (params) => formatIndicatorValue(params.value),
+                        };
+                    }
+                    // Fallback for any non-numeric columns
+                    return {
+                        ...baseColumn,
+                        field: key,
+                    };
+            }
+        });
+    }, [data, info]);
+
+    if (!data || data.length === 0) {
+        return (
+            <Paper variant="outlined" sx={{ p: 2, height: '100%', overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Typography color="text.secondary">
+                    {title.includes("Raw") ? "Click 'Fetch Data' to see the preview." : "Process data to see the preview."}
+                </Typography>
+            </Paper>
+        );
+    }
+
+    return (
+        <Paper variant="elevation" sx={{ p:0, height: '100%', overflow: 'auto' }}>
+
+            {/* <Typography variant="h6" gutterBottom>{title}</Typography> */}
+
+            {data && data.length > 0 ? (
+                <Box sx={{ 
+                    flexGrow: 1, 
+                    height: '100%',
+                    '& ::-webkit-scrollbar': {
+                        width: '4px',
+                        height: '4px',
+                    },
+                    '& ::-webkit-scrollbar-track': {
+                        backgroundColor: 'transparent',
+                    },
+                    '& ::-webkit-scrollbar-thumb': {
+                        backgroundColor: 'transparent', // <-- Hide scrollbar thumb by default
+                        borderRadius: '4px',
+                        transition: 'background-color 0.2s ease-in-out', // Add a smooth transition
+                    },
+                    // --- ON HOVER of this Box, make the scrollbar thumb visible ---
+                    '&:hover ::-webkit-scrollbar-thumb': {
+                        backgroundColor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.25)' : 'rgba(0, 0, 0, 0.25)',
+                    },
+                    '& ::-webkit-scrollbar-thumb:hover': {
+                        backgroundColor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.4)' : 'rgba(0, 0, 0, 0.4)', // Make it darker when hovering the thumb itself
+                    },
+
+                    }}>
+                    <DataGrid
+                        rows={data}
+                        columns={columns}
+                        getRowId={(row) => row.timestamp} // Timestamps are unique and reliable IDs
+                        initialState={{
+                            pagination: { paginationModel: { pageSize: 20 } },
+                            sorting: { sortModel: [{ field: 'timestamp', sort: 'desc' }] },
+                        }}
+                        pageSizeOptions={[5, 20, 50]}
+                        density="compact"
+                        slots={{
+                            footer: () => <CustomFooter rows={data} columns={columns} />,
+                        }}
+                        sx={{
+                            backgroundColor: theme.palette.background.paper,
+                            border: `1px solid ${theme.palette.divider}`,
+                            '& .MuiDataGrid-columnHeaders': {
+                                '--DataGrid-t-header-background-base': theme.palette.background.paper,
+                                borderBottom: `1px solid ${theme.palette.divider}`,
+                            },
+                            '& .MuiDataGrid-columnSeparator': {
+                                visibility: 'visible', // Ensure it's visible
+                                color: theme.palette.divider, // Use the theme's divider color
+                            },
+                            '& .MuiDataGrid-cell': {
+                                borderBottom: `1px solid ${theme.palette.divider}`,
+                                borderRight: `1px solid ${theme.palette.divider}`,
+                                borderLeft: `1px solid ${theme.palette.divider}`,
+                            },
+                            pl: 2,
+                            pr: 2
+                        }}
+                    />
+                </Box>
+            ) : (
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                    <Typography color="text.secondary">
+                        {title === "Raw Data" ? "Click 'Fetch Data' to see the preview." : "Calculate features to see the preview."}
+                    </Typography>
+                </Box>
+            )}
+            
+        </Paper>
+    );
+};

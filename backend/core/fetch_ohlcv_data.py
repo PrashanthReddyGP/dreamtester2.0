@@ -3,11 +3,16 @@ import pandas as pd
 
 from core.data_manager import get_ohlcv
 
-def fetch_candlestick_data(client, strategy_instance):
+def fetch_candlestick_data(client, strategy_instance, sub_timeframe=''):
     
     # Access the symbol set in the strategy's __init__ method
     symbol = strategy_instance.symbol 
-    timeframe = strategy_instance.timeframe
+    
+    if sub_timeframe == '':
+        timeframe = strategy_instance.timeframe
+    else:
+        timeframe = sub_timeframe
+    
     startdate = datetime.strptime(strategy_instance.start_date, '%Y-%m-%d') # Convert String to Datetime format
     enddate = datetime.strptime(strategy_instance.end_date, '%Y-%m-%d')
 

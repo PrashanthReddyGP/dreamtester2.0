@@ -1,6 +1,7 @@
 // src/context/TerminalContext.tsx
 import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
 import { websocketService } from '../services/websocketService';
+import { useAnalysis } from './AnalysisContext';
 
 // Define the shape of a single log entry
 export interface LogEntry {
@@ -21,18 +22,34 @@ interface TerminalContextType {
 }
 
 const TerminalContext = createContext<TerminalContextType | undefined>(undefined);
+const MAX_LOG_LINES = 100;
 
 export const TerminalContextProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+  const { addResult, setBatchConfig, markComplete, clearResults } = useAnalysis();
 
   const addLog = useCallback((level: LogEntry['level'], message: string) => {
     const timestamp = new Date().toLocaleTimeString('en-US', {
         hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
     });
-    setLogs(prevLogs => [...prevLogs, { timestamp, level, message }]);
-  }, []);
+
+    const newLog: LogEntry = { timestamp, level, message };
+
+    setLogs(prevLogs => {
+      
+      const updatedLogs = [...prevLogs, newLog];
+      
+      if (updatedLogs.length > MAX_LOG_LINES) {
+        return updatedLogs.slice(-MAX_LOG_LINES);
+      }
+
+      return updatedLogs;
+
+    });
+
+    }, []);
 
   const clearLogs = useCallback(() => {
     setLogs([]);
@@ -44,16 +61,17 @@ export const TerminalContextProvider: React.FC<{ children: React.ReactNode }> = 
   }, []);
   
   const connectToBatch = useCallback((batchId: string) => {
-    setLogs([]); // Clear logs for the new run
+    setLogs([]);
+    clearResults();
     addLog('SYSTEM', `Initializing connection for batch: ${batchId}...`);
     websocketService.connect(batchId);
-  }, [addLog]);
+  }, [addLog, clearResults]);
 
   const value = {
     logs,
     isConnected,
     isTerminalOpen,
-    setIsConnected, // Expose the new setter
+    setIsConnected,
     addLog,
     connectToBatch,
     clearLogs,

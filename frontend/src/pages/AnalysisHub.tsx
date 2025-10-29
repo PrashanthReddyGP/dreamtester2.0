@@ -1,40 +1,56 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Box, Typography, CircularProgress } from '@mui/material';
 import { Panel, PanelGroup } from 'react-resizable-panels';
-import { DataGrid } from '@mui/x-data-grid'; // Import the DataGrid
-import type {GridColDef, GridRenderCellParams} from '@mui/x-data-grid'
 
 // Import the components we just created
 import { StrategyListPanel } from '../components/analysishub/StrategyListPanel';
 import { AnalysisContentPanel } from '../components/analysishub/AnalysisContentPanel';
-import type { StrategyResult } from '../services/api';
+import type { StrategyResult, MLResult } from '../services/api';
 import { ResizeHandle } from '../components/common/ResizeHandle';
 import { useAnalysis } from '../context/AnalysisContext';
+import { ComparisonModal } from '../components/analysishub/ComparisonModal';
+
+// A type alias for clarity
+type AnalysisResult = StrategyResult | MLResult;
 
 export const AnalysisHub: React.FC = () => {
   
-  const { results, isComplete } = useAnalysis();
-  const [selectedStrategy, setSelectedStrategy] = useState<StrategyResult | null>(null);
+  const { results, isComplete, batchConfig } = useAnalysis();
+  const [selectedStrategy, setSelectedStrategy] = useState<AnalysisResult | null>(null);
+  const [isCompareModalOpen, setCompareModalOpen] = useState(false);
+  const [isDataSegmentationMode, setIsDataSegmentationMode] = useState(false); 
 
+  // This robust effect synchronizes the selected strategy with the available results.
+  // It correctly handles content updates for strategies with the same name.
   useEffect(() => {
-    // This logic now works for both batch and optimization runs.
-    // It ensures something is always selected if results exist.
-    if (results.length > 0) {
-      // If nothing is selected, select the first result in the list.
-      if (!selectedStrategy) {
-        setSelectedStrategy(results[0]);
-      } 
-      // This handles a tricky edge case: if a previous selection disappears
-      // (which shouldn't happen in this new model, but is good for robustness),
-      // it re-selects the first item.
-      else if (!results.some(r => r.strategy_name === selectedStrategy.strategy_name)) {
-        setSelectedStrategy(results[0]);
-      }
-    } else {
-        // If results are cleared, clear the selection
-        setSelectedStrategy(null);
+    // Case 1: The results list is now empty. Clear the selection.
+    if (results.length === 0) {
+      setSelectedStrategy(null);
+      return;
     }
-  }, [results, selectedStrategy]);
+
+    // If a strategy was previously selected, try to find its new version in the updated results list.
+    const previouslySelectedName = selectedStrategy?.strategy_name;
+    if (previouslySelectedName) {
+      const updatedVersionOfSelected = results.find(
+        r => r.strategy_name === previouslySelectedName
+      );
+      
+      // Case 2: The new version was found. Set state to this new object reference.
+      // This is the key to solving the "same name, different content" problem.
+      // We call the setter to update the state to the new object reference, triggering a re-render.
+      if (updatedVersionOfSelected) {
+        setSelectedStrategy(updatedVersionOfSelected);
+        return; // Our work is done.
+      }
+    }
+    
+    // Case 3: No strategy was selected before, OR the previously selected one
+    // is no longer in the list. Default to selecting the first available result.
+    setSelectedStrategy(results[0]);
+
+  // This effect should ONLY depend on the `results` array.
+  }, [results]);
 
   const handleSelectStrategy = (strategyName: string) => {
     const foundStrategy = results.find(s => s.strategy_name === strategyName);
@@ -42,6 +58,19 @@ export const AnalysisHub: React.FC = () => {
       setSelectedStrategy(foundStrategy);
     }
   };
+
+  const handleOpenCompareModal = () => setCompareModalOpen(true);
+  const handleCloseCompareModal = () => setCompareModalOpen(false);
+
+  // When you receive the batch data or first result, check for a tell-tale sign.
+  // For example, if the batch job details from your DB include the `test_type`.
+  useEffect(() => {
+    if (batchConfig && (batchConfig.test_type === 'data_segmentation' || (batchConfig.test_type === 'hedge_optimization' && batchConfig.final_analysis.type === 'data_segmentation'))) {
+      setIsDataSegmentationMode(true);
+    } else {
+      setIsDataSegmentationMode(false);
+    }
+  }, [batchConfig]); // Dependency is now batchConfig
 
   // Condition 1: The process has started but no results have arrived yet.
   if (results.length === 0 && !isComplete) {
@@ -69,34 +98,45 @@ export const AnalysisHub: React.FC = () => {
   }
 
   return (
-    <Box sx={{ height: '100%', width: '100vw'}}>
+    <>
+      <Box sx={{ height: `calc(100vh - 88px)`, width: '100vw'}}>
 
-      <PanelGroup direction='horizontal' style={{display:'flex', flexDirection:'row', flexWrap:'nowrap', width:'100vw'}}>
+        <PanelGroup direction='horizontal' style={{display:'flex', flexDirection:'row', flexWrap:'nowrap', width:'100vw'}}>
 
-        <Panel style={{flexGrow:1}}>
-          <StrategyListPanel
-            results={results.map(s => ({ id: s.strategy_name, name: s.strategy_name }))}
-            selectedId={selectedStrategy?.strategy_name || ''}
-            onSelect={handleSelectStrategy}
-          />
-        </Panel>
-
-        <ResizeHandle/>
-        
-        <Panel style={{flexGrow:4}}>
-          {selectedStrategy ? (
-            <AnalysisContentPanel 
-                results={results}
-                result={selectedStrategy} 
-                initialCapital={1000}
+          <Panel style={{flexGrow:1}}>
+            <StrategyListPanel
+              results={results.map(s => ({ id: s.strategy_name, name: s.strategy_name }))}
+              selectedId={selectedStrategy?.strategy_name || ''}
+              onSelect={handleSelectStrategy}
+              onCompareClick={handleOpenCompareModal}
+              isDataSegmentationMode={isDataSegmentationMode}
             />
-            ) : (
-                <Typography sx={{ p: 4 }}>Select a strategy to view results.</Typography>
-          )}
-        </Panel>
+          </Panel>
 
-      </PanelGroup>
+          <ResizeHandle/>
+          
+          <Panel style={{flexGrow:4}}>
+            {selectedStrategy ? (
+              <AnalysisContentPanel 
+                  results={results}
+                  result={selectedStrategy} 
+                  initialCapital={1000}
+              />
+              ) : (
+                  <Typography sx={{ p: 4 }}>Select a strategy to view results.</Typography>
+            )}
+          </Panel>
 
-    </Box>
+        </PanelGroup>
+
+      </Box>
+
+      <ComparisonModal
+        open={isCompareModalOpen}
+        onClose={handleCloseCompareModal}
+        results={results}
+        initialCapital={1000} // Pass the same initial capital for consistency
+      />
+    </>
   );
 }

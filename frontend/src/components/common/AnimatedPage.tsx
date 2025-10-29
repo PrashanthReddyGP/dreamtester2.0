@@ -15,6 +15,11 @@ export const AnimatedPage: React.FC<{ children: React.ReactNode }> = ({ children
       animate="animate"
       exit="exit"
       transition={{ duration: 0.3 }}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flexGrow: 1,
+      }}
     >
       {children}
     </motion.div>

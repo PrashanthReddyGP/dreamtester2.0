@@ -17,12 +17,16 @@ import {
     Select,
     MenuItem,
     CircularProgress,
-    Alert
+    Alert,
+    Divider
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close';
 
 import { useAppContext } from '../../context/AppContext';
+import { clearOhlcvCache } from '../../services/api';
+import { ConfirmationDialog } from './ConfirmationDialog';
+
 
 // --- This part remains the same ---
 interface SettingsModalProps {
@@ -58,6 +62,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
   const [apiSecret, setApiSecret] = useState('');
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState<{type: 'success' | 'error', message: string} | null>(null);
+
+  const [isClearing, setIsClearing] = useState(false);
+  const [clearFeedback, setClearFeedback] = useState<{type: 'success' | 'error', message: string} | null>(null);
+  const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setTabIndex(newValue);
@@ -105,7 +113,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
     setLoading(false);
   };
   
+  const handleConfirmClearCache = async () => {
+      setIsClearConfirmOpen(false); // Close the confirmation dialog
+      setIsClearing(true);
+      setClearFeedback(null);
+      try {
+          const result = await clearOhlcvCache();
+          setClearFeedback({ type: 'success', message: result.message });
+      } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
+          setClearFeedback({ type: 'error', message: errorMessage });
+      } finally {
+          setIsClearing(false);
+      }
+  };
+
   return (
+    <>
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
       
       <DialogTitle sx={{ m: 0, p: 2 }}>
@@ -173,15 +197,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
         </TabPanel>
 
         <TabPanel value={tabIndex} index={1}>
-          {/* This part remains the same, but you would wire it up to context similarly */}
-           <TextField
-            margin="normal"
-            label="Default Initial Capital"
-            defaultValue="10000"
-            fullWidth
-            InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
-          />
+            <Typography variant="h6" gutterBottom>Data Management</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                If you encounter data discrepancies or want to start fresh, you can clear all cached OHLCV data.
+                This action cannot be undone.
+            </Typography>
+            
+            <Box sx={{ mt: 2 }}>
+                <Button
+                    variant="contained"
+                    color="error"
+                    onClick={() => setIsClearConfirmOpen(true)}
+                    disabled={isClearing}
+                >
+                    {isClearing ? <CircularProgress size={24} color="inherit" /> : 'Clear OHLCV Data Cache'}
+                </Button>
+            </Box>
+
+            {clearFeedback && (
+                <Alert severity={clearFeedback.type} sx={{mt: 2}}>
+                    {clearFeedback.message}
+                </Alert>
+            )}
+            
+            <Divider sx={{ my: 3 }} />
+              <TextField
+                margin="normal"
+                label="Default Initial Capital"
+                defaultValue="10000"
+                fullWidth
+                InputProps={{ startAdornment: <InputAdornment position="start">$</InputAdornment> }}
+              />
         </TabPanel>
+
       </DialogContent>
 
       <DialogActions sx={{ p: 2 }}>
@@ -191,5 +239,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
             You can decide to have one master save button or per-tab saves. */}
       </DialogActions>
     </Dialog>
+    
+    <ConfirmationDialog
+        open={isClearConfirmOpen}
+        onClose={() => setIsClearConfirmOpen(false)}
+        onConfirm={handleConfirmClearCache}
+        title="Clear All OHLCV Data?"
+        message="Are you sure you want to delete all cached candlestick data? This action is permanent and all data will need to be re-downloaded from the exchange."
+    />
+  </>
   );
 };

@@ -1,8 +1,12 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import { Box, IconButton, Typography, Tooltip, useTheme } from '@mui/material';
 import ReactECharts from 'echarts-for-react';
 import type { EquityCurvePoint } from '../../services/api';
 import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap';
+import DownloadIcon from '@mui/icons-material/Download'; // A nice icon for the button
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'; // The icon for copy
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'; // A success feedback icon
+
 
 const calculateDrawdown = (equityCurve: number[][]) => {
   let peak = -Infinity;
@@ -21,46 +25,47 @@ export const EquityTab: React.FC<{
   equity: EquityCurvePoint[];
   initialCapital: number;
   isPortfolio: boolean; 
-}> = ({ equity, initialCapital, isPortfolio }) => {
+  strategy_name: string;
+}> = ({ equity, initialCapital, isPortfolio, strategy_name }) => {
+  
   const theme = useTheme();
-
-  // The prop `equityCurve` directly replaces `generateMockEquityData()`
-  let equityDataForChart = equity.map(point => [
-    point[0] * 1000,
-    point[1]
-  ]); 
-
-  const drawdownData = calculateDrawdown(equityDataForChart);
-  
-  equityDataForChart = equity.map(point => [
-      point[0] * 1000,
-      point[1] - initialCapital
-    ]); 
-  
-  const equityData = equityDataForChart.map(p => p[1])
-  let minEquityPnl = Infinity; // Start with the largest possible number
-
-  for (let i = 0; i < equityData.length; i++) {
-    if (equityData[i] < minEquityPnl) {
-      minEquityPnl = equityData[i];
-    }
-  }
-
   const echartsRef = useRef<ReactECharts>(null);
+  const [isCopied, setIsCopied] = useState(false);
+
+  // 1. Memoize all data derivations in a single, efficient block.
+  // This entire block only re-runs if `equity` or `initialCapital` props change.
+  const { pnlEquityData, drawdownData, minEquityPnl } = useMemo(() => {
+    // First, convert to the format needed by ECharts and for drawdown calculation
+    const rawEquityCurve = equity.map(point => [
+      point[0] * 1000,
+      point[1]
+    ]); 
+
+    // Calculate drawdown from the raw equity values
+    const drawdownData = calculateDrawdown(rawEquityCurve);
+    
+    // Calculate P&L by subtracting initial capital for the main series
+    const pnlEquityData = rawEquityCurve.map(point => [
+        point[0],
+        point[1] - initialCapital
+    ]); 
+
+    // Find the minimum P&L for setting the Y-axis scale
+    // Using reduce is a concise way to find the minimum value in the derived P&L data
+    const minEquityPnl = pnlEquityData.reduce(
+        (min, point) => (point[1] < min ? point[1] : min),
+        Infinity
+    );
+    
+    return { pnlEquityData, drawdownData, minEquityPnl };
+  }, [equity, initialCapital]);
 
   useEffect(() => {
-    // This is a trick to ensure the resize happens after the DOM has settled.
-    // The resizable panel needs a render cycle to get its final size.
     const resizeTimer = setTimeout(() => {
-      const chartInstance = echartsRef.current?.getEchartsInstance();
-      if (chartInstance) {
-        chartInstance.resize();
-      }
-    }, 10); // A tiny delay is often more reliable than 0
-
-    // Cleanup the timer if the component unmounts
+      echartsRef.current?.getEchartsInstance()?.resize();
+    }, 10);
     return () => clearTimeout(resizeTimer);
-  }, []); // The empty array [] means this effect runs only once on mount
+  }, []);
 
   const chartOption = useMemo(() => ({
     tooltip: {
@@ -175,7 +180,7 @@ export const EquityTab: React.FC<{
         yAxisIndex: 0,
         showSymbol: false,
         smooth: true,
-        data: equityDataForChart,
+        data: pnlEquityData,
         lineStyle: {
           color: theme.palette.primary.main,
           width: 2,
@@ -204,21 +209,57 @@ export const EquityTab: React.FC<{
     textStyle: {
         color: theme.palette.text.secondary
     }
-  }), [theme, equityDataForChart, drawdownData]);
+  }), [theme, pnlEquityData, drawdownData, minEquityPnl, isPortfolio]);
 
-  const handleResetZoom = () => {
-    // Get the ECharts instance from the ref
+  // 2. Memoize event handlers with useCallback to give them a stable identity.
+  const handleResetZoom = useCallback(() => {
+    echartsRef.current?.getEchartsInstance()?.dispatchAction({
+      type: 'dataZoom',
+      start: 0,
+      end: 100,
+    });
+  }, []); // No dependencies, will be created only once.
+
+  const handleDownloadChart = useCallback(() => {
     const chartInstance = echartsRef.current?.getEchartsInstance();
     if (chartInstance) {
-      // Dispatch a 'dataZoom' action to reset the zoom
-      chartInstance.dispatchAction({
-        type: 'dataZoom',
-        // Specify the start and end percentages
-        start: 0,
-        end: 100,
+      const dataUrl = chartInstance.getDataURL({
+        type: 'png',
+        pixelRatio: 2,
+        backgroundColor: theme.palette.background.default,
+        excludeComponents: ['dataZoom']
       });
+      const link = document.createElement('a');
+      const sanitizedName = strategy_name.replace(/\.py$/i, '').replace(/[^a-z0-9_.-]/gi, '_').substring(0, 50);
+      link.download = `${sanitizedName}.png`;
+      link.href = dataUrl;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
-  };
+  }, [theme, strategy_name]); // Depends on theme and strategy_name
+
+  const handleCopyChart = useCallback(async () => {
+    const chartInstance = echartsRef.current?.getEchartsInstance();
+    if (!chartInstance || !navigator.clipboard?.write) return;
+
+    try {
+      const dataUrl = chartInstance.getDataURL({
+        type: 'png',
+        pixelRatio: 2,
+        backgroundColor: '#131313ff',
+        excludeComponents: ['dataZoom']
+      });
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+      await navigator.clipboard.write([ new ClipboardItem({ [blob.type]: blob }) ]);
+      
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (error) {
+      console.error('Failed to copy image to clipboard:', error);
+    }
+  }, []); // No dependencies, as setIsCopied is stable.
 
   return (
     <Box sx={{ width:'100%', height:'100%', display: 'flex', flexDirection: 'column' }}>
@@ -227,13 +268,23 @@ export const EquityTab: React.FC<{
         <Typography variant="h2" gutterBottom>
           Equity Curve
         </Typography>
-
-        <Tooltip title="Reset Zoom">
-          <IconButton onClick={handleResetZoom} size="small">
-            <ZoomOutMapIcon />
-          </IconButton>
-        </Tooltip>
-        
+        <Box>
+          <Tooltip title="Copy Image to Clipboard">
+            <IconButton onClick={handleCopyChart} size="small" disabled={isCopied}>
+              {isCopied ? <CheckCircleIcon color="success" /> : <ContentCopyIcon />}
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Download Chart Snapshot">
+            <IconButton onClick={handleDownloadChart} size="small">
+              <DownloadIcon />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Reset Zoom">
+            <IconButton onClick={handleResetZoom} size="small">
+              <ZoomOutMapIcon />
+            </IconButton>
+          </Tooltip>
+        </Box>
       </Box>
 
       <Box sx={{ flexGrow: 1, width:'100%' }}>

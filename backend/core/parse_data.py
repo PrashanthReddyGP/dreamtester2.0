@@ -5,7 +5,8 @@ import inspect
 import importlib.util
 import threading
 
-from core.basestrategy import BaseStrategy
+# from core.basestrategy import BaseStrategy
+from core.basestrategy_copy import BaseStrategy
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
@@ -21,7 +22,7 @@ def parse_file(job_id, file_name, strategy_code):
     """
 
     temp_filepath = None
-    strategy_name = os.path.splitext(file_name)[0]
+
     # unique_module_name = f"{strategy_name}_{job_id.replace('-', '_')}"
     
     # Use a try...finally block to GUARANTEE cleanup happens
@@ -34,16 +35,16 @@ def parse_file(job_id, file_name, strategy_code):
         
         with open(temp_filepath, "w", encoding='utf-8') as f:
             f.write(strategy_code)
-
+        
         module_name = os.path.splitext(temp_filename)[0]
-
+        
         # --- 2. Prepare for import ---
         spec = importlib.util.spec_from_file_location(module_name, temp_filepath)
         if spec is None or spec.loader is None:
             raise ImportError(f"Could not create module spec for {file_name}")
             
         strategy_module = importlib.util.module_from_spec(spec)
-
+        
         # --- 3. THE THREAD-SAFE PATH MODIFICATION ---
         with sys_path_lock:
             # This block ensures only one thread modifies sys.path at a time
@@ -56,20 +57,20 @@ def parse_file(job_id, file_name, strategy_code):
                 # This inner finally guarantees the path is restored even if exec_module fails
                 if sys.path[0] == parent_dir:
                     sys.path.pop(0)
-
+        
         # --- 4. Find the class using introspection (this part is correct) ---
         StrategyClass = None
         for name, obj in inspect.getmembers(strategy_module):
             if inspect.isclass(obj) and issubclass(obj, BaseStrategy) and obj is not BaseStrategy:
                 StrategyClass = obj
                 break
-
+        
         if not StrategyClass:
             raise ImportError(f"Could not find a valid subclass of 'BaseStrategy' in '{file_name}'")
             
         # --- 5. Instantiate and return ---
         strategy_instance = StrategyClass()
-        return strategy_instance, strategy_name
+        return strategy_instance, file_name
         
     finally:
         # --- 6. Cleanup the temporary files ---
